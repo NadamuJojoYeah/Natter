@@ -13,6 +13,17 @@ public sealed record SatoriCapabilityOptions
 
     public bool Mentions { get; init; }
 
+    /// <summary>Reply/quote support is an adapter policy; Satori exposes no standard feature.</summary>
+    public bool Reply { get; init; }
+
+    public bool SlashCommands { get; init; }
+
+    public bool Modals { get; init; }
+
+    public bool Reactions { get; init; }
+
+    public bool Ephemeral { get; init; }
+
     /// <summary>Overrides conversation kinds entirely; null derives them from features.</summary>
     public IReadOnlyList<ConversationKind>? ConversationKinds { get; init; }
 
@@ -44,6 +55,8 @@ public static class SatoriCapabilityMapper
         var streamEdit = options.StreamEdit;
         var edit = set.Contains("message.update") || streamEdit;
 
+        // Only the features listed in NLMP §8.3 are interpreted. Everything else is ignored
+        // and must be supplied explicitly through SatoriCapabilityOptions when known.
         return new Capabilities
         {
             ConversationKinds = conversationKinds,
@@ -51,16 +64,16 @@ public static class SatoriCapabilityMapper
             Markdown = options.Markdown,
             Attachments = set.Contains("message.attachments"),
             Mentions = options.Mentions,
-            Reply = set.Contains("message.reply"),
+            Reply = options.Reply,
             Edit = edit,
             StreamEdit = streamEdit,
             Delete = set.Contains("message.delete"),
             Typing = options.Typing,
-            Reactions = set.Contains("message.reactions"),
-            Ephemeral = set.Contains("message.ephemeral"),
-            SlashCommands = set.Any(feature => feature.StartsWith("interaction", StringComparison.OrdinalIgnoreCase)),
-            Buttons = set.Contains("message.buttons") || set.Contains("interaction.button"),
-            Modals = set.Contains("interaction.modal"),
+            Reactions = options.Reactions,
+            Ephemeral = options.Ephemeral,
+            SlashCommands = options.SlashCommands,
+            Buttons = set.Contains("message.buttons"),
+            Modals = options.Modals,
             MaxAttachmentBytes = options.MaxAttachmentBytes,
             MessagesPerSecond = options.MessagesPerSecond,
         };
@@ -68,13 +81,11 @@ public static class SatoriCapabilityMapper
 
     private static List<ConversationKind> DeriveConversationKinds(HashSet<string> features)
     {
-        var kinds = new List<ConversationKind> { ConversationKind.Direct };
+        var kinds = new List<ConversationKind>();
 
-        if (features.Contains("guild.plain") || features.Contains("guild.get"))
+        // §8.3: guild.plain adjusts conversation kinds; nothing else is assumed.
+        if (features.Contains("guild.plain"))
             kinds.Add(ConversationKind.Guild);
-
-        if (features.Contains("group.plain"))
-            kinds.Add(ConversationKind.Group);
 
         return kinds;
     }

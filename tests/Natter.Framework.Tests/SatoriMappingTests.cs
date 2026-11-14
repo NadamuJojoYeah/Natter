@@ -70,17 +70,26 @@ public sealed class SatoriMappingTests
         Assert.True(capabilities.Buttons);
         Assert.False(capabilities.Markdown);
         Assert.False(capabilities.StreamEdit);
+        Assert.False(capabilities.SlashCommands);
+        Assert.False(capabilities.Reply);
         Assert.Contains(ConversationKind.Guild, capabilities.ConversationKinds);
 
         var empty = SatoriCapabilityMapper.Map(null);
         Assert.False(empty.Edit);
         Assert.False(empty.Delete);
         Assert.False(empty.Markdown);
-        Assert.DoesNotContain(ConversationKind.Guild, empty.ConversationKinds);
+        Assert.Empty(empty.ConversationKinds);
 
-        var streaming = SatoriCapabilityMapper.Map([], new SatoriCapabilityOptions { StreamEdit = true });
+        var streaming = SatoriCapabilityMapper.Map([], new SatoriCapabilityOptions
+        {
+            StreamEdit = true,
+            SlashCommands = true,
+            Reply = true,
+        });
         Assert.True(streaming.Edit);
         Assert.True(streaming.SupportsEdit);
+        Assert.True(streaming.SlashCommands);
+        Assert.True(streaming.Reply);
     }
 
     [Fact]
