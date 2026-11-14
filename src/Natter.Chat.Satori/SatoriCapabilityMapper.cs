@@ -48,8 +48,8 @@ public static class SatoriCapabilityMapper
             (features ?? []).Where(feature => !string.IsNullOrWhiteSpace(feature)),
             StringComparer.OrdinalIgnoreCase);
 
-        var conversationKinds = options.ConversationKinds is { Count: > 0 }
-            ? options.ConversationKinds.Distinct().ToList()
+        var conversationKinds = options.ConversationKinds is { } configuredKinds
+            ? configuredKinds.Distinct().ToList()
             : DeriveConversationKinds(set);
 
         var streamEdit = options.StreamEdit;
