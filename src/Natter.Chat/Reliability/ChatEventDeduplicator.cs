@@ -72,23 +72,42 @@ public sealed class ChatEventDeduplicator
             _seen.Clear();
     }
 
-    private IReadOnlyList<string> BuildKeys(ChatEvent chatEvent)
+    private static IReadOnlyList<string> BuildKeys(ChatEvent chatEvent)
     {
         var keys = new List<string>(2);
 
         if (!string.IsNullOrWhiteSpace(chatEvent.Id))
-            keys.Add("id:" + chatEvent.Id);
+            keys.Add(Key("id", chatEvent.Id));
 
         if (chatEvent is MessageCreatedEvent { Payload.Message: { } message })
         {
-            keys.Add($"message:{chatEvent.Source.Key}:{message.Conversation.Id}:{message.Id}:created");
+            // Structured components separated by a unit separator: no reverse parsing of
+            // the display key and no ambiguity when ids contain ':'.
+            keys.Add(Key(
+                "message",
+                chatEvent.Source.Protocol,
+                chatEvent.Source.Platform,
+                chatEvent.Source.SelfId,
+                message.Conversation.Id,
+                message.Id,
+                "created"));
         }
 
         if (keys.Count == 0)
-            keys.Add($"fallback:{chatEvent.Source.Key}:{chatEvent.Type}:{chatEvent.OccurredAt:O}");
+        {
+            keys.Add(Key(
+                "fallback",
+                chatEvent.Source.Protocol,
+                chatEvent.Source.Platform,
+                chatEvent.Source.SelfId,
+                chatEvent.Type,
+                chatEvent.OccurredAt.ToString("O", System.Globalization.CultureInfo.InvariantCulture)));
+        }
 
         return keys;
     }
+
+    private static string Key(params string[] parts) => string.Join('\u001F', parts);
 
     private void Prune(DateTimeOffset now)
     {
