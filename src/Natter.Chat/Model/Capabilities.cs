@@ -20,7 +20,14 @@ public sealed record Capabilities
 
     public bool Reply { get; init; }
 
-    public bool Edit { get; init; }
+    private readonly bool _edit;
+
+    /// <summary>Message editing. <c>streamEdit=true</c> implies this is true.</summary>
+    public bool Edit
+    {
+        get => _edit || StreamEdit;
+        init => _edit = value;
+    }
 
     /// <summary>High-frequency edit support. Implies <see cref="Edit"/>.</summary>
     public bool StreamEdit { get; init; }

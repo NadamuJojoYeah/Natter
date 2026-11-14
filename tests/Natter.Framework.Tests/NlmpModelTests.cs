@@ -38,6 +38,7 @@ public sealed class NlmpModelTests
         Assert.Null(defaults.MaxMessageLength);
 
         var streaming = defaults with { StreamEdit = true };
+        Assert.True(streaming.Edit);
         Assert.True(streaming.SupportsEdit);
         Assert.True(streaming.SupportsStreaming);
     }
