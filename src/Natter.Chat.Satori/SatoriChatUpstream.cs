@@ -86,14 +86,28 @@ public sealed class SatoriChatUpstream : IChatUpstream, IDisposable
         if (_connected)
             return;
 
-        await _transport.ConnectAsync(_snTracker.LastSn, cancellationToken).ConfigureAwait(false);
-
+        // Subscribe before connecting so READY/login features emitted during the handshake
+        // are not lost (capabilities are derived from login.features).
         lock (_gate)
         {
             _subscription ??= _transport.Events.Subscribe(new TransportObserver(this));
         }
 
-        _connected = true;
+        try
+        {
+            await _transport.ConnectAsync(_snTracker.LastSn, cancellationToken).ConfigureAwait(false);
+            _connected = true;
+        }
+        catch
+        {
+            lock (_gate)
+            {
+                _subscription?.Dispose();
+                _subscription = null;
+            }
+
+            throw;
+        }
     }
 
     public async ValueTask DisconnectAsync(CancellationToken cancellationToken = default)
