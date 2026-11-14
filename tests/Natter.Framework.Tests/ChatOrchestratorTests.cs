@@ -1,0 +1,135 @@
+using Natter.Application.Chat;
+using Natter.Chat;
+using Natter.Infrastructure.Chat;
+using Xunit;
+
+namespace Natter.Framework.Tests;
+
+public sealed class ChatOrchestratorTests
+{
+    [Fact]
+    public async Task Direct_human_messages_trigger_a_reply_and_bots_are_ignored()
+    {
+        var clock = new TestClock();
+        var source = ChatTestData.Source();
+
+        await using var host = await TestHost.CreateAsync();
+        var upstream = new InMemoryChatUpstream(source, Capabilities.TextOnly, clock);
+        host.Get<IChatUpstreamRegistry>().Register(upstream);
+        await upstream.ConnectAsync();
+
+        var factory = host.Get<ChatCommandFactory>();
+        var responder = new ReplyResponder(factory, source);
+        var orchestrator = new ChatOrchestrator(
+            host.Get<IChatEventSource>(),
+            host.Get<IChatCommandDispatcher>(),
+            responder,
+            new ChatOrchestrationOptions(),
+            logger: null);
+
+        var directConversation = ChatTestData.Conversation("dm", ConversationKind.Direct);
+        var directMessage = ChatTestData.Message(source, id: "m1", conversation: directConversation);
+        await orchestrator.HandleAsync(ChatTestData.CreatedEvent(source, directMessage, "evt:m1"));
+
+        Assert.Single(upstream.Messages);
+
+        var botMessage = new Message(
+            "m2",
+            directConversation,
+            new User("bot-2", "Other", UserKind.Bot),
+            new Content("I am a bot"),
+            clock.UtcNow);
+
+        await orchestrator.HandleAsync(ChatTestData.CreatedEvent(source, botMessage, "evt:m2"));
+        Assert.Single(upstream.Messages);
+        Assert.Single(responder.Seen);
+    }
+
+    [Fact]
+    public async Task Guild_messages_require_a_mention_unless_configured_otherwise()
+    {
+        var clock = new TestClock();
+        var source = ChatTestData.Source();
+
+        await using var host = await TestHost.CreateAsync();
+        var upstream = new InMemoryChatUpstream(source, Capabilities.TextOnly, clock);
+        host.Get<IChatUpstreamRegistry>().Register(upstream);
+        await upstream.ConnectAsync();
+
+        var factory = host.Get<ChatCommandFactory>();
+        var responder = new ReplyResponder(factory, source);
+        var orchestrator = new ChatOrchestrator(
+            host.Get<IChatEventSource>(),
+            host.Get<IChatCommandDispatcher>(),
+            responder,
+            new ChatOrchestrationOptions(),
+            logger: null);
+
+        var guild = ChatTestData.Conversation();
+        var unmentioned = ChatTestData.Message(source, id: "m3", conversation: guild);
+        await orchestrator.HandleAsync(ChatTestData.CreatedEvent(source, unmentioned, "evt:m3"));
+        Assert.Empty(upstream.Messages);
+
+        var mentioned = new Message(
+            "m4",
+            guild,
+            ChatTestData.Human(),
+            new Content("hey", Mentions: [new Mention(MentionKind.User, source.SelfId, "Natter")]),
+            clock.UtcNow);
+
+        await orchestrator.HandleAsync(ChatTestData.CreatedEvent(source, mentioned, "evt:m4"));
+        Assert.Single(upstream.Messages);
+        Assert.Single(responder.Seen);
+    }
+
+    [Fact]
+    public async Task Process_bot_messages_can_be_enabled_explicitly()
+    {
+        var clock = new TestClock();
+        var source = ChatTestData.Source();
+
+        await using var host = await TestHost.CreateAsync();
+        var upstream = new InMemoryChatUpstream(source, Capabilities.TextOnly, clock);
+        host.Get<IChatUpstreamRegistry>().Register(upstream);
+        await upstream.ConnectAsync();
+
+        var factory = host.Get<ChatCommandFactory>();
+        var responder = new ReplyResponder(factory, source);
+        var orchestrator = new ChatOrchestrator(
+            host.Get<IChatEventSource>(),
+            host.Get<IChatCommandDispatcher>(),
+            responder,
+            new ChatOrchestrationOptions { ProcessBotMessages = true },
+            logger: null);
+
+        var direct = ChatTestData.Conversation("dm", ConversationKind.Direct);
+        var botMessage = new Message(
+            "m5",
+            direct,
+            new User("bot-2", "Other", UserKind.Bot),
+            new Content("I am a bot"),
+            clock.UtcNow);
+
+        await orchestrator.HandleAsync(ChatTestData.CreatedEvent(source, botMessage, "evt:m5"));
+
+        Assert.Single(upstream.Messages);
+    }
+
+    private sealed class ReplyResponder(ChatCommandFactory factory, Source source) : IChatResponder
+    {
+        public List<ChatEvent> Seen { get; } = [];
+
+        public ValueTask<ChatCommand?> RespondAsync(ChatEvent chatEvent, CancellationToken cancellationToken = default)
+        {
+            Seen.Add(chatEvent);
+            var message = ((MessageCreatedEvent)chatEvent).Payload.Message;
+
+            return ValueTask.FromResult<ChatCommand?>(factory.Send(
+                source,
+                message.Conversation,
+                new Content("echo"),
+                replyTo: message.Id,
+                idempotencyKey: $"reply:{chatEvent.Id}"));
+        }
+    }
+}
