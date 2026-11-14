@@ -1160,6 +1160,8 @@ natter satori status --features message.update,message.delete,message.attachment
 7. **Satori thread**：`channel.parent_id` 的语义依赖适配器；核心 `ConversationKind.Thread` 已支持，映射在能确定线程时由适配器设置。
 8. **历史分页 / 本地文件上传 / 消息 delta**：均未进入 v0.1 模型。
 9. **纯引用无正文消息**：`quote`-only 消息无法满足 `content` 非空约束，Satori 映射当前跳过；适配器可补占位文本后再映射。
+10. **限流/超时策略**：模型暴露 `Capabilities.MessagesPerSecond` 与 `CancellationToken`，`ChatAck` 暴露 `retryAfterMs`；具体 token bucket、退避与超时由宿主/适配器实现。
+11. **AI prompt 安全**：NLMP 只负责不可信消息建模；prompt injection 防护属于 Application/AI 层，不在本仓库实现。
 
 ### 16.5 版本与兼容
 
