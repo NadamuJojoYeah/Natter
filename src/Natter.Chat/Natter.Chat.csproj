@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Natter.Chat</RootNamespace>
+    <AssemblyName>Natter.Chat</AssemblyName>
+    <Description>NLMP v0.1: chat semantic model, events, commands, capabilities and JSON projection.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Natter.Abstractions/Natter.Abstractions.csproj" />
+  </ItemGroup>
+
+</Project>

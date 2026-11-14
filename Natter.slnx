@@ -2,6 +2,7 @@
   <Project Path="src/Natter.Abstractions/Natter.Abstractions.csproj" />
   <Project Path="src/Natter.Cli.Abstractions/Natter.Cli.Abstractions.csproj" />
   <Project Path="src/Natter.Domain/Natter.Domain.csproj" />
+  <Project Path="src/Natter.Chat/Natter.Chat.csproj" />
   <Project Path="src/Natter.Application/Natter.Application.csproj" />
   <Project Path="src/Natter.Infrastructure/Natter.Infrastructure.csproj" />
   <Project Path="src/Natter.Cli.Core/Natter.Cli.Core.csproj" />
