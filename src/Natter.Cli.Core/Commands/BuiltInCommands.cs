@@ -44,6 +44,30 @@ internal static class BuiltInCommands
         },
         new CliCommandDescriptor
         {
+            Name = "upstreams",
+            Description = "List NLMP chat upstreams, connection state and capabilities.",
+            Options =
+            [
+                new CliOptionDescriptor("source", "Filter by source key, protocol, platform or self id.", TakesValue: true),
+                JsonOption,
+            ],
+            Origin = Origin,
+            HandlerFactory = services => services.GetRequiredService<UpstreamsCommand>(),
+        },
+        new CliCommandDescriptor
+        {
+            Name = "satori status",
+            Description = "Show Satori feature → NLMP capability mapping and API routes.",
+            Options =
+            [
+                new CliOptionDescriptor("features", "Comma-separated Satori login.features to preview.", TakesValue: true),
+                JsonOption,
+            ],
+            Origin = Origin,
+            HandlerFactory = services => services.GetRequiredService<SatoriStatusCommand>(),
+        },
+        new CliCommandDescriptor
+        {
             Name = "demo",
             Description = "Run the end-to-end DDD/Rx demo (aggregate → events → stream).",
             Options =

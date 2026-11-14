@@ -31,6 +31,8 @@ public sealed class CliCoreCompositionModule : ICompositionModule
         services.AddTransient<EventsListCommand>();
         services.AddTransient<EventsWatchCommand>();
         services.AddTransient<EventsClearCommand>();
+        services.AddTransient<UpstreamsCommand>();
+        services.AddTransient<SatoriStatusCommand>();
         services.AddTransient<DemoCommand>();
         services.AddTransient<HelpCommand>();
 

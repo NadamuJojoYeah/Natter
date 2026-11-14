@@ -3,6 +3,7 @@ using Natter.Abstractions.Composition;
 using Natter.Abstractions.Events;
 using Natter.Abstractions.Plugins;
 using Natter.Abstractions.Ports;
+using Natter.Chat;
 using Natter.Cli.Abstractions;
 using Natter.Cli.Core.Rendering;
 
@@ -23,6 +24,8 @@ public sealed class DoctorCommand : ICliCommandHandler
         var composition = _services.GetRequiredService<CompositionOptions>();
         var bus = _services.GetRequiredService<IDomainEventBusDiagnostics>();
         var journal = _services.GetService<IEventJournal>();
+        var chatHub = _services.GetService<IChatEventDiagnostics>();
+        var chatUpstreams = _services.GetService<IChatUpstreamRegistry>();
 
         var loaded = plugins.Plugins.Count(plugin => plugin.State == PluginState.Loaded);
         var failed = plugins.Plugins.Count(plugin => plugin.State == PluginState.Failed);
@@ -43,6 +46,12 @@ public sealed class DoctorCommand : ICliCommandHandler
                 portAdapters = adapters.Adapters.Count,
                 eventBus = new { published = bus.PublishedCount, subscribers = bus.SubscriberCount },
                 journal = new { enabled = journal is not null, count = journal?.Count ?? 0 },
+                chat = new
+                {
+                    upstreams = chatUpstreams?.Upstreams.Count ?? 0,
+                    eventsPublished = chatHub?.PublishedCount ?? 0,
+                    subscribers = chatHub?.SubscriberCount ?? 0,
+                },
                 pluginDetails = plugins.Plugins,
             };
 
@@ -63,6 +72,13 @@ public sealed class DoctorCommand : ICliCommandHandler
         output.WriteLine($"port adapters  : {adapters.Adapters.Count} binding(s)");
         output.WriteLine($"event bus      : {bus.PublishedCount} published, {bus.SubscriberCount} subscriber(s)");
         output.WriteLine($"event journal  : {(journal is null ? "disabled" : $"{journal.Count} event(s) buffered")}");
+        if (chatHub is not null || chatUpstreams is not null)
+        {
+            output.WriteLine(
+                $"NLMP chat      : {chatUpstreams?.Upstreams.Count ?? 0} upstream(s), "
+                + $"{chatHub?.PublishedCount ?? 0} event(s) published, "
+                + $"{chatHub?.SubscriberCount ?? 0} subscriber(s)");
+        }
         output.WriteLine();
 
         ConsoleTable.Write(
