@@ -67,6 +67,8 @@ public sealed class ChatIngressLifecycle : IPluginLifecycle, IDisposable
     {
         lock (_gate)
         {
+            _registry.UpstreamRegistered -= OnUpstreamRegistered;
+
             foreach (var (_, subscription) in _subscriptions)
                 subscription.Dispose();
 
