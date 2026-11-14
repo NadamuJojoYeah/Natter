@@ -1,0 +1,13 @@
+<Solution>
+  <Project Path="src/Natter.Abstractions/Natter.Abstractions.csproj" />
+  <Project Path="src/Natter.Cli.Abstractions/Natter.Cli.Abstractions.csproj" />
+  <Project Path="src/Natter.Domain/Natter.Domain.csproj" />
+  <Project Path="src/Natter.Application/Natter.Application.csproj" />
+  <Project Path="src/Natter.Infrastructure/Natter.Infrastructure.csproj" />
+  <Project Path="src/Natter.Cli.Core/Natter.Cli.Core.csproj" />
+  <Project Path="src/Natter.Cli/Natter.Cli.csproj" />
+  <Project Path="src/Natter.Hosting.Android/Natter.Hosting.Android.csproj" />
+  <Project Path="samples/Natter.Sample.Plugin.Greetings/Natter.Sample.Plugin.Greetings.csproj" />
+  <Project Path="samples/Natter.Sample.Plugin.Metrics/Natter.Sample.Plugin.Metrics.csproj" />
+  <Project Path="tests/Natter.Framework.Tests/Natter.Framework.Tests.csproj" />
+</Solution>

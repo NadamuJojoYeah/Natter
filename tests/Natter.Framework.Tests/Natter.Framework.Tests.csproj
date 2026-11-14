@@ -1,0 +1,45 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <RootNamespace>Natter.Framework.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="coverlet.collector">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/Natter.Cli.Core/Natter.Cli.Core.csproj" />
+    <ProjectReference Include="../../src/Natter.Cli.Abstractions/Natter.Cli.Abstractions.csproj" />
+    <ProjectReference Include="../../src/Natter.Infrastructure/Natter.Infrastructure.csproj" />
+    <ProjectReference Include="../../src/Natter.Application/Natter.Application.csproj" />
+    <ProjectReference Include="../../src/Natter.Domain/Natter.Domain.csproj" />
+    <ProjectReference Include="../../samples/Natter.Sample.Plugin.Greetings/Natter.Sample.Plugin.Greetings.csproj"
+                      ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+  <Target Name="CopyTestPlugins" AfterTargets="Build">
+    <PropertyGroup>
+      <SampleGreetingsBin>$(MSBuildThisFileDirectory)../../samples/Natter.Sample.Plugin.Greetings/bin/$(Configuration)/net10.0</SampleGreetingsBin>
+    </PropertyGroup>
+    <ItemGroup>
+      <GreetingsPluginFiles Include="$(SampleGreetingsBin)/Natter.Sample.Plugin.Greetings.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(GreetingsPluginFiles)" DestinationFolder="$(OutDir)plugins/greetings" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)../../samples/Natter.Sample.Plugin.Greetings/plugin.json"
+          DestinationFolder="$(OutDir)plugins/greetings" SkipUnchangedFiles="true" />
+  </Target>
+
+</Project>

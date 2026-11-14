@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Natter.Domain</RootNamespace>
+    <AssemblyName>Natter.Domain</AssemblyName>
+    <Description>Domain layer: aggregate roots, value objects and the bundled demo aggregate.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Natter.Abstractions/Natter.Abstractions.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,16 @@
+{
+  "id": "greetings",
+  "name": "Greetings Plugin",
+  "version": "0.1.0",
+  "description": "Sample plugin: overrides the IGreetingPort adapter, contributes CLI commands and subscribes to the Rx domain event stream.",
+  "author": "Natter samples",
+  "entryAssembly": "Natter.Sample.Plugin.Greetings.dll",
+  "enabled": true,
+  "capabilities": [
+    "port:IGreetingPort",
+    "cli:greet",
+    "cli:greetings recent",
+    "events:subscriber",
+    "lifecycle"
+  ]
+}

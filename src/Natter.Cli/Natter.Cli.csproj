@@ -1,0 +1,73 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Natter.Cli</RootNamespace>
+    <AssemblyName>natter</AssemblyName>
+    <RollForward>LatestMajor</RollForward>
+    <DebugType>embedded</DebugType>
+    <Description>Cross-platform CLI host for the Natter framework.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Natter.Cli.Core/Natter.Cli.Core.csproj" />
+    <ProjectReference Include="../Natter.Infrastructure/Natter.Infrastructure.csproj" />
+    <ProjectReference Include="../Natter.Abstractions/Natter.Abstractions.csproj" />
+  </ItemGroup>
+
+  <!-- Sample plugins are built next to the CLI and copied into $(OutDir)plugins/<id>/ so
+       the assembly-load-context based plugin loader can pick them up at startup. -->
+  <ItemGroup>
+    <ProjectReference Include="../../samples/Natter.Sample.Plugin.Greetings/Natter.Sample.Plugin.Greetings.csproj"
+                      ReferenceOutputAssembly="false" />
+    <ProjectReference Include="../../samples/Natter.Sample.Plugin.Metrics/Natter.Sample.Plugin.Metrics.csproj"
+                      ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+  <Target Name="CopySamplePlugins" AfterTargets="Build">
+    <PropertyGroup>
+      <SamplePluginTfm>net10.0</SamplePluginTfm>
+      <SampleGreetingsBin>$(MSBuildThisFileDirectory)../../samples/Natter.Sample.Plugin.Greetings/bin/$(Configuration)/$(SamplePluginTfm)</SampleGreetingsBin>
+      <SampleMetricsBin>$(MSBuildThisFileDirectory)../../samples/Natter.Sample.Plugin.Metrics/bin/$(Configuration)/$(SamplePluginTfm)</SampleMetricsBin>
+    </PropertyGroup>
+
+    <ItemGroup>
+      <GreetingsPluginFiles Include="$(SampleGreetingsBin)/Natter.Sample.Plugin.Greetings.dll" />
+      <GreetingsPluginFiles Include="$(SampleGreetingsBin)/Natter.Sample.Plugin.Greetings.pdb"
+                            Condition="Exists('$(SampleGreetingsBin)/Natter.Sample.Plugin.Greetings.pdb')" />
+      <MetricsPluginFiles Include="$(SampleMetricsBin)/Natter.Sample.Plugin.Metrics.dll" />
+      <MetricsPluginFiles Include="$(SampleMetricsBin)/Natter.Sample.Plugin.Metrics.pdb"
+                          Condition="Exists('$(SampleMetricsBin)/Natter.Sample.Plugin.Metrics.pdb')" />
+    </ItemGroup>
+
+    <Copy SourceFiles="@(GreetingsPluginFiles)" DestinationFolder="$(OutDir)plugins/greetings" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(MetricsPluginFiles)" DestinationFolder="$(OutDir)plugins/metrics" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)../../samples/Natter.Sample.Plugin.Greetings/plugin.json"
+          DestinationFolder="$(OutDir)plugins/greetings" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)../../samples/Natter.Sample.Plugin.Metrics/plugin.json"
+          DestinationFolder="$(OutDir)plugins/metrics" SkipUnchangedFiles="true" />
+  </Target>
+
+  <!-- Keep the plugin layout next to the published executable as well. -->
+  <Target Name="CopySamplePluginsToPublish" AfterTargets="Publish">
+    <PropertyGroup>
+      <SamplePluginTfm>net10.0</SamplePluginTfm>
+      <SampleGreetingsBin>$(MSBuildThisFileDirectory)../../samples/Natter.Sample.Plugin.Greetings/bin/$(Configuration)/$(SamplePluginTfm)</SampleGreetingsBin>
+      <SampleMetricsBin>$(MSBuildThisFileDirectory)../../samples/Natter.Sample.Plugin.Metrics/bin/$(Configuration)/$(SamplePluginTfm)</SampleMetricsBin>
+    </PropertyGroup>
+
+    <ItemGroup>
+      <PublishGreetingsFiles Include="$(SampleGreetingsBin)/Natter.Sample.Plugin.Greetings.dll" />
+      <PublishMetricsFiles Include="$(SampleMetricsBin)/Natter.Sample.Plugin.Metrics.dll" />
+    </ItemGroup>
+
+    <Copy SourceFiles="@(PublishGreetingsFiles)" DestinationFolder="$(PublishDir)plugins/greetings" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(PublishMetricsFiles)" DestinationFolder="$(PublishDir)plugins/metrics" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)../../samples/Natter.Sample.Plugin.Greetings/plugin.json"
+          DestinationFolder="$(PublishDir)plugins/greetings" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)../../samples/Natter.Sample.Plugin.Metrics/plugin.json"
+          DestinationFolder="$(PublishDir)plugins/metrics" SkipUnchangedFiles="true" />
+  </Target>
+
+</Project>

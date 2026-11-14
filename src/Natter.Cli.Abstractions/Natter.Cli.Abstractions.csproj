@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Natter.Cli.Abstractions</RootNamespace>
+    <AssemblyName>Natter.Cli.Abstractions</AssemblyName>
+    <Description>CLI contracts shared by the host and by plugins (console, commands).</Description>
+  </PropertyGroup>
+
+</Project>
