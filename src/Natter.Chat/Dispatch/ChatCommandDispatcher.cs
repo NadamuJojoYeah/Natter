@@ -32,6 +32,13 @@ public sealed class ChatCommandDispatcher : IChatCommandDispatcher
     {
         ArgumentNullException.ThrowIfNull(command);
 
+        if (string.IsNullOrWhiteSpace(command.Id))
+        {
+            return ChatAck.Failure(command, ChatError.Create(
+                ChatErrorCodes.InvalidRequest,
+                "Command id must not be empty."));
+        }
+
         var sourceError = ValidateSource(command.Source);
         if (sourceError is not null)
             return ChatAck.Failure(command, sourceError);
