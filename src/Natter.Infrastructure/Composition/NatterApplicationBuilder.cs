@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using Natter.Abstractions.Composition;
 using Natter.Abstractions.Plugins;
 using Natter.Abstractions.Ports;
+using Natter.Infrastructure.Chat;
 using Natter.Infrastructure.Modules;
 using Natter.Infrastructure.Plugins;
 using Natter.Application;
@@ -43,6 +44,7 @@ public sealed class NatterApplicationBuilder
     public NatterApplicationBuilder AddNatterFramework()
     {
         AddModule<CoreCompositionModule>();
+        AddModule<ChatCompositionModule>();
         AddModule<ApplicationCompositionModule>();
         return this;
     }
