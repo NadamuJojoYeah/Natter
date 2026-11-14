@@ -47,7 +47,21 @@ public sealed class ChatCommandDispatcher : IChatCommandDispatcher
         if (!string.IsNullOrWhiteSpace(key) && _idempotency.TryGet(key, out var cached) && cached is not null)
             return cached;
 
-        var ack = await ExecuteCoreAsync(upstream, command, cancellationToken).ConfigureAwait(false);
+        ChatAck ack;
+        try
+        {
+            ack = await ExecuteCoreAsync(upstream, command, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            ack = ChatAck.Failure(command, ChatError.Create(
+                ChatErrorCodes.Internal,
+                $"The upstream failed while executing '{command.Type}': {exception.Message}"));
+        }
 
         if (ack.Ok && !string.IsNullOrWhiteSpace(key))
             _idempotency.Store(key, ack);
@@ -121,18 +135,18 @@ public sealed class ChatCommandDispatcher : IChatCommandDispatcher
         for (var index = 0; index < chunks.Count; index++)
         {
             var chunkContent = chunks[index];
-            var chunkCommand = index == 0
-                ? degraded
-                : degraded with
+            var chunkCommand = degraded with
+            {
+                Id = index == 0 ? degraded.Id : $"{degraded.Id}:chunk-{index}",
+                IdempotencyKey = index == 0
+                    ? degraded.IdempotencyKey
+                    : $"{degraded.IdempotencyKey}:chunk-{index}",
+                Payload = degraded.Payload with
                 {
-                    Id = $"{degraded.Id}:chunk-{index}",
-                    IdempotencyKey = $"{degraded.IdempotencyKey}:chunk-{index}",
-                    Payload = degraded.Payload with
-                    {
-                        Content = chunkContent,
-                        ReplyTo = null,
-                    },
-                };
+                    Content = chunkContent,
+                    ReplyTo = index == 0 ? degraded.Payload.ReplyTo : null,
+                },
+            };
 
             var chunkAck = await upstream.ExecuteAsync(chunkCommand, cancellationToken).ConfigureAwait(false);
             if (!chunkAck.Ok)

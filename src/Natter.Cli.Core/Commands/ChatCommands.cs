@@ -31,10 +31,21 @@ public sealed class UpstreamsCommand : ICliCommandHandler
             if (!string.IsNullOrWhiteSpace(filter) && !Matches(upstream.Source, filter))
                 continue;
 
-            var capabilities = await upstream.GetCapabilitiesAsync(cancellationToken: cancellationToken)
-                .ConfigureAwait(false);
+            Capabilities capabilities;
+            string? error = null;
 
-            rows.Add(new UpstreamRow(upstream.Source, upstream.IsConnected, capabilities));
+            try
+            {
+                capabilities = await upstream.GetCapabilitiesAsync(cancellationToken: cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                capabilities = new Capabilities();
+                error = exception.Message;
+            }
+
+            rows.Add(new UpstreamRow(upstream.Source, upstream.IsConnected, capabilities, error));
         }
 
         if (invocation.HasFlag("json"))
@@ -51,7 +62,7 @@ public sealed class UpstreamsCommand : ICliCommandHandler
 
         ConsoleTable.Write(
             invocation.Console.Out,
-            ["SOURCE", "PLATFORM", "SELF", "STATE", "KINDS", "CAPABILITIES"],
+            ["SOURCE", "PLATFORM", "SELF", "STATE", "KINDS", "CAPABILITIES", "ERROR"],
             rows.Select(row => (IReadOnlyList<string>)
             [
                 row.Source.Protocol,
@@ -62,6 +73,7 @@ public sealed class UpstreamsCommand : ICliCommandHandler
                     ? "-"
                     : string.Join(",", row.Capabilities.ConversationKinds).ToLowerInvariant(),
                 Describe(row.Capabilities),
+                row.Error ?? "-",
             ]).ToList());
 
         return CliExitCodes.Success;
@@ -108,7 +120,8 @@ public sealed class UpstreamsCommand : ICliCommandHandler
     private sealed record UpstreamRow(
         [property: JsonConverter(typeof(SourceProjectionConverter))] Source Source,
         bool Connected,
-        Capabilities Capabilities);
+        Capabilities Capabilities,
+        string? Error);
 }
 
 /// <summary>Projects the structured source without the display-only key.</summary>
