@@ -42,6 +42,7 @@ public static class NlmpJson
         WriteIndented = false,
         Converters =
         {
+            NlmpEnumConverterFactory.Instance,
             new JsonStringEnumConverter(JsonNamingPolicy.CamelCase),
             new UtcDateTimeOffsetConverter(),
         },
