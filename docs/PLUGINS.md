@@ -194,7 +194,7 @@ _subscription = _stream.Subscribe(envelope => { /* ... */ });
 - 出站命令统一构造 `ChatCommand`（推荐 `ChatCommandFactory`），交给 `IChatCommandDispatcher`；不要直接调用平台 API。
 - 平台 token/密钥只存在于插件配置；`Interaction.ReplyToken` 不得写入日志、持久化或 AI prompt。
 - 能力缺失即降级：不要假设 edit/delete/markdown/attachments 一定存在。
-- Satori 协议可直接复用 `Natter.Chat.Satori` 的 `SatoriEventMapper`、`SatoriCommandMapper`、`SatoriCapabilityMapper`，不要重复解析 message elements。
+- Satori 协议可直接复用 `Natter.Chat.Satori` 的 `SatoriChatUpstream`（或 `SatoriEventMapper` + `SatoriCommandMapper` + `SatoriCapabilityMapper`），不要重复解析 message elements；WebSocket/HTTP 由 `ISatoriTransport` 实现承载。
 
 ```csharp
 public sealed class MyChatPlugin : IPluginModule

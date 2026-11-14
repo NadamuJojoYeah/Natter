@@ -11,7 +11,7 @@ Natter 只交付**框架能力**：端口契约、组合根、插件加载、DI 
 - **组合根**：`NatterApplicationBuilder` + `ICompositionModule`，宿主不引用具体适配器。
 - **Rx 事件流**：`System.Reactive` 热流、类型过滤、故障订阅者隔离、事件序列号、内存回放日志。
 - **NLMP 聊天模型**：`Source / Conversation / Message / Event / Command / Capabilities`，能力降级、事件去重、幂等发送、长文本分片、可选 JSON 投影。
-- **Satori 适配映射**：message elements → 文本/附件/mentions、`login.features` → capabilities、`sn` 恢复与重放去重。
+- **Satori 适配映射**：`SatoriChatUpstream` + `ISatoriTransport`，message elements → 文本/附件/mentions、`login.features` → capabilities、`sn` 恢复与重放去重。
 - **插件机制**：目录扫描、`plugin.json` 清单、可回收 `AssemblyLoadContext`、端口适配器覆盖、CLI 命令贡献、生命周期订阅。
 - **CLI 内核**：平台无关的命令注册表、解析器、帮助、JSON 输出、`exec` 同宿主命令链；Console 与 Android 宿主共用。
 - **多平台发布**：自包含单文件（win/linux/osx）+ Android APK；示例插件随发布目录部署或嵌入宿主。
@@ -71,7 +71,7 @@ Natter 只交付**框架能力**：端口契约、组合根、插件加载、DI 
 | `src/Natter.Application` | 应用 | `IApplicationDispatcher` 实现、管道、示例用例 |
 | `src/Natter.Infrastructure` | 适配器/组合根 | Rx 总线、内存适配器、插件加载器、DI 组合、NLMP 事件入口与命令调度 |
 | `src/Natter.Chat` | 聊天模型 | NLMP 0.1 模型、复合键、事件/命令、能力降级、幂等/去重、JSON 投影 |
-| `src/Natter.Chat.Satori` | 协议适配 | Satori 事件、message elements、features、API 与会话序号映射 |
+| `src/Natter.Chat.Satori` | 协议适配 | Satori 上游/传输边界、事件、message elements、features、API 与会话序号映射 |
 | `src/Natter.Cli.Abstractions` | CLI 契约 | `IConsole`、命令/选项描述符、处理器 |
 | `src/Natter.Cli.Core` | CLI 内核 | 解析、注册表、内建命令、JSON/表格输出 |
 | `src/Natter.Cli` | 宿主 | Console 入口，发布为 `natter` / `natter.exe` |

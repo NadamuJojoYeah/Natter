@@ -14,7 +14,7 @@
 | 依赖注入 | `Microsoft.Extensions.DependencyInjection` |
 | 事件流 | `System.Reactive` 的 `Subject<T>` + 安全观察者包装 |
 | 聊天运行时 | `RxChatEventHub`、`ChatUpstreamRegistry`、`ChatIngressProcessor`、`InMemoryChatUpstream` |
-| 聊天适配映射 | `Natter.Chat.Satori` 的 event / element / feature / API mapper |
+| 聊天适配映射 | `Natter.Chat.Satori` 的 `SatoriChatUpstream`、`ISatoriTransport`、event / element / feature / API mapper |
 
 依赖规则：
 
@@ -125,7 +125,7 @@ stream.OfTypeEvent<CounterIncremented>()
 Satori WS/HTTP（未来 transport）
         │ SatoriEvent
         ▼
-SatoriEventMapper (Natter.Chat.Satori)
+SatoriChatUpstream / SatoriEventMapper (Natter.Chat.Satori)
         │ ChatEvent
         ▼
 ChatIngressProcessor ── ChatEventDeduplicator（event id / message.created）

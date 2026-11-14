@@ -8,6 +8,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="System.Reactive" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="../Natter.Chat/Natter.Chat.csproj" />
     <ProjectReference Include="../Natter.Abstractions/Natter.Abstractions.csproj" />
   </ItemGroup>

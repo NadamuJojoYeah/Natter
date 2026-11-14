@@ -1077,7 +1077,7 @@ Satori 是独立 binding：
 | §7.5 幂等 | `Reliability/ChatIdempotencyCache.cs`（默认 10 分钟窗口） |
 | §6.6 / §13 去重 | `Reliability/ChatEventDeduplicator.cs`（事件 ID + `message.created` 语义键） |
 | §8 能力降级 | `Degradation/ChatCapabilityDegrader.cs`、`Degradation/ChatTextChunker.cs` |
-| §9 Satori 映射 | `src/Natter.Chat.Satori/`：`SatoriEventMapper`、`SatoriContentMapper`、`SatoriCapabilityMapper`、`SatoriCommandMapper`、`SatoriSnTracker` |
+| §9 Satori 映射 | `src/Natter.Chat.Satori/`：`SatoriChatUpstream`（IChatUpstream 实现）、`ISatoriTransport`（传输边界）、`SatoriEventMapper`、`SatoriContentMapper`、`SatoriCapabilityMapper`、`SatoriCommandMapper`、`SatoriSnTracker` |
 | §10.1 进程内绑定 | `IChatUpstream` / `IChatCommandDispatcher` / `IChatEventSource`；`InMemoryChatUpstream` 用于测试与嵌入宿主 |
 | §10.2 JSON 投影 | `Serialization/NlmpJson.cs`、`Serialization/NlmpEnumConverter.cs`（不包含 transport/握手） |
 | §15 Application 衔接 | `src/Natter.Application/Chat/ChatOrchestrator.cs` + `IChatResponder` + `AddChatOrchestrator<T>()` |
@@ -1145,12 +1145,13 @@ natter satori status --features message.update,message.delete,message.attachment
 | 14 附件 URL/大小/SSRF | `NlmpModelTests.Content_requires_text_or_attachments_and_rejects_unsafe_urls`、`SatoriMappingTests.Satori_attachment_policy_rejects_private_and_oversized_attachments` |
 | 15 interaction token 不落日志/持久化 | `NlmpModelTests.Interaction_display_masks_reply_tokens`、`SatoriMappingTests.Interaction_tokens_do_not_leak_into_ids_extensions_or_display` |
 | 16 Unix 秒 → RFC 3339 | `NlmpJsonTests.Events_commands_and_acks_round_trip_through_the_json_projection`、`SatoriMappingTests.Satori_event_maps_source_conversation_sender_and_time` |
+| 附加：Satori 上游装配 | `SatoriUpstreamTests`（事件映射、feature→能力、命令映射、sn 恢复、幂等、rate limit） |
 
 ### 16.4 实现边界
 
 以下内容按本规范 §10.2 / §14 的“后续”处理，当前**不实现**：
 
-1. **Satori wire transport**：`SatoriEventMapper` / `SatoriCommandMapper` 只做语义映射，不含 WebSocket、HTTP、认证、重连；`SatoriSnTracker` 只保存内存序号，持久化由适配器宿主负责。
+1. **Satori wire transport**：`SatoriChatUpstream` + `ISatoriTransport` 完成 ingress/egress 映射、能力更新与 `sn` 恢复；具体 WebSocket/HTTP 客户端、认证与重连策略由 transport 实现（本仓库不内置）。`SatoriSnTracker` 只保存内存序号，跨进程持久化由适配器宿主负责。
 2. **远程 JSON binding**：`NlmpJson` 只提供 envelope 投影与版本校验，不提供握手、路由、服务发现或背压。
 3. **原生 Discord adapter / `discord status`**：当前只有 `satori` 映射与通用 `upstreams` 诊断；Discord 适配器可按 §10.3 独立实现。
 4. **流式编辑节流**：`Capabilities.StreamEdit` 已暴露，节流策略按 §7.5 由适配器决定；核心不做定时器/合并。
