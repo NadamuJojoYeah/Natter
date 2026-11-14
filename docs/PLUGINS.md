@@ -12,6 +12,7 @@
 插件是一个普通类库（`net10.0`），引用：
 
 - `Natter.Abstractions`：`IPluginModule`、端口、领域事件；
+- `Natter.Chat`：实现聊天上游、消费 NLMP 事件/命令时；
 - `Natter.Cli.Abstractions`：若要贡献 CLI 命令；
 - `Microsoft.Extensions.DependencyInjection.Abstractions`：注册服务；
 - `System.Reactive`：若要直接使用 Rx 操作符。
@@ -184,7 +185,51 @@ public sealed class HelloLifecycle : IPluginLifecycle, IDisposable
 _subscription = _stream.Subscribe(envelope => { /* ... */ });
 ```
 
-## 6. 部署与探测
+## 6. 协议插件：实现 NLMP 上游
+
+聊天协议插件负责把平台 SDK 翻译成 NLMP；业务插件只依赖 `Natter.Chat` 的模型与命令，不引用平台类型。
+
+- 实现 `IChatUpstream`：`Source`、`Events`、`ConnectAsync`/`DisconnectAsync`、`GetCapabilitiesAsync`、`ExecuteAsync`。
+- 入站事件使用平台事件 id 或 `ChatEventId.Derive`，先经过 `IChatEventIngress`（去重窗口默认 10 分钟）。
+- 出站命令统一构造 `ChatCommand`（推荐 `ChatCommandFactory`），交给 `IChatCommandDispatcher`；不要直接调用平台 API。
+- 平台 token/密钥只存在于插件配置；`Interaction.ReplyToken` 不得写入日志、持久化或 AI prompt。
+- 能力缺失即降级：不要假设 edit/delete/markdown/attachments 一定存在。
+- Satori 协议可直接复用 `Natter.Chat.Satori` 的 `SatoriEventMapper`、`SatoriCommandMapper`、`SatoriCapabilityMapper`，不要重复解析 message elements。
+
+```csharp
+public sealed class MyChatPlugin : IPluginModule
+{
+    public PluginMetadata Metadata { get; } = new("mychat", "My Chat Plugin", "0.1.0");
+
+    public void Configure(IPluginRegistrationContext context)
+    {
+        context.Services.AddSingleton<MyChatUpstream>();
+        context.Services.AddSingleton<IChatUpstream>(provider => provider.GetRequiredService<MyChatUpstream>());
+        context.Services.AddSingleton<IPluginLifecycle, MyChatLifecycle>();
+        context.AddCapability("chat:upstream");
+    }
+}
+
+public sealed class MyChatLifecycle(IChatUpstreamRegistry registry, MyChatUpstream upstream) : IPluginLifecycle
+{
+    public ValueTask StartAsync(IServiceProvider services, CancellationToken ct = default)
+    {
+        registry.Register(upstream);
+        return upstream.ConnectAsync(ct);
+    }
+
+    public ValueTask StopAsync(IServiceProvider services, CancellationToken ct = default)
+        => upstream.DisconnectAsync(ct);
+}
+```
+
+说明：
+
+- `Configure` 阶段只注册服务，**不要**解析服务或连接平台；注册/连接放在 `IPluginLifecycle.StartAsync`。
+- `ChatIngressLifecycle` 会自动订阅已注册上游的 `Events`；启动后注册的上游也会通过 `UpstreamRegistered` 补订阅。
+- 诊断：`natter upstreams --json` 查看 source/能力；`natter satori status --features ...` 预览 feature 映射。
+
+## 7. 部署与探测
 
 ```bash
 # 构建插件类库
@@ -209,7 +254,7 @@ my-plugin/
 
 框架程序集（`Natter.*`、`Microsoft.Extensions.*`、`System.*`、`System.Reactive*`）由默认 `AssemblyLoadContext` 共享，**不要**在插件目录重复携带不同版本，否则会出现类型身份冲突。
 
-## 7. 嵌入插件
+## 8. 嵌入插件
 
 无法从文件系统加载插件的宿主（Android APK、单文件特殊场景、测试）使用：
 
@@ -225,7 +270,7 @@ var exitCode = await NatterCli.RunAsync(
 
 嵌入插件同样走 `IPluginRegistrationContext`，在 `plugins list` 中 `ORIGIN` 显示为 `embedded`。
 
-## 8. 排查
+## 9. 排查
 
 | 现象 | 排查 |
 | --- | --- |
@@ -236,3 +281,7 @@ var exitCode = await NatterCli.RunAsync(
 | 事件收不到 | 订阅必须在 `IPluginLifecycle.StartAsync` 中建立，且宿主已 `StartAsync` |
 | 插件 Id 重复 | 每个目录使用唯一 `id`；重复项会标记失败并被卸载 |
 | 类型加载异常 | 插件与框架目标框架不兼容，或携带了冲突的共享程序集 |
+| `upstreams` 为空 | 插件未注册 `IChatUpstream`，或 lifecycle 未注册/未启动 |
+| 收到消息但不回复 | 检查编排器过滤（bot/system/mention）、`IChatResponder` 与能力降级日志 |
+| 重复回复 | 事件是否绕过了 `IChatEventIngress`；确认事件 id 与去重窗口 |
+| 发送返回 `unsupported` | 上游 `Capabilities` 缺少 edit/delete/typing 等能力，按降级表处理 |

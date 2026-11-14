@@ -7,28 +7,36 @@
 | 领域内核 | `Natter.Domain` + `Natter.Abstractions/Ddd` |
 | 入站端口（driving） | `IApplicationDispatcher`、`ICliCommandHandler` |
 | 出站端口（driven） | `IRepository<,>`、`IUnitOfWork`、`IClock`、`IGreetingPort`、`IDomainEventPublisher`、`IEventJournal` |
+| 聊天模型 / 端口 | `Natter.Chat` 的 `Source`、`Message`、`ChatEvent`、`ChatCommand`、`Capabilities`、`IChatUpstream`、`IChatCommandDispatcher` |
 | 入站适配器 | CLI 命令处理器、Android Activity 宿主、测试 |
 | 出站适配器 | `RxDomainEventBus`、`InMemoryRepository<,>`、`InMemoryUnitOfWork`、`SystemClock`、`InMemoryEventJournal`、`DefaultGreetingAdapter` |
 | 组合根 | `NatterApplicationBuilder`、`NatterHost`、`ICompositionModule` |
 | 依赖注入 | `Microsoft.Extensions.DependencyInjection` |
 | 事件流 | `System.Reactive` 的 `Subject<T>` + 安全观察者包装 |
+| 聊天运行时 | `RxChatEventHub`、`ChatUpstreamRegistry`、`ChatIngressProcessor`、`InMemoryChatUpstream` |
+| 聊天适配映射 | `Natter.Chat.Satori` 的 event / element / feature / API mapper |
 
 依赖规则：
 
 ```text
 Natter.Abstractions
-   ▲        ▲          ▲
-   │        │          │
-Domain   Application  Cli.Abstractions
-            ▲
-            │
-       Infrastructure ◀── Cli.Core ◀── Cli / Android
+   ▲        ▲          ▲          ▲
+   │        │          │          │
+Domain   Application  Chat    Cli.Abstractions
+            ▲          ▲
+            │          │
+       Infrastructure ─┘ ◀── Cli.Core ◀── Cli / Android
+                              ▲
+                              │
+                    Natter.Chat.Satori（仅 CLI/适配器引用）
 ```
 
 - `Natter.Abstractions` 不引用任何产品程序集，只依赖 `Microsoft.Extensions.DependencyInjection.Abstractions`（用于契约中的服务注册）。
 - `Natter.Domain` 只依赖 Abstractions。
 - `Natter.Application` 依赖 Domain + Abstractions。
-- `Natter.Infrastructure` 依赖 Application/Domain/Abstractions，**不依赖宿主**。
+- `Natter.Infrastructure` 依赖 Application/Domain/Abstractions/Chat，**不依赖宿主**。
+- `Natter.Chat` 只依赖 Abstractions（`IClock`），不引用 Infrastructure、宿主或 Satori 类型。
+- `Natter.Chat.Satori` 依赖 Chat + Abstractions，是协议适配层；NLMP 核心不知道 Satori 的存在。
 - `Natter.Cli.Core` 依赖 Infrastructure，向上提供命令内核；宿主只负责提供 `IConsole` 和额外模块。
 
 ## 2. DDD 基元
@@ -111,7 +119,45 @@ stream.OfTypeEvent<CounterIncremented>()
       .SubscribeSafe(e => Console.WriteLine(e.Value), logger);
 ```
 
-## 5. 插件加载
+## 5. NLMP 聊天流
+
+```text
+Satori WS/HTTP（未来 transport）
+        │ SatoriEvent
+        ▼
+SatoriEventMapper (Natter.Chat.Satori)
+        │ ChatEvent
+        ▼
+ChatIngressProcessor ── ChatEventDeduplicator（event id / message.created）
+        │
+        ▼
+RxChatEventHub (IChatEventSource) ──▶ ChatOrchestrator / 功能插件
+        │                                      │
+        │                                      ▼
+        │                              IChatResponder → ChatCommand
+        │                                      │
+        ▼                                      ▼
+ChatIngressLifecycle                  ChatCommandDispatcher
+（订阅所有 IChatUpstream）              （校验 / 能力降级 / 分片 / 幂等）
+                                               │
+                                               ▼
+                                       IChatUpstream.ExecuteAsync
+                                       （Satori / Discord / InMemory）
+```
+
+关键语义：
+
+- **进程内优先**：NLMP 模型是 C# record 与接口，不需要握手或版本协商；JSON 投影只在需要时启用。
+- **作用域**：所有路由、去重、缓存 key 都包含结构化 `Source`，不解析 `sourceKey` 字符串。
+- **能力驱动**：`Capabilities` 缺失即不支持；`ChatCapabilityDegrader` 负责 Markdown/附件/回复/mention 降级，`ChatTextChunker` 负责 `maxMessageLength` 分片。
+- **幂等与去重**：`ChatIdempotencyCache` 复用 ack；`ChatEventDeduplicator` 使用事件 ID + `message.created` 语义 key，窗口默认 10 分钟。
+- **事件只表达事实**：`ChatOrchestrator` 消费事件后必须通过 `IChatCommandDispatcher` 发命令，不反向调用平台 API。
+- **错误与重试**：`ChatAck`/`ChatError` 暴露 `retryable` 与 `retryAfterMs`；部分分片失败会带 `deliveredMessageIds`，避免盲目重发。
+- **隐私**：`Interaction.ReplyToken` 在 `ToString()` 中脱敏；事件日志只记录 source/type/id。
+
+`AddNatterFramework()` 会注册 `ChatCompositionModule`，因此所有宿主默认具备聊天事件端口；只有注册 `IChatUpstream` 后才有实际平台连接。
+
+## 6. 插件加载
 
 ```text
 plugins/
@@ -132,7 +178,7 @@ plugins/
 - 单个插件失败（清单损坏、入口缺失、类型加载异常、重复 Id）会记录为 `PluginState.Failed` 并继续加载其他插件。
 - `PluginCatalog` 拥有加载上下文；宿主释放时尝试 `Unload()`。由于 DI 单例在容器生命周期内持有插件对象，通常要等容器释放后 GC 才真正卸载。
 
-## 6. CLI 内核
+## 7. CLI 内核
 
 - `CliCommandDescriptor` 声明命令名（支持 `plugins list` 这类多级名字）、别名、选项、位置参数、来源和处理器工厂。
 - `CliCommandRegistry` 合并内建描述符与插件 `ICliCommandContributor`，按最长命令路径解析。
@@ -141,15 +187,17 @@ plugins/
 - `exec` 在同一个宿主内递归调用 `CliRunner`，用于演示插件/日志的宿主级生命周期；内置最大嵌套深度 4。
 - 宿主只需实现 `IConsole`：Console 宿主写 `System.Console`，Android 宿主写 `TextView`。
 
-## 7. 宿主
+## 8. 宿主
 
 - `Natter.Cli`：`net10.0` 控制台，发布自包含单文件。
 - `Natter.Hosting.Android`：`net10.0-android`，Activity 中调用同一个 `NatterCli.RunAsync`；由于 APK 无法扫描外部插件目录，使用 `AddEmbeddedPlugin` 注册示例插件。
 - 测试宿主：直接调用 `NatterApplicationBuilder` 或 `NatterCli.RunAsync`，用 `IConsole` 假实现捕获输出。
 
-## 8. 已知边界
+## 9. 已知边界
 
 - 事件总线是进程内、内存态；不提供 outbox、持久化、重试或跨进程投递。
 - 仓储与工作单元是脚手架适配器，不模拟事务/并发。
 - 插件加载是宿主构建期行为；运行中热加载需要重建容器，未在本框架实现。
+- NLMP 不包含 wire transport、远程插件、握手/服务发现；Satori WebSocket/HTTP 客户端与原生 Discord 适配器不在框架内。
+- Satori message elements 采用有损文本化（v0.1），富文本/按钮/Modal 需要后续能力扩展。
 - Android 为保持反射与插件类型完整，关闭了 trimming/AOT；启用时应补充 trim 注解与真机验证。

@@ -1,6 +1,6 @@
 # Natter
 
-> 六边形架构（Ports & Adapters）+ DDD 的 .NET 10 **框架/脚手架**：统一跨平台 CLI 入口、DI 装配可插拔端口适配器、Rx 进程内领域事件流、可加载示例插件，并支持 Windows / Linux / macOS / Android 发布。
+> 六边形架构（Ports & Adapters）+ DDD 的 .NET 10 **框架/脚手架**：统一跨平台 CLI 入口、DI 装配可插拔端口适配器、Rx 进程内领域事件流、NLMP 聊天语义模型、可加载示例插件，并支持 Windows / Linux / macOS / Android 发布。
 
 Natter 只交付**框架能力**：端口契约、组合根、插件加载、DI 装配、Rx 事件总线、CLI 骨架与最小示例。`Counter`、`Greeting` 是用于验证装配和事件流的示例，不是业务系统。
 
@@ -10,10 +10,12 @@ Natter 只交付**框架能力**：端口契约、组合根、插件加载、DI 
 - **六边形端口**：入站请求分发器，出站 `IRepository<,>`、`IUnitOfWork`、`IClock`、`IDomainEventPublisher`、`IGreetingPort`。
 - **组合根**：`NatterApplicationBuilder` + `ICompositionModule`，宿主不引用具体适配器。
 - **Rx 事件流**：`System.Reactive` 热流、类型过滤、故障订阅者隔离、事件序列号、内存回放日志。
+- **NLMP 聊天模型**：`Source / Conversation / Message / Event / Command / Capabilities`，能力降级、事件去重、幂等发送、长文本分片、可选 JSON 投影。
+- **Satori 适配映射**：message elements → 文本/附件/mentions、`login.features` → capabilities、`sn` 恢复与重放去重。
 - **插件机制**：目录扫描、`plugin.json` 清单、可回收 `AssemblyLoadContext`、端口适配器覆盖、CLI 命令贡献、生命周期订阅。
 - **CLI 内核**：平台无关的命令注册表、解析器、帮助、JSON 输出、`exec` 同宿主命令链；Console 与 Android 宿主共用。
 - **多平台发布**：自包含单文件（win/linux/osx）+ Android APK；示例插件随发布目录部署或嵌入宿主。
-- **测试**：28 个框架级测试覆盖聚合事件、Rx 总线、DI 管道、解析器、插件加载与 CLI。
+- **测试**：75 个框架级测试覆盖聚合事件、Rx 总线、DI 管道、解析器、插件加载、CLI 与 NLMP 一致性。
 
 ## 架构
 
@@ -38,7 +40,12 @@ Natter 只交付**框架能力**：端口契约、组合根、插件加载、DI 
         └──────────────────────────────────┬───────────────────────────────────┘
                                            │
         ┌──────────────────────────────────▼───────────────────────────────────┐
-        │  Natter.Application — use cases, dispatcher, pipeline behaviors      │
+        │  Natter.Application — use cases, dispatcher, pipeline, chat orchestrator│
+        └──────────────────────────────────┬───────────────────────────────────┘
+                                           │
+        ┌──────────────────────────────────▼───────────────────────────────────┐
+        │  Natter.Chat (NLMP) — model · keys · events · commands · capabilities│
+        │  Natter.Chat.Satori — Satori event/element/feature/API mapping        │
         └──────────────────────────────────┬───────────────────────────────────┘
                                            │
         ┌──────────────────────────────────▼───────────────────────────────────┐
@@ -62,7 +69,9 @@ Natter 只交付**框架能力**：端口契约、组合根、插件加载、DI 
 | `src/Natter.Abstractions` | 内核 | DDD 基元、端口、事件/插件/组合契约 |
 | `src/Natter.Domain` | 领域 | 示例 `Counter` 聚合与领域事件 |
 | `src/Natter.Application` | 应用 | `IApplicationDispatcher` 实现、管道、示例用例 |
-| `src/Natter.Infrastructure` | 适配器/组合根 | Rx 总线、内存适配器、插件加载器、DI 组合 |
+| `src/Natter.Infrastructure` | 适配器/组合根 | Rx 总线、内存适配器、插件加载器、DI 组合、NLMP 事件入口与命令调度 |
+| `src/Natter.Chat` | 聊天模型 | NLMP 0.1 模型、复合键、事件/命令、能力降级、幂等/去重、JSON 投影 |
+| `src/Natter.Chat.Satori` | 协议适配 | Satori 事件、message elements、features、API 与会话序号映射 |
 | `src/Natter.Cli.Abstractions` | CLI 契约 | `IConsole`、命令/选项描述符、处理器 |
 | `src/Natter.Cli.Core` | CLI 内核 | 解析、注册表、内建命令、JSON/表格输出 |
 | `src/Natter.Cli` | 宿主 | Console 入口，发布为 `natter` / `natter.exe` |
@@ -82,6 +91,8 @@ dotnet run --project src/Natter.Cli -- doctor
 dotnet run --project src/Natter.Cli -- demo --name demo --times 3
 dotnet run --project src/Natter.Cli -- ports
 dotnet run --project src/Natter.Cli -- plugins list
+dotnet run --project src/Natter.Cli -- upstreams
+dotnet run --project src/Natter.Cli -- satori status --features message.update,message.delete
 
 # 同一个宿主里串行执行命令，插件状态与事件日志共享
 dotnet run --project src/Natter.Cli -- exec "demo --times 3" "metrics" "greetings recent"
@@ -116,6 +127,8 @@ natter <command> [arguments] [options]
 | `version [--json]` | 框架、运行时、RID、OS 信息 |
 | `doctor [--json]` | 组合结果：插件、端口适配器、事件总线、命令数 |
 | `ports [--port <过滤>] [--json]` | 端口 → 适配器绑定（含插件覆盖） |
+| `upstreams [--source <过滤>] [--json]` | NLMP 上游、连接状态与协商能力 |
+| `satori status [--features ...] [--json]` | Satori feature → capability 与 API 路由诊断 |
 | `plugins list [--failed] [--json]` | 已加载/失败的插件 |
 | `plugins inspect <directory> [--json]` | 只探测插件目录，不注册 |
 | `demo [--name] [--amount] [--times] [--json]` | 聚合 → 仓储 → 领域事件 → Rx 全链路 |
@@ -141,6 +154,8 @@ natter <command> [arguments] [options]
 | 横切逻辑 | 实现 `IPipelineBehavior<,>`，注册为开放泛型 |
 | 贡献 CLI 命令 | 实现 `ICliCommandContributor`（内置 `ICliCommandHandler`） |
 | 消费领域事件 | 实现 `IPluginLifecycle`，在 `StartAsync` 订阅 `IDomainEventStream` |
+| 接入聊天平台 | 实现 `IChatUpstream`，注册到 `IChatUpstreamRegistry`；命令统一走 `IChatCommandDispatcher` |
+| 接入 AI/回复逻辑 | 实现 `IChatResponder`，用 `AddChatOrchestrator<TResponder>()` 接到 NLMP 事件流 |
 | 新增宿主 | 调用 `NatterCli.RunAsync(args, IConsole, options, configure)` |
 | 替换仓储/事务 | 覆盖 `IRepository<,>` / `IUnitOfWork` 的注册 |
 | 新增组合模块 | 实现 `ICompositionModule`，`builder.AddModule<T>()` |
@@ -168,6 +183,8 @@ Android 产物位于 `artifacts/android/`。示例构建使用默认调试签名
 
 ## 文档
 
+- [开发指南](docs/DEVELOPMENT.md)：环境、日常循环、扩展 recipe、DI 约定、测试与调试。
+- [轻量消息协议模型 (NLMP)](docs/NLMP.md)：源/会话/消息/事件/命令/能力模型，以及 Satori 映射。
 - [架构设计](docs/ARCHITECTURE.md)：六边形映射、组合根顺序、Rx 语义、插件加载器。
 - [插件开发](docs/PLUGINS.md)：清单、适配器覆盖、CLI 命令、生命周期、嵌入模式。
 - [发布指南](docs/PUBLISHING.md)：RID 矩阵、单文件、Android 签名与裁剪。
@@ -179,6 +196,8 @@ Android 产物位于 `artifacts/android/`。示例构建使用默认调试签名
 - Rx 总线是**进程内热流**，没有 outbox、持久化或重试语义；跨进程事件请新增适配器。
 - 插件卸载是 best-effort；DI 单例持有插件对象的期间，`AssemblyLoadContext` 不会真正回收。
 - Android 无法扫描 APK 内的插件目录，因此示例以 embedded plugin 方式注册。
+- NLMP 默认是进程内模型：不包含远程 transport、握手或服务发现；`Natter.Chat.Satori` 只做映射，不包含 WebSocket/HTTP 客户端。
+- Satori message elements 是有损映射（v0.1 只保留文本、附件和 mentions）；富文本/按钮/复杂布局需要后续能力扩展。
 
 ## 许可
 
