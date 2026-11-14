@@ -1,5 +1,3 @@
-using System.Text.Json;
-
 namespace Natter.Chat;
 
 /// <summary>Payload of <c>message.send</c>.</summary>
@@ -31,10 +29,4 @@ public sealed record InteractionRespondPayload(
 {
     public override string ToString()
         => $"InteractionRespondPayload {{ InteractionId = {InteractionId}, ReplyToken = {(ReplyToken is null ? "null" : "***")} }}";
-}
-
-/// <summary>JSON namespace extensions. Keys MUST be namespaced (e.g. <c>satori</c>).</summary>
-public static class ChatExtensions
-{
-    public static IReadOnlyDictionary<string, JsonElement>? Empty => null;
 }

@@ -100,6 +100,8 @@ public sealed class SatoriEventMapper
         _cache.TryGet(source, messageId, out var cached);
 
         var channel = dto.Channel ?? satoriEvent.Channel;
+        if (cached is not null && channel?.Id is { } channelId && cached.Conversation.Id != channelId)
+            cached = null;
         var guildId = (dto.Guild ?? satoriEvent.Guild)?.Id;
         var sender = MapUser(dto.User ?? satoriEvent.User) ?? cached?.Sender;
 
@@ -167,6 +169,8 @@ public sealed class SatoriEventMapper
 
         _cache.TryGet(source, messageId, out var cached);
         var channel = dto?.Channel ?? satoriEvent.Channel;
+        if (cached is not null && channel?.Id is { } channelId && cached.Conversation.Id != channelId)
+            cached = null;
         var guildId = (dto?.Guild ?? satoriEvent.Guild)?.Id;
         var conversation = BuildConversation(channel, guildId, cached?.Conversation);
         if (conversation is null)

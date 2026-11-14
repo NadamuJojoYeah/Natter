@@ -15,7 +15,7 @@ public sealed class InMemoryChatUpstream : IChatUpstream, IDisposable
     private readonly ISubject<ChatEvent> _events;
     private readonly IClock _clock;
     private readonly ChatIdempotencyCache _idempotency;
-    private readonly Dictionary<string, Message> _messages = new(StringComparer.Ordinal);
+    private readonly Dictionary<(string ConversationId, string MessageId), Message> _messages = [];
     private readonly Lock _gate = new();
     private long _sequence;
     private bool _connected;
@@ -154,6 +154,9 @@ public sealed class InMemoryChatUpstream : IChatUpstream, IDisposable
         if (conversation is null || string.IsNullOrWhiteSpace(conversation.Id))
             return Fail(command, ChatErrorCodes.InvalidRequest, "message.send requires conversation.id.");
 
+        if (command.Payload.Content is null)
+            return Fail(command, ChatErrorCodes.InvalidRequest, "message.send requires content.");
+
         var content = ChatCapabilityDegrader.DegradeContent(command.Payload.Content, Capabilities);
         var errors = content.Validate();
         if (errors.Count > 0)
@@ -174,7 +177,7 @@ public sealed class InMemoryChatUpstream : IChatUpstream, IDisposable
                 replyTo);
 
             lock (_gate)
-                _messages[message.Id] = message;
+                _messages[(conversation.Id, message.Id)] = message;
 
             messageIds.Add(message.Id);
             PublishMessage(message, created: true);
@@ -188,13 +191,24 @@ public sealed class InMemoryChatUpstream : IChatUpstream, IDisposable
         if (!Capabilities.SupportsEdit)
             return Fail(command, ChatErrorCodes.Unsupported, "Message editing is not supported by this upstream.");
 
+        var conversation = command.Payload.Conversation;
+        if (conversation is null || string.IsNullOrWhiteSpace(conversation.Id))
+            return Fail(command, ChatErrorCodes.InvalidRequest, "message.update requires conversation.id.");
+
+        var conversationId = conversation.Id;
         var messageId = command.Payload.MessageId;
+        if (string.IsNullOrWhiteSpace(messageId))
+            return Fail(command, ChatErrorCodes.InvalidRequest, "message.update requires messageId.");
+
         Message? message;
         lock (_gate)
-            _messages.TryGetValue(messageId, out message);
+            _messages.TryGetValue((conversationId, messageId), out message);
 
         if (message is null)
-            return Fail(command, ChatErrorCodes.NotFound, $"Message '{messageId}' does not exist.");
+            return Fail(command, ChatErrorCodes.NotFound, $"Message '{messageId}' does not exist in conversation '{conversationId}'.");
+
+        if (command.Payload.Content is null)
+            return Fail(command, ChatErrorCodes.InvalidRequest, "message.update requires content.");
 
         var content = ChatCapabilityDegrader.DegradeContent(command.Payload.Content, Capabilities);
         if (content.Validate().Count > 0)
@@ -203,7 +217,7 @@ public sealed class InMemoryChatUpstream : IChatUpstream, IDisposable
         var updated = message with { Content = content, EditedAt = _clock.UtcNow };
 
         lock (_gate)
-            _messages[messageId] = updated;
+            _messages[(conversationId, messageId)] = updated;
 
         PublishMessage(updated, created: false);
         return ChatAck.Success(command, [messageId], _clock.UtcNow);
@@ -214,17 +228,25 @@ public sealed class InMemoryChatUpstream : IChatUpstream, IDisposable
         if (!Capabilities.Delete)
             return Fail(command, ChatErrorCodes.Unsupported, "Message deletion is not supported by this upstream.");
 
+        var conversation = command.Payload.Conversation;
+        if (conversation is null || string.IsNullOrWhiteSpace(conversation.Id))
+            return Fail(command, ChatErrorCodes.InvalidRequest, "message.delete requires conversation.id.");
+
+        var conversationId = conversation.Id;
         var messageId = command.Payload.MessageId;
+        if (string.IsNullOrWhiteSpace(messageId))
+            return Fail(command, ChatErrorCodes.InvalidRequest, "message.delete requires messageId.");
+
         Message? message;
         lock (_gate)
         {
-            _messages.TryGetValue(messageId, out message);
+            _messages.TryGetValue((conversationId, messageId), out message);
             if (message is not null)
-                _messages.Remove(messageId);
+                _messages.Remove((conversationId, messageId));
         }
 
         if (message is null)
-            return Fail(command, ChatErrorCodes.NotFound, $"Message '{messageId}' does not exist.");
+            return Fail(command, ChatErrorCodes.NotFound, $"Message '{messageId}' does not exist in conversation '{conversationId}'.");
 
         var deletedAt = _clock.UtcNow;
         var sequence = Interlocked.Increment(ref _sequence);
