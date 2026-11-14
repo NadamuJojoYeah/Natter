@@ -148,6 +148,13 @@ public sealed class SatoriChatUpstream : IChatUpstream, IDisposable
                 $"Satori upstream '{Source.Key}' is not connected."));
         }
 
+        if (command.Source is null)
+        {
+            return ChatAck.Failure(command, ChatError.Create(
+                ChatErrorCodes.InvalidRequest,
+                "Command source must not be null."));
+        }
+
         if (command.Source != Source)
         {
             return ChatAck.Failure(command, ChatError.Create(

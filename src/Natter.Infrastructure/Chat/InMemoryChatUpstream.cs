@@ -111,6 +111,14 @@ public sealed class InMemoryChatUpstream : IChatUpstream, IDisposable
                 $"In-memory upstream '{Source.Key}' is not connected."));
         }
 
+        if (command.Source is null)
+        {
+            return ValueTask.FromResult(Fail(
+                command,
+                ChatErrorCodes.InvalidRequest,
+                "Command source must not be null."));
+        }
+
         if (command.Source != Source)
         {
             return ValueTask.FromResult(Fail(
