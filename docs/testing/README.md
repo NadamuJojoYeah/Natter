@@ -67,6 +67,8 @@
 | 2026-11-15 | [P2 验收处置记录（归档）](archive/2026-11-15-p2-acceptance-response.md) | 4 个 High 的根因、修复方向、复测闸门与归档规则 | **Closed · Go**（Archived） |
 | 2026-11-15 | [P3 Context & Memory 验收（归档）](archive/2026-11-15-p3-acceptance.md) | prompt/context/memory、SQLite memory、remember/forget、真实召回 | **Closed · Go**：1 High + 2 Medium 修复复测；232/232；真实召回/删除/重启通过 |
 | 2026-11-15 | [P3 验收处置记录（归档）](archive/2026-11-15-p3-acceptance-response.md) | 共享删除、host contribution、export CLI、DM private、prompt injection、summary 更新 | **Closed · Go**（Archived） |
+| 2026-11-15 | [P4 Tier 1 产品化验收](2026-11-15-p4-acceptance.md) | 命令 UX、memory.store、备份/恢复、真实多轮 | **No-Go**：schema 阻塞 slash；profile store/单实例/输出待收敛 |
+| 2026-11-15 | [P4 验收处置记录](2026-11-15-p4-acceptance-response.md) | Schema、profile store、fail-closed、单实例、clipped 输出 | 待修复：1 High + 2 Medium + 2 观测 |
 
 ## 5. 相关文档
 

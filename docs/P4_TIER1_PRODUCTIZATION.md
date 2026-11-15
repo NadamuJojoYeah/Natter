@@ -1,10 +1,11 @@
 # P4 Tier 1 Productization — Development Spec
 
-> **状态**：P4.0–P4.1 foundation implemented（sample memory.store 插件、Discord 命令路由/注册、memory UX、deploy/backup 示例；24h soak / 真实双 guild / 完整运维矩阵仍待测试侧）  
-> **日期**：2026-11-15  
-> **前置**：P3 已 Go（Context/Memory foundation 已归档；232/232 回归）  
-> **目标**：把 Discord + DeepSeek 从“架构验证”推进到“真实用户可长期使用、可运维、可恢复”的一等公民产品。  
+> **状态**：P4.0–P4.1 foundation implemented；P4 验收 No-Go（schema/命令 UX 阻塞，profile store/单实例/输出异常待收敛）。
+> **日期**：2026-11-15
+> **前置**：P3 已 Go（Context/Memory foundation 已归档；232/232 回归）
+> **目标**：把 Discord + DeepSeek 从“架构验证”推进到“真实用户可长期使用、可运维、可恢复”的一等公民产品。
 > **关联**：[P3 Context & Memory](P3_CONTEXT_MEMORY.md)、[P2 Runtime & Profile](P2_RUNTIME_PROFILE.md)、[Harness 架构](HARNESS_ARCHITECTURE.md)、[Discord transport](DISCORD_PLUGIN_DESIGN.md)
+> **验收处置**：[P4 验收 No-Go](testing/2026-11-15-p4-acceptance-response.md)
 
 ---
 
@@ -122,7 +123,7 @@ samples/Natter.Sample.Plugin.Memory/
   ```json
   "memory": { "store": "natter.sample.memory#file" }
   ```
-- 停用插件后回滚到 `host#sqlite`；
+- 停用插件前必须把 profile 切回 `host#sqlite`；profile 仍引用缺失组件时启动失败，不静默回滚；
 - 不实现向量/外部服务。
 
 测试：
@@ -436,7 +437,7 @@ deploy/
 
 | 项 | 状态 | 文件 |
 | --- | --- | --- |
-| 示例 memory.store 插件 | 已实现（`kind=memory`、`memory.store/file`、NPS 激活/回滚） | `samples/Natter.Sample.Plugin.Memory` |
+| 示例 memory.store 插件 | 已实现（JSON 文件持久化、`kind=memory`、NPS 激活/回滚） | `samples/Natter.Sample.Plugin.Memory` |
 | Discord 命令路由 | `/ask` `/remember` `/forget` `/memory` `/reset` | `ChatCommandRouter.cs` |
 | Discord 命令注册 | transport 按命令名生成参数 schema | `DiscordSocketTransport.cs` |
 | memory UX | user scope 默认、共享 scope 拒绝、创作者删除、ephemeral 反馈 | 同上 |
@@ -446,10 +447,13 @@ deploy/
 | prompt injection | memory/summary 移出 system，作为 untrusted data | `HostRecentWindowContextAssembler` |
 | summary 增量 | `ToMessageId` 比较 + 新版本 | `HostContextPipeline` |
 | deploy | systemd/docker/backup 示例 | `deploy/`、`scripts/natter-backup.sh` |
+| profile-aware memory resolver | CLI/Discord 命令统一按 profile 选择 store，缺失 fail-closed | `ProfileMemoryStoreResolver.cs` |
+| 单实例锁 | `<state-dir>/.lock` 独占锁 | `ServeCommand` |
+| clipped 输出 | 检测并重试一次，仍异常则降级；不写 clipped 内容 | `AiChatResponder` |
 | 24h soak | 未执行 | — |
 | 真实双 guild/DM | 未执行（测试侧） | — |
 
-测试：`Natter.Framework.Tests` **236/236**；P3 232 基线未回归。
+测试：`Natter.Framework.Tests` **239/239**；P3 232 基线未回归。
 
 ## 10. 实施顺序
 
@@ -482,11 +486,11 @@ P4.4：验收
 
 ## 11. 后续路线
 
-- **P5：Task Worker / Tools**  
+- **P5：Task Worker / Tools**
   AgentTask、worker 隔离、工具白名单、checkpoint/watchdog。
-- **P6：检索增强**  
+- **P6：检索增强**
   embedding、hybrid retrieval、rerank、记忆冲突/衰减。
-- **P7：生态**  
+- **P7：生态**
   第三平台、Android、插件市场、out-of-process host。
 
 P4 不提前做 P5/P6/P7。
