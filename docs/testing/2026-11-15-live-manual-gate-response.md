@@ -10,7 +10,7 @@
 
 ## 1. 结论
 
-人工闸门**未通过**，产品验收继续阻塞。
+基线人工闸门**未通过**；BUG-003 已修复并通过单元/ingress/E2E 回归，产品验收仅等待真人 L5 复测。
 
 > **BUG-003**：guild 频道里真实 `@bot` 消息在 NLMP 层被静默丢弃。  
 > typing 出现后消失，无回复、无 DeepSeek 调用、无 warning/error 日志。  
@@ -241,7 +241,7 @@ NLMP message dropped by mention gate: source=discord:... conversation=... messag
 
 ## 6. 回归与验收闸门
 
-BUG-003 关闭前：
+BUG-003 关闭条件：
 
 - [x] `DiscordMentionGateTests` 从“复现缺陷”改为“验证修复”；
 - [x] 新增 mapper → orchestrator 串联测试；
