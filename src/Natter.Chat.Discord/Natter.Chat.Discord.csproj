@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Natter.Chat.Discord</RootNamespace>
+    <AssemblyName>Natter.Chat.Discord</AssemblyName>
+    <Description>Discord transport adapter for NLMP: DTO mapping, upstream and Discord.Net transport.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Discord.Net" />
+    <PackageReference Include="System.Reactive" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Natter.Chat/Natter.Chat.csproj" />
+    <ProjectReference Include="../Natter.Abstractions/Natter.Abstractions.csproj" />
+  </ItemGroup>
+
+</Project>

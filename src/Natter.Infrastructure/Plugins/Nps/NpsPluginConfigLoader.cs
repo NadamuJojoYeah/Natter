@@ -4,7 +4,7 @@ using Natter.Plugin.Abstractions;
 namespace Natter.Infrastructure.Plugins.Nps;
 
 /// <summary>Effective config plus validation result for one plugin directory.</summary>
-internal sealed record NpsConfigLoadResult(
+public sealed record NpsConfigLoadResult(
     JsonElement Raw,
     JsonElement Effective,
     bool Valid,
@@ -13,7 +13,7 @@ internal sealed record NpsConfigLoadResult(
     string? SchemaPath);
 
 /// <summary>Reads config.json/config.schema.json and validates the documented schema subset.</summary>
-internal static class NpsPluginConfigLoader
+public static class NpsPluginConfigLoader
 {
     public static NpsConfigLoadResult Load(PluginManifest manifest, string pluginDirectory, string? configDirectory = null)
     {

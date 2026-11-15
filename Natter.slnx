@@ -5,6 +5,7 @@
   <Project Path="src/Natter.Chat/Natter.Chat.csproj" />
   <Project Path="src/Natter.Plugin.Abstractions/Natter.Plugin.Abstractions.csproj" />
   <Project Path="src/Natter.Plugin.Store/Natter.Plugin.Store.csproj" />
+  <Project Path="src/Natter.Chat.Discord/Natter.Chat.Discord.csproj" />
   <Project Path="src/Natter.Chat.Satori/Natter.Chat.Satori.csproj" />
   <Project Path="src/Natter.Application/Natter.Application.csproj" />
   <Project Path="src/Natter.Infrastructure/Natter.Infrastructure.csproj" />
@@ -13,5 +14,6 @@
   <Project Path="src/Natter.Hosting.Android/Natter.Hosting.Android.csproj" />
   <Project Path="samples/Natter.Sample.Plugin.Greetings/Natter.Sample.Plugin.Greetings.csproj" />
   <Project Path="samples/Natter.Sample.Plugin.Metrics/Natter.Sample.Plugin.Metrics.csproj" />
+  <Project Path="samples/Natter.Sample.Plugin.Discord/Natter.Sample.Plugin.Discord.csproj" />
   <Project Path="tests/Natter.Framework.Tests/Natter.Framework.Tests.csproj" />
 </Solution>

@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["token", "selfId"],
+  "additionalProperties": false,
+  "properties": {
+    "token": {
+      "type": "string",
+      "pattern": "^\\$\\{secret:DISCORD_BOT_TOKEN\\}$",
+      "description": "Secret reference only; the bot token must come from IPluginSecrets."
+    },
+    "selfId": {
+      "type": "string",
+      "pattern": "^[0-9]+$",
+      "description": "Discord bot user id used to build Source before login."
+    },
+    "intents": {
+      "type": "array",
+      "items": {
+        "enum": ["Guilds", "GuildMessages", "DirectMessages", "MessageContent", "GuildMembers", "GuildPresences", "GuildMessageReactions"]
+      },
+      "uniqueItems": true
+    },
+    "guilds": { "type": "array", "items": { "type": "string", "pattern": "^[0-9]+$" }, "uniqueItems": true },
+    "channels": { "type": "array", "items": { "type": "string", "pattern": "^[0-9]+$" }, "uniqueItems": true },
+    "users": { "type": "array", "items": { "type": "string", "pattern": "^[0-9]+$" }, "uniqueItems": true },
+    "requireMention": { "type": "boolean" },
+    "messageCommands": { "type": "boolean" },
+    "slashCommands": { "type": "boolean" },
+    "ignoreBots": { "type": "boolean" },
+    "ignoreSelf": { "type": "boolean" },
+    "typing": { "type": "boolean" },
+    "maxMessageLength": { "type": "integer", "minimum": 1, "maximum": 2000 },
+    "interactionTtlSeconds": { "type": "integer", "minimum": 1, "maximum": 900 },
+    "readyTimeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 300 },
+    "devGuildId": { "type": "string", "pattern": "^[0-9]+$" }
+  }
+}

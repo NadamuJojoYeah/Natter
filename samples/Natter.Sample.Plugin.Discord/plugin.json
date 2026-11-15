@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "id": "natter.transport.discord",
+  "name": "Discord Transport",
+  "version": "0.1.0",
+  "kind": "transport",
+  "hostApi": ">=0.1.0 <1.0.0",
+  "entry": {
+    "assembly": "lib/Natter.Sample.Plugin.Discord.dll",
+    "type": "Natter.Sample.Plugin.Discord.DiscordPlugin"
+  },
+  "permissions": [
+    "network",
+    "secrets:DISCORD_BOT_TOKEN",
+    "chat.read",
+    "chat.send",
+    "chat.edit",
+    "chat.delete",
+    "chat.commands",
+    "chat.interactions",
+    "cli.commands"
+  ],
+  "secrets": [
+    { "name": "DISCORD_BOT_TOKEN", "required": true }
+  ],
+  "configSchema": "config.schema.json",
+  "contributions": [
+    { "type": "chat.upstream", "id": "discord" },
+    { "type": "cli.command", "id": "discord.status" }
+  ],
+  "platforms": ["linux", "windows", "macos", "android"]
+}
