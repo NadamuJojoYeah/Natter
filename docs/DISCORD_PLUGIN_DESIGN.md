@@ -605,7 +605,7 @@ new Capabilities
 - ✅ interaction token 缓存与 TTL；
 - ✅ `chat.commands` / `chat.interactions` 权限声明；
 - ✅ `Capabilities.SlashCommands` 由配置控制；
-- 待补：自动注册 `/ask` 等全局/guild 命令、按钮/Modal。
+- ✅ 配置驱动的 guild/global 命令注册（`commands` + `devGuildId`）；按钮/Modal 待补。
 
 ### Phase 3：富内容
 
@@ -630,7 +630,7 @@ new Capabilities
 - [x] NPS 自动调用 `ConnectAsync`，`discord status` 显示 connected（fake transport）；
 - [x] 消息/@mention/DM/Group DM/Thread 正确映射为 NLMP；
 - [x] `message.send`/`typing.start` 通过 fake transport 验证；
-- [x] `InteractionCreatedEvent` core 路由、transport defer/followup 已实现；自动注册 `/ask` 待补；
+- [x] `InteractionCreatedEvent` core 路由、transport defer/followup、配置驱动命令注册已实现；真实命令注册待手动验证；
 - [x] bot/self/allowlist/mention 过滤正确；
 - [x] `AllowedMentions.None` / 显式 user id 输入生效；
 - [x] 429/403/404 映射为 NLMP 错误；
@@ -680,11 +680,12 @@ new Capabilities
 - fake transport 覆盖 DM/Group/Guild/Thread、bot/self/allowlist/mention、空内容/附件、reply、分片、`AllowedMentions` 输入、slash defer/followup 语义、429/403/404、selfId 不匹配、NPS 自动 Connect/Disconnect；
 - `ChatOrchestrator` interaction 路由测试；
 - NPS 插件 manifest/config/schema 与 Discord 权限测试；
-- `DiscordSocketTransport` 编译通过；真实网关/真实 token 未在 CI 使用。
+- 示例插件经 NPS 加载、secret/config 校验、fake transport 自动 Connect/Disconnect、`discord status` 命令；
+- `DiscordSocketTransport` 编译通过；配置驱动 slash 命令注册已实现；真实网关/真实 token 未在 CI 使用。
 
 ### 18.3 未交付
 
-- 自动注册 `/ask` 等 application commands；
+- 按钮/Modal/Select；
 - 附件上传、按钮/Modal/Select、stream edit；
 - 真实 Discord guild 的手动集成矩阵（Message Content Intent、429、重连、权限错误）；
 - 多 bot/sharding、跨进程。
