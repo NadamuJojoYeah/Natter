@@ -144,10 +144,12 @@ for path, payload in (
 PY
 
 if [[ "$FOREGROUND" == "1" ]]; then
-  echo "== foreground host for ${SECONDS_TO_RUN}s =="
+  FG_LOG="$SERVE_DIR/natter-fg-$(date +%Y%m%d-%H%M%S).log"
+  echo "== foreground host for ${SECONDS_TO_RUN}s (log: $FG_LOG) =="
   echo "channel: $DISCORD_TEST_CHANNEL_ID  bot: $DISCORD_BOT_USER_ID  guild: $DISCORD_TEST_GUILD_ID"
-  exec dotnet "$CLI_DLL" --plugin-dir "$PLUGIN_ROOT" --verbose \
-    events watch --seconds "$SECONDS_TO_RUN"
+  dotnet "$CLI_DLL" --plugin-dir "$PLUGIN_ROOT" --verbose \
+    events watch --seconds "$SECONDS_TO_RUN" 2>&1 | tee -a "$FG_LOG"
+  exit 0
 fi
 
 stop_host >/dev/null 2>&1 || true

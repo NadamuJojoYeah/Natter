@@ -39,7 +39,7 @@ case "$LAYER" in
   deepseek) FILTER="FullyQualifiedName~DeepSeekLiveTests" ;;
   discord)  FILTER="FullyQualifiedName~DiscordProbeLiveTests|FullyQualifiedName~DiscordUpstreamLiveTests" ;;
   ingress)  FILTER="FullyQualifiedName~GatewayIngressLiveTests" ;;
-  e2e)      FILTER="FullyQualifiedName~OrchestrationLiveTests|FullyQualifiedName~FilePluginE2ELiveTests" ;;
+  e2e)      FILTER="FullyQualifiedName~OrchestrationLiveTests|FullyQualifiedName~FilePluginE2ELiveTests|FullyQualifiedName~RealInboundMentionLiveTests" ;;
   deploy)   FILTER="FullyQualifiedName~DeploymentCliLiveTests" ;;
   manual)
     export NATTER_LIVE_MANUAL=1

@@ -2,12 +2,13 @@ using System.Text.Json;
 using Microsoft.Extensions.AI;
 using Natter.Application.Chat;
 using Natter.Chat;
+using Natter.Feature.Ai;
 using Natter.Feature.Ai.DeepSeek;
 using Xunit;
 
 namespace Natter.Framework.Tests;
 
-public sealed class DeepSeekResponderTests
+public sealed class AiChatResponderTests
 {
     [Fact]
     public async Task Message_event_becomes_a_reply_with_history_and_reply_to()
@@ -188,7 +189,7 @@ public sealed class DeepSeekResponderTests
         Assert.Null(authCommand);
     }
 
-    private static (DeepSeekResponder Responder, FakeChatClient Chat, Source Source, TestClock Clock) CreateResponder(
+    private static (AiChatResponder Responder, FakeChatClient Chat, Source Source, TestClock Clock) CreateResponder(
         int maxHistoryMessages = 20)
     {
         var chat = new FakeChatClient();
@@ -197,9 +198,9 @@ public sealed class DeepSeekResponderTests
         return (Build(chat, maxHistoryMessages), chat, source, clock);
     }
 
-    private static DeepSeekResponder Build(FakeChatClient chat, int maxHistoryMessages)
+    private static AiChatResponder Build(FakeChatClient chat, int maxHistoryMessages)
     {
-        var options = new DeepSeekOptions
+        var options = new AiResponderOptions
         {
             SystemPrompt = "system",
             HistoryMaxMessages = maxHistoryMessages,
@@ -207,13 +208,12 @@ public sealed class DeepSeekResponderTests
             FallbackText = "AI is temporarily unavailable.",
         };
         var clock = new TestClock();
-        return new DeepSeekResponder(
+        return new AiChatResponder(
             chat,
             options,
-            new DeepSeekConversationStore(options),
-            new DeepSeekConversationGate(options),
+            new AiConversationStore(options),
+            new AiConversationGate(options),
             new ChatCommandFactory(clock),
-            new FakePluginLog(),
-            new DeepSeekMetrics());
+            new FakePluginLog());
     }
 }
