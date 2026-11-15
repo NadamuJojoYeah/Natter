@@ -56,6 +56,7 @@ public sealed class PluginProbe : IPluginProbe
                     .Select(dependency => dependency.Id)
                     .ToArray(),
                 Permissions: read.Manifest?.Permissions?.ToArray(),
+                Capabilities: read.Manifest?.Capabilities?.ToArray(),
                 Contributions: (read.Manifest?.Contributions ?? [])
                     .Select(contribution => new PluginContributionDescriptor(
                         contribution.Type,
@@ -85,6 +86,7 @@ public sealed class PluginProbe : IPluginProbe
             HostApi: manifest.HostApi,
             Dependencies: (manifest.DependsOn ?? []).Select(dependency => dependency.Id).ToArray(),
             Permissions: manifest.Permissions?.ToArray(),
+            Capabilities: manifest.Capabilities?.ToArray(),
             Contributions: (manifest.Contributions ?? [])
                 .Select(contribution => new PluginContributionDescriptor(
                     contribution.Type,

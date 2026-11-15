@@ -19,13 +19,14 @@ internal static class NpsPluginConfigLoader
     {
         var issues = new List<PluginConfigIssue>();
         var configPath = Path.Combine(pluginDirectory, "config.json");
+        var configExists = File.Exists(configPath);
         var schemaPath = manifest.ConfigSchema is null
             ? null
             : Path.GetFullPath(Path.Combine(pluginDirectory, manifest.ConfigSchema));
 
         JsonElement raw = JsonSerializer.SerializeToElement(new { });
 
-        if (File.Exists(configPath))
+        if (configExists)
         {
             try
             {
@@ -43,12 +44,12 @@ internal static class NpsPluginConfigLoader
         }
 
         if (schemaPath is null)
-            return new NpsConfigLoadResult(raw, raw, issues.Count == 0, issues, configPath, null);
+            return new NpsConfigLoadResult(raw, raw, issues.Count == 0, issues, configExists ? configPath : null, null);
 
         if (!File.Exists(schemaPath))
         {
             issues.Add(new PluginConfigIssue("$", "Declared config schema was not found.", "existing file", manifest.ConfigSchema));
-            return new NpsConfigLoadResult(raw, raw, false, issues, configPath, schemaPath);
+            return new NpsConfigLoadResult(raw, raw, false, issues, configExists ? configPath : null, schemaPath);
         }
 
         JsonElement schema;
@@ -64,12 +65,12 @@ internal static class NpsPluginConfigLoader
         catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
         {
             issues.Add(new PluginConfigIssue("$", "config schema could not be read.", "valid JSON schema", ex.Message));
-            return new NpsConfigLoadResult(raw, raw, false, issues, configPath, schemaPath);
+            return new NpsConfigLoadResult(raw, raw, false, issues, configExists ? configPath : null, schemaPath);
         }
 
         var effective = PluginConfigSchema.ApplyDefaults(schema, raw);
         issues.AddRange(PluginConfigSchema.Validate(schema, effective));
 
-        return new NpsConfigLoadResult(raw, effective, issues.Count == 0, issues, configPath, schemaPath);
+        return new NpsConfigLoadResult(raw, effective, issues.Count == 0, issues, configExists ? configPath : null, schemaPath);
     }
 }

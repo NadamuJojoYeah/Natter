@@ -175,7 +175,7 @@ internal sealed class NpsContributionRegistry : IContributionRegistry
         {
             if (!_granted.Contains(permission))
             {
-                throw new PluginContributionException(
+                throw new PluginPermissionException(
                     $"Plugin '{_pluginId}' lacks permission '{permission}' required by contribution '{type}'.");
             }
         }

@@ -31,6 +31,22 @@ internal sealed partial class NpsPluginRuntime
                     blockedBy));
             }
 
+            var known = new HashSet<string>(result.Select(node => node.Id), StringComparer.Ordinal);
+            foreach (var descriptor in _catalog.Plugins)
+            {
+                if (known.Contains(descriptor.Id))
+                    continue;
+
+                result.Add(new PluginGraphNode(
+                    descriptor.Id,
+                    descriptor.Version,
+                    descriptor.Kind ?? "invalid",
+                    descriptor.State,
+                    descriptor.Dependencies ?? [],
+                    [],
+                    []));
+            }
+
             return result;
         }
     }
@@ -167,12 +183,14 @@ internal sealed partial class NpsPluginRuntime
         }
 
         var read = PluginManifestReader.Read(descriptor.Directory);
-        if (!read.IsValid || read.Manifest is null)
+        if (!read.IsNps || !read.IsValid || read.Manifest is null)
         {
             return new PluginConfigValidationResult(
                 pluginId,
                 false,
-                read.Errors.Select(issue => new PluginConfigIssue(issue.Path, issue.Message)).ToArray());
+                read.Errors.Count > 0
+                    ? read.Errors.Select(issue => new PluginConfigIssue(issue.Path, issue.Message)).ToArray()
+                    : [new PluginConfigIssue("/", "Plugin is legacy; NPS config validation is not applicable.", "NPS manifest", "legacy plugin")]);
         }
 
         var loaded = NpsPluginConfigLoader.Load(read.Manifest, descriptor.Directory);

@@ -3,6 +3,7 @@ using Natter.Abstractions.Plugins;
 using Natter.Abstractions.Ports;
 using Natter.Chat;
 using Natter.Cli.Abstractions;
+using Natter.Application.Chat;
 using Natter.Cli.Core;
 using Natter.Infrastructure.Composition;
 using Natter.Plugin.Abstractions;
@@ -123,6 +124,236 @@ public sealed class NpsRuntimeTests
         await host.StopAsync();
         Assert.Equal(1, fake.DisconnectCalls);
         Assert.Empty(upstreams.Upstreams);
+    }
+
+    [Fact]
+    public async Task Chat_responder_and_event_subscriber_contributions_are_active()
+    {
+        var plugin = new ChatContributionPlugin();
+        var manifest = Manifest(
+            "natter.test.chat",
+            permissions: [PluginPermissions.ChatRead, PluginPermissions.ChatSend],
+            contributions:
+            [
+                new PluginContribution { Type = PluginContributionTypes.ChatResponder, Id = "test" },
+                new PluginContribution { Type = PluginContributionTypes.ChatEventSubscriber, Id = "audit" },
+            ]);
+
+        var builder = NatterApplicationBuilder.Create()
+            .AddNatterFramework()
+            .AddEmbeddedNpsPlugin(manifest, plugin);
+
+        await using var host = builder.Build();
+        await host.StartAsync();
+
+        var responders = host.Services.GetRequiredService<IChatResponderRegistry>();
+        Assert.Contains(responders.Registrations, registration => registration.Id == "test" && registration.Owner == "natter.test.chat");
+
+        var source = ChatTestData.Source();
+        var chatEvent = ChatTestData.CreatedEvent(source, ChatTestData.Message(source));
+        host.Services.GetRequiredService<IChatEventPublisher>().Publish(chatEvent);
+
+        Assert.Equal(1, TestSubscriber.Handled);
+
+        var composite = host.Services.GetRequiredService<IChatResponder>();
+        var command = await composite.RespondAsync(chatEvent);
+        Assert.NotNull(command);
+
+        await host.StopAsync();
+        Assert.DoesNotContain(responders.Registrations, registration => registration.Owner == "natter.test.chat");
+
+        var handledAfterStop = TestSubscriber.Handled;
+        host.Services.GetRequiredService<IChatEventPublisher>().Publish(chatEvent);
+        Assert.Equal(handledAfterStop, TestSubscriber.Handled);
+    }
+
+    [Fact]
+    public async Task Duplicate_contribution_ids_fail_the_later_plugin()
+    {
+        var first = new HelloPlugin();
+        var second = new HelloPlugin();
+
+        var firstManifest = Manifest(
+            "natter.test.dup.a",
+            permissions: [PluginPermissions.CliCommands],
+            contributions: [new PluginContribution { Type = PluginContributionTypes.CliCommand, Id = "nps.hello" }]);
+        var secondManifest = Manifest(
+            "natter.test.dup.b",
+            permissions: [PluginPermissions.CliCommands],
+            contributions: [new PluginContribution { Type = PluginContributionTypes.CliCommand, Id = "nps.hello" }]);
+
+        var builder = NatterApplicationBuilder.Create()
+            .AddNatterFramework()
+            .AddEmbeddedNpsPlugin(firstManifest, first)
+            .AddEmbeddedNpsPlugin(secondManifest, second);
+
+        await using var host = builder.Build();
+        await host.StartAsync();
+
+        var catalog = host.Services.GetRequiredService<IPluginCatalog>();
+        Assert.Equal(PluginState.Activated, catalog.Plugins.Single(plugin => plugin.Id == "natter.test.dup.a").State);
+        var failed = catalog.Plugins.Single(plugin => plugin.Id == "natter.test.dup.b");
+        Assert.Equal(PluginState.Failed, failed.State);
+        Assert.Equal("duplicate-contribution", failed.ErrorDetail!.Code);
+    }
+
+    [Fact]
+    public async Task Declared_contributions_must_be_registered_during_configure()
+    {
+        var plugin = new EmptyPlugin();
+        var manifest = Manifest(
+            "natter.test.missing",
+            permissions: [PluginPermissions.CliCommands],
+            contributions: [new PluginContribution { Type = PluginContributionTypes.CliCommand, Id = "missing.command" }]);
+
+        var builder = NatterApplicationBuilder.Create()
+            .AddNatterFramework()
+            .AddEmbeddedNpsPlugin(manifest, plugin);
+
+        await using var host = builder.Build();
+        await host.StartAsync();
+
+        var descriptor = Assert.Single(host.Services.GetRequiredService<IPluginCatalog>().Plugins);
+        Assert.Equal(PluginState.Failed, descriptor.State);
+        Assert.Equal("missing-contribution", descriptor.ErrorDetail!.Code);
+    }
+
+    [Fact]
+    public async Task Required_secret_is_resolved_only_with_permission()
+    {
+        var plugin = new SecretPlugin();
+        var manifest = Manifest(
+            "natter.test.secret.ok",
+            permissions: [PluginPermissions.Secret("NPS_TEST_TOKEN")],
+            contributions: [],
+            secrets: [new PluginSecret { Name = "NPS_TEST_TOKEN", Required = true }]);
+
+        var builder = NatterApplicationBuilder.Create()
+            .AddNatterFramework()
+            .ConfigurePlugins(options => options.SecretProvider = new InMemorySecretProvider(
+                [new KeyValuePair<string, string>("NPS_TEST_TOKEN", "supersecret")]))
+            .AddEmbeddedNpsPlugin(manifest, plugin);
+
+        await using var host = builder.Build();
+        await host.StartAsync();
+
+        var descriptor = Assert.Single(host.Services.GetRequiredService<IPluginCatalog>().Plugins);
+        Assert.Equal(PluginState.Activated, descriptor.State);
+        Assert.Equal("supersecret", plugin.Token);
+        Assert.DoesNotContain("supersecret", descriptor.Error ?? string.Empty);
+    }
+
+    [Fact]
+    public async Task Missing_entry_type_is_reported_as_a_load_error()
+    {
+        var directory = CreateTempPluginDirectoryFromSample("""
+            {
+              "schemaVersion": 1,
+              "id": "natter.test.missingtype",
+              "name": "Missing Type",
+              "version": "0.1.0",
+              "kind": "feature",
+              "hostApi": ">=0.1.0 <1.0.0",
+              "entry": { "assembly": "Natter.Sample.Plugin.Greetings.dll", "type": "Does.Not.Exist" },
+              "permissions": [],
+              "contributions": []
+            }
+            """);
+
+        try
+        {
+            var builder = NatterApplicationBuilder.Create()
+                .AddNatterFramework()
+                .AddPluginDirectory(directory);
+
+            await using var host = builder.Build();
+            await host.StartAsync();
+
+            var descriptor = Assert.Single(host.Services.GetRequiredService<IPluginCatalog>().Plugins);
+            Assert.Equal(PluginState.Failed, descriptor.State);
+            Assert.Equal("entry-type-missing", descriptor.ErrorDetail!.Code);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Disabled_plugin_is_reported_and_not_activated()
+    {
+        var plugin = new HelloPlugin();
+        var manifest = Manifest(
+            "natter.test.disabled",
+            permissions: [PluginPermissions.CliCommands],
+            contributions: [new PluginContribution { Type = PluginContributionTypes.CliCommand, Id = "nps.hello" }]);
+
+        var builder = NatterApplicationBuilder.Create()
+            .AddNatterFramework()
+            .ConfigurePlugins(options => options.DisabledPlugins.Add("natter.test.disabled"))
+            .AddEmbeddedNpsPlugin(manifest, plugin);
+
+        await using var host = builder.Build();
+        await host.StartAsync();
+
+        var descriptor = Assert.Single(host.Services.GetRequiredService<IPluginCatalog>().Plugins);
+        Assert.Equal(PluginState.Disabled, descriptor.State);
+        Assert.False(plugin.Activated);
+    }
+
+    [Fact]
+    public async Task Duplicate_plugin_ids_fail_both_descriptors()
+    {
+        var first = new HelloPlugin();
+        var second = new HelloPlugin();
+        var manifest = Manifest("natter.test.duplicate", permissions: [], contributions: []);
+
+        var builder = NatterApplicationBuilder.Create()
+            .AddNatterFramework()
+            .AddEmbeddedNpsPlugin(manifest, first)
+            .AddEmbeddedNpsPlugin(manifest, second);
+
+        await using var host = builder.Build();
+        await host.StartAsync();
+
+        var descriptors = host.Services.GetRequiredService<IPluginCatalog>().Plugins
+            .Where(plugin => plugin.Id == "natter.test.duplicate")
+            .ToList();
+
+        Assert.Equal(2, descriptors.Count);
+        Assert.All(descriptors, descriptor =>
+        {
+            Assert.Equal(PluginState.Failed, descriptor.State);
+            Assert.Equal("duplicate-plugin-id", descriptor.ErrorDetail!.Code);
+        });
+    }
+
+    [Fact]
+    public async Task Stop_order_is_the_reverse_of_activation_order()
+    {
+        OrderedPlugin.Events.Clear();
+        var first = new OrderedPlugin("first");
+        var second = new OrderedPlugin("second");
+
+        var firstManifest = Manifest("natter.test.order.first", permissions: [], contributions: []);
+        var secondManifest = Manifest(
+            "natter.test.order.second",
+            permissions: [],
+            contributions: [],
+            loadAfter: ["natter.test.order.first"]);
+
+        var builder = NatterApplicationBuilder.Create()
+            .AddNatterFramework()
+            .AddEmbeddedNpsPlugin(firstManifest, first)
+            .AddEmbeddedNpsPlugin(secondManifest, second);
+
+        await using var host = builder.Build();
+        await host.StartAsync();
+        await host.StopAsync();
+
+        Assert.Equal(
+            ["activate:first", "activate:second", "deactivate:second", "deactivate:first"],
+            OrderedPlugin.Events);
     }
 
     [Fact]
@@ -279,6 +510,87 @@ public sealed class NpsRuntimeTests
         }
     }
 
+    [Fact]
+    public async Task Legacy_manifest_still_loads_with_the_legacy_loader()
+    {
+        var directory = CreateTempPluginDirectoryFromSample(
+            """{ "id": "legacy.sample", "name": "Legacy Sample", "version": "0.1.0", "entryAssembly": "Natter.Sample.Plugin.Greetings.dll", "enabled": true, "capabilities": ["port:IGreetingPort"] }""");
+
+        try
+        {
+            var builder = NatterApplicationBuilder.Create()
+                .AddNatterFramework()
+                .AddPluginDirectory(directory);
+
+            await using var host = builder.Build();
+            await host.StartAsync();
+
+            var descriptor = Assert.Single(host.Services.GetRequiredService<IPluginCatalog>().Plugins);
+            Assert.Equal(PluginState.Loaded, descriptor.State);
+            Assert.Equal("legacy.sample", descriptor.Id);
+
+            var greeting = await host.Services.GetRequiredService<IGreetingPort>().GreetAsync("legacy");
+            Assert.Contains("greetings plugin adapter", greeting);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Nps_manifest_can_point_at_a_legacy_plugin_module()
+    {
+        var directory = CreateTempPluginDirectoryFromSample("""
+            {
+              "schemaVersion": 1,
+              "id": "natter.test.legacyadapter",
+              "name": "Legacy Adapter",
+              "version": "0.1.0",
+              "kind": "feature",
+              "hostApi": ">=0.1.0 <1.0.0",
+              "entry": {
+                "assembly": "Natter.Sample.Plugin.Greetings.dll",
+                "type": "Natter.Sample.Plugin.Greetings.GreetingsPlugin"
+              },
+              "permissions": [],
+              "contributions": []
+            }
+            """);
+
+        try
+        {
+            var builder = NatterApplicationBuilder.Create()
+                .AddNatterFramework()
+                .AddPluginDirectory(directory);
+
+            await using var host = builder.Build();
+            await host.StartAsync();
+
+            var descriptor = Assert.Single(host.Services.GetRequiredService<IPluginCatalog>().Plugins);
+            Assert.Equal(PluginState.Loaded, descriptor.State);
+            Assert.Equal("legacy", descriptor.Kind);
+
+            var greeting = await host.Services.GetRequiredService<IGreetingPort>().GreetAsync("legacy");
+            Assert.Contains("greetings plugin adapter", greeting);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    private static string CreateTempPluginDirectoryFromSample(string manifest)
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "natter-nps-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+
+        var assembly = Path.Combine(AppContext.BaseDirectory, "plugins", "greetings", "Natter.Sample.Plugin.Greetings.dll");
+        File.Copy(assembly, Path.Combine(directory, Path.GetFileName(assembly)));
+        File.WriteAllText(Path.Combine(directory, "plugin.json"), manifest);
+        return directory;
+    }
+
     private static string CreateTempPluginDirectory(string schema, string config)
     {
         var directory = Path.Combine(Path.GetTempPath(), "natter-nps-" + Guid.NewGuid().ToString("N"));
@@ -294,7 +606,8 @@ public sealed class NpsRuntimeTests
         PluginContribution[]? contributions = null,
         PluginDependency[]? dependsOn = null,
         PluginSecret[]? secrets = null,
-        string? configSchema = null)
+        string? configSchema = null,
+        string[]? loadAfter = null)
         => new()
         {
             SchemaVersion = 1,
@@ -313,6 +626,7 @@ public sealed class NpsRuntimeTests
             DependsOn = dependsOn?.ToList(),
             Secrets = secrets?.ToList(),
             ConfigSchema = configSchema,
+            LoadAfter = loadAfter?.ToList(),
         };
 
     public sealed class HelloPlugin : INatterPlugin
@@ -354,6 +668,97 @@ public sealed class NpsRuntimeTests
         {
             invocation.Console.Out.WriteLine("hello from nps");
             return ValueTask.FromResult(CliExitCodes.Success);
+        }
+    }
+
+    public sealed class EmptyPlugin : INatterPlugin
+    {
+        public ValueTask ConfigureAsync(IPluginContext context, CancellationToken cancellationToken = default)
+            => ValueTask.CompletedTask;
+
+        public ValueTask ActivateAsync(IPluginContext context, CancellationToken cancellationToken = default)
+            => ValueTask.CompletedTask;
+
+        public ValueTask DeactivateAsync(IPluginContext context, CancellationToken cancellationToken = default)
+            => ValueTask.CompletedTask;
+    }
+
+    public sealed class SecretPlugin : INatterPlugin
+    {
+        public string? Token { get; private set; }
+
+        public ValueTask ConfigureAsync(IPluginContext context, CancellationToken cancellationToken = default)
+        {
+            Token = context.Secrets.GetRequired("NPS_TEST_TOKEN");
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask ActivateAsync(IPluginContext context, CancellationToken cancellationToken = default)
+            => ValueTask.CompletedTask;
+
+        public ValueTask DeactivateAsync(IPluginContext context, CancellationToken cancellationToken = default)
+            => ValueTask.CompletedTask;
+    }
+
+    public sealed class OrderedPlugin(string name) : INatterPlugin
+    {
+        public static List<string> Events { get; } = [];
+
+        public ValueTask ConfigureAsync(IPluginContext context, CancellationToken cancellationToken = default)
+            => ValueTask.CompletedTask;
+
+        public ValueTask ActivateAsync(IPluginContext context, CancellationToken cancellationToken = default)
+        {
+            Events.Add("activate:" + name);
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask DeactivateAsync(IPluginContext context, CancellationToken cancellationToken = default)
+        {
+            Events.Add("deactivate:" + name);
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    public sealed class ChatContributionPlugin : INatterPlugin
+    {
+        public ValueTask ConfigureAsync(IPluginContext context, CancellationToken cancellationToken = default)
+        {
+            context.Services.Collection.AddSingleton<TestResponder>();
+            context.Services.Collection.AddSingleton<TestSubscriber>();
+            context.Contributions.AddChatResponder<TestResponder>("test");
+            context.Contributions.AddChatEventSubscriber<TestSubscriber>("audit");
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask ActivateAsync(IPluginContext context, CancellationToken cancellationToken = default)
+            => ValueTask.CompletedTask;
+
+        public ValueTask DeactivateAsync(IPluginContext context, CancellationToken cancellationToken = default)
+            => ValueTask.CompletedTask;
+    }
+
+    public sealed class TestResponder(ChatCommandFactory factory) : IChatResponder
+    {
+        public ValueTask<ChatCommand?> RespondAsync(ChatEvent chatEvent, CancellationToken cancellationToken = default)
+        {
+            var message = ((MessageCreatedEvent)chatEvent).Payload.Message;
+            return ValueTask.FromResult<ChatCommand?>(factory.Send(
+                chatEvent.Source,
+                message.Conversation,
+                new Content("responder reply"),
+                idempotencyKey: "responder:" + chatEvent.Id));
+        }
+    }
+
+    public sealed class TestSubscriber : IChatEventSubscriber
+    {
+        public static int Handled { get; set; }
+
+        public ValueTask HandleAsync(ChatEvent chatEvent, CancellationToken cancellationToken = default)
+        {
+            Handled++;
+            return ValueTask.CompletedTask;
         }
     }
 

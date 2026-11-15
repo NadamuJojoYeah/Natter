@@ -20,6 +20,16 @@ public sealed class NpsGraphTests
     }
 
     [Fact]
+    public void Load_before_is_respected()
+    {
+        var result = Build(
+            Node("natter.a"),
+            Node("natter.b", loadBefore: ["natter.a"]));
+
+        Assert.Equal(["natter.b", "natter.a"], result.Order);
+    }
+
+    [Fact]
     public void Missing_dependency_blocks_only_the_dependent()
     {
         var result = Build(

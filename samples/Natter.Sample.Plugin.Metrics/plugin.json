@@ -1,14 +1,20 @@
 {
-  "id": "metrics",
+  "schemaVersion": 1,
+  "id": "natter.sample.metrics",
   "name": "Event Metrics Plugin",
   "version": "0.1.0",
-  "description": "Sample plugin: consumes the Rx domain event stream and exposes event counters through a CLI command.",
+  "kind": "feature",
+  "hostApi": ">=0.1.0 <1.0.0",
+  "entry": {
+    "assembly": "Natter.Sample.Plugin.Metrics.dll",
+    "type": "Natter.Sample.Plugin.Metrics.MetricsNpsPlugin"
+  },
+  "description": "Sample feature plugin: consumes the domain event stream and exposes event counters through a CLI command.",
   "author": "Natter samples",
-  "entryAssembly": "Natter.Sample.Plugin.Metrics.dll",
-  "enabled": true,
-  "capabilities": [
-    "events:subscriber",
-    "cli:metrics",
-    "lifecycle"
-  ]
+  "license": "MIT",
+  "permissions": ["cli.commands"],
+  "contributions": [
+    { "type": "cli.command", "id": "metrics" }
+  ],
+  "capabilities": ["events:subscriber", "cli:metrics"]
 }

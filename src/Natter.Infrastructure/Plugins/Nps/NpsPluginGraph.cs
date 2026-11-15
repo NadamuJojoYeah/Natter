@@ -268,6 +268,28 @@ internal static class NpsPluginGraph
             }
 
             order = [];
+
+            // Nodes depending on a cycle member are blocked too.
+            propagate = true;
+            while (propagate)
+            {
+                propagate = false;
+                foreach (var node in unique.Values.Where(node => !errors.ContainsKey(node.Id)))
+                {
+                    var dependency = (node.Dependencies ?? [])
+                        .FirstOrDefault(item => errors.ContainsKey(item.Id));
+                    if (dependency is null)
+                        continue;
+
+                    errors[node.Id] = new PluginErrorDescriptor(
+                        "dependency",
+                        "dependency-blocked",
+                        $"Required plugin '{dependency.Id}' is part of an invalid dependency graph.",
+                        new Dictionary<string, string>(StringComparer.Ordinal) { ["dependency"] = dependency.Id });
+                    blockedBy[node.Id] = [dependency.Id];
+                    propagate = true;
+                }
+            }
         }
 
         return new NpsGraphResult

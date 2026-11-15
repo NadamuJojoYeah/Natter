@@ -305,6 +305,9 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
             if (!LoadConfig(candidate))
                 return;
 
+            candidate.SetState(PluginState.Validated);
+            _catalog.UpdateDescriptor(candidate.Id, _ => candidate.Descriptor);
+
             candidate.Log = new NpsPluginLog(candidate.Id);
             candidate.Dependencies = new NpsPluginDependencies(
                 GetPluginState,
@@ -313,8 +316,11 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
             if (!LoadEntry(candidate, configureLegacyPlugin))
                 return;
 
-            if (candidate.State is PluginState.Loaded)
+            if (candidate.IsLegacyEntry)
                 return;
+
+            candidate.SetState(PluginState.Loaded);
+            _catalog.UpdateDescriptor(candidate.Id, _ => candidate.Descriptor);
 
             candidate.Contributions = new NpsContributionRegistry(
                 candidate.Id,
@@ -349,6 +355,10 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
             candidate.Warnings.AddRange(candidate.Contributions.Warnings);
             candidate.SetState(PluginState.Configured);
             _catalog.UpdateDescriptor(candidate.Id, _ => candidate.Descriptor);
+        }
+        catch (PluginPermissionException ex)
+        {
+            SetFailure(candidate, "permission", "permission-denied", ex.Message);
         }
         catch (Exception ex)
         {
@@ -437,7 +447,11 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
     private bool LoadEntry(NpsPluginCandidate candidate, Action<IPluginModule, PluginDescriptor> configureLegacyPlugin)
     {
         if (candidate.Plugin is not null)
+        {
+            candidate.SetState(PluginState.Loaded);
+            _catalog.UpdateDescriptor(candidate.Id, _ => candidate.Descriptor);
             return true;
+        }
 
         if (!File.Exists(candidate.AssemblyPath))
         {
@@ -482,6 +496,8 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
                 }
 
                 candidate.Plugin = (INatterPlugin)Activator.CreateInstance(type)!;
+                candidate.SetState(PluginState.Loaded);
+                _catalog.UpdateDescriptor(candidate.Id, _ => candidate.Descriptor);
                 return true;
             }
 
@@ -496,6 +512,7 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
 
                 configureLegacyPlugin(module, candidate.Descriptor);
                 candidate.State = PluginState.Loaded;
+                candidate.IsLegacyEntry = true;
                 candidate.Warnings.Add("NPS manifest points at a legacy IPluginModule; NPS contributions are not used.");
                 _catalog.UpdateDescriptor(candidate.Id, _ => candidate.Descriptor);
                 return true;
@@ -709,6 +726,7 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
         {
         }
 
+        await DisposePluginInstanceAsync(candidate).ConfigureAwait(false);
         await candidate.Lifetime.StopAsync().ConfigureAwait(false);
 
         if (candidate.Provider is { } provider)
@@ -763,6 +781,8 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
         catch
         {
         }
+
+        await DisposePluginInstanceAsync(candidate).ConfigureAwait(false);
 
         if (candidate.Provider is { } provider)
         {
@@ -898,6 +918,7 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
         var error = new PluginErrorDescriptor(phase, code, message, detail);
         candidate.SetError(error);
         _catalog.UpdateDescriptor(candidate.Id, _ => candidate.Descriptor);
+        candidate.DisposeLoadContext();
 
         if (exception is not null)
             candidate.Log?.Error(exception, "Plugin {PluginId} failed: {ErrorMessage}", candidate.Id, message);
@@ -928,6 +949,26 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
     {
         lock (_gate)
             return _activeContributions.TryGetValue(candidate.Id, out var active) ? active : null;
+    }
+
+    private static async ValueTask DisposePluginInstanceAsync(NpsPluginCandidate candidate)
+    {
+        if (candidate.PluginDisposed || candidate.Plugin is null)
+            return;
+
+        candidate.PluginDisposed = true;
+
+        try
+        {
+            if (candidate.Plugin is IAsyncDisposable asyncDisposable)
+                await asyncDisposable.DisposeAsync().ConfigureAwait(false);
+            else if (candidate.Plugin is IDisposable disposable)
+                disposable.Dispose();
+        }
+        catch
+        {
+            // Disposal is best-effort.
+        }
     }
 
     private static void RunSynchronously(ValueTask task)

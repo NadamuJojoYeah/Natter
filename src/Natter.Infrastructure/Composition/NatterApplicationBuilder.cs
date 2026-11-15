@@ -99,11 +99,6 @@ public sealed class NatterApplicationBuilder
         return this;
     }
 
-    public NatterApplicationBuilder AddEmbeddedNpsPlugin<TPlugin>()
-        where TPlugin : INatterPlugin, new()
-        => throw new NotSupportedException(
-            "Embedded NPS plugins need an explicit manifest: AddEmbeddedNpsPlugin(manifest, plugin).");
-
     /// <summary>Registers a legacy plugin compiled into the host instead of loaded from disk.</summary>
     public NatterApplicationBuilder AddEmbeddedPlugin<TPlugin>()
         where TPlugin : IPluginModule, new()
@@ -291,7 +286,7 @@ public sealed class NatterApplicationBuilder
                 var accepted = _pluginCatalog.Add(loaded);
                 result.LegacyPlugins.AddRange(accepted);
                 result.LegacyDescriptors.AddRange(accepted.Select(plugin => plugin.Descriptor));
-                result.Failures.AddRange(loaded.Failures);
+                // Legacy loader failures are already registered through PluginCatalog.Add.
             }
         }
 

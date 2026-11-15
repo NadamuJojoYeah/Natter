@@ -153,6 +153,15 @@ public sealed class PluginContributionException : Exception
     }
 }
 
+/// <summary>Raised when a plugin lacks a permission required by a contribution.</summary>
+public sealed class PluginPermissionException : Exception
+{
+    public PluginPermissionException(string message)
+        : base(message)
+    {
+    }
+}
+
 /// <summary>Raised when a required secret is missing or access is denied.</summary>
 public sealed class PluginSecretException : Exception
 {

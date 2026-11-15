@@ -54,6 +54,10 @@ internal sealed class NpsPluginCandidate
 
     public List<string> Warnings { get; } = [];
 
+    public bool PluginDisposed { get; set; }
+
+    public bool IsLegacyEntry { get; set; }
+
     public PluginDescriptor Descriptor { get; set; } = null!;
 
     public string Id => Manifest.Id;
@@ -71,7 +75,7 @@ internal sealed class NpsPluginCandidate
             ? assembly
             : Path.GetFullPath(Path.Combine(directory, assembly));
 
-        return new NpsPluginCandidate
+        var candidate = new NpsPluginCandidate
         {
             Manifest = manifest,
             Directory = directory,
@@ -80,6 +84,9 @@ internal sealed class NpsPluginCandidate
             Trust = trust,
             ReadResult = readResult,
         };
+
+        candidate.Warnings.AddRange(readResult.Warnings.Select(warning => $"{warning.Path}: {warning.Message}"));
+        return candidate;
     }
 
     public static NpsPluginCandidate FromEmbedded(

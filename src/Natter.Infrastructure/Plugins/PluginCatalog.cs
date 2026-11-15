@@ -56,10 +56,11 @@ public sealed class PluginCatalog : IPluginCatalog, IDisposable
 
         lock (_gate)
         {
-            var index = _descriptors.FindIndex(existing =>
-                string.Equals(existing.Id, pluginId, StringComparison.OrdinalIgnoreCase));
-            if (index >= 0)
-                _descriptors[index] = update(_descriptors[index]);
+            for (var index = 0; index < _descriptors.Count; index++)
+            {
+                if (string.Equals(_descriptors[index].Id, pluginId, StringComparison.OrdinalIgnoreCase))
+                    _descriptors[index] = update(_descriptors[index]);
+            }
         }
     }
 
