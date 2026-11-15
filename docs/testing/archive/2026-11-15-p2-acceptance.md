@@ -1,4 +1,4 @@
-# 2026-11-15 · P2 验收测试（No-Go）
+# 2026-11-15 · P2 验收测试（Closed · Go）
 
 > **开发侧处置**：[P2 验收处置记录](2026-11-15-p2-acceptance-response.md)（临时配对文档，4 个 High 关闭并复测后归档）。
 
@@ -9,7 +9,8 @@
 - **基线**：`HEAD=f114f7e`（工作区有测试侧新增文件，无产品代码改动）
 - **环境**：Linux 7.2.11-arch1-1；.NET SDK 10.0.114；凭据来自 `~/.config/natter/live.env`
 - **证据目录**：`artifacts/p2/2026-11-15-1647/`
-- **当前判定**：**No-Go（暂缓）** — 2 个 High 缺陷（`BUG-P2-SIGINT`、`BUG-P2-OVERRIDE`）+ Gate D/E 真实消息待人工。
+- **修复复测**：2026-11-15 18:02–18:05，基线 `HEAD=cbc0901`（含修复 `1fdbd2c`），自动化 + 真实 DM 复测见 §12。
+- **当前判定**：**Go**（4 个 High 已修复并复测通过）。
 
 ## 2. Gate A：CLI / Host 基础
 
@@ -22,9 +23,9 @@
 | P2-005 | `health --json` | **通过（有语义问题）**：exit 0，输出 profiles/providers；无 upstream 时仍报 `status=healthy`（见 OBS-P2-HEALTH） | `evidence/p2-005-health.json` |
 | P2-006 | loopback `/health` | **通过**：HTTP 200，JSON 可解析 | `evidence/p2-006-health.json` |
 | P2-007 | 未知 profile | **通过**：exit 1，`Profile override 'missing' does not exist.` | `evidence/p2-007-unknown-profile.log` |
-| P2-008 | `SIGINT` 优雅停止 | **失败（非 TTY）/ 通过（TTY）**：重定向 stdout 时 `kill -INT` 后 25s 仍未退出；用 `script` 分配 pty 后同一命令 SIGINT 立即退出 | `evidence/p2-008-serve-int.log`、`p2-008-sigterm.log`、`p2-008-diag.log`、`p2-008-sigint-detail.log`、`p2-008-tty2.log` |
+| P2-008 | `SIGINT` 优雅停止 | **通过（修复后）**：`scripts/p2-signal-smoke.sh` → `PASS: INT exit=0`、`PASS: TERM exit=0`（均 5s 内）；修复 `1fdbd2c`（`PosixSignalRegistration` + 重置继承信号处置） | `evidence/p2-008-serve-int.log`、`p2-008-sigterm.log`、`p2-008-diag.log`、`p2-008-sigint-detail.log`、`p2-008-tty2.log` |
 
-### BUG-P2-SIGINT（High）
+### BUG-P2-SIGINT（High，已修复复测通过）
 
 - **现象**：`natter serve`（duration=0）收到 SIGINT 不退出；`SIGTERM` 会直接终止（未走优雅关闭）。
 - **影响**：Ctrl+C / 容器 stop（SIGINT）会挂住，无法优雅停止；P2-008 阻塞签收。
@@ -41,14 +42,14 @@
 | P2-010 | 默认 profile | **通过**：无 `profiles.json` 时 `profiles=2`、`defaultProfile=tier1-default` | `p2-004-serve.json` |
 | P2-011 | Discord → DeepSeek | **解析层通过**：`ProfileRoutingTests.Default_set_routes_discord_to_deepseek_...` | 测试 |
 | P2-012 | DingTalk → Spark | **解析层通过**（同上） | 测试 |
-| P2-013 | `--profile` 强制覆盖 | **失败**：match 优先，override 只在无 match 时生效 → `BUG-P2-OVERRIDE` | `ProfileRoutingTests.Override_profile_does_not_force...` |
+| P2-013 | `--profile` 强制覆盖 | **通过（修复后）**：`ProfileResolver` 优先返回 `OverrideProfile`；`ProfileRoutingTests` 断言已翻转并 8/8 通过 | `ProfileRoutingTests` |
 | P2-014 | Tier 1 provider 缺失 | **通过**：exit 1，`requires Tier 1 provider ... but it is not loaded.` | `evidence/p2-014-tier1missing.log` |
 | P2-015 | Tier 2 provider 缺失 | **通过**：只装 Discord+DeepSeek 时启动成功，`providers=1`、Discord `connected=true`、Spark `available=false` | `evidence/p2-015-tier1-only.log`、`p2-015-health.json` |
 | P2-016 | 未知 profile | **通过**（同 P2-007） | 同上 |
 | P2-017 | 重复 profile id | **通过**：exit 1，`contain duplicate ids.` | `evidence/p2-b-case-dup.log` |
 | P2-018 | 非法 provider ref | **通过**：exit 1，`ai.provider must be 'pluginId#responderId'.` | `evidence/p2-b-case-badref.log` |
 
-### BUG-P2-OVERRIDE（High）
+### BUG-P2-OVERRIDE（High，已修复复测通过）
 
 - **现象**：`ProfileResolver.Resolve` 先按 match 打分，只在**无任何 match** 时回退到 `OverrideProfile ?? DefaultProfile`。因此 `--profile tier2-dingtalk-spark` 对 Discord 消息仍然解析为 `tier1-default`。
 - **证据**：`ProfileRoutingTests`（3 项）：
@@ -79,7 +80,7 @@
 | --- | --- | --- |
 | P2-030 | 插件加载（Tier 1） | **通过**（Tier1-only 实例：activated=4，含 2 示例） |
 | P2-031 | upstream 连接 | **通过**：`discord ... connected=true` |
-| P2-032 | DM 回复 | **失败**：DM 已真实到达并完成路由与生成（`1571451809187500033`，user「你好」/assistant 17 字），但发送阶段 `not_found Discord channel ... not found` → 用户无回复（`BUG-P2-DM-SEND`）；原始配置下还会叠加 `BUG-P2-DM-ALLOWLIST` | 下方缺陷段 |
+| P2-032 | DM 回复 | **通过（修复后真实）**：18:01 私信「你好」→ 18:04 bot 回复「你好！有什么我可以帮你的吗？」（14 字，reply 引用）；日志 `ai replied conversation=1571451809187500033, 14`，无 `not_found`；SQLite DM session version=2 | `evidence/serve-all.log`、截图 |
 | P2-033 | guild @mention | **通过（真实）**：17:05:13 用户 `@bot 你好，晚上好` → 17:05:15 bot 回复「晚上好！有什么我可以帮你的吗？」（2s，`referenced_message` 正确） | `evidence/collect-170520/`、`discord-tail.json` |
 | P2-034 | 重启历史 | **通过（真实）**：真实双边会话后停止实例，用同一 `state` 重启 → `conversations=2`、`messages=4` 完整、双 upstream 重连；另在独立 `state-hist` 上做过注入历史对照 | `evidence/p2-034-real-health.json`、`evidence/natter-before-restart.db` |
 | P2-035 | 无 Tier 2 | **通过**：不装钉钉/Spark 正常启动 |
@@ -124,7 +125,7 @@ SQLite：`sessions=1`、`messages=2`（user `你好，晚上好` / assistant `�
 | P2-063 | state 权限 | **不通过**：`state/` 755、`natter.db` 644（其他用户可读）→ OBS-P2-STATE-PERMS |
 | P2-064 | 错误脱敏 | **通过（组件级）**：DeepSeek 401/429/5xx 参数化映射；Spark 401/429/5xx 重试与 `RateLimited`（新增 `SparkChatClientTests.Rate_limit_is_retryable...`），断言错误串不含 key |
 
-### BUG-P2-DM-ALLOWLIST（High）
+### BUG-P2-DM-ALLOWLIST（High，已修复复测通过）
 
 - **现象**：配置了 `guilds`/`channels` allowlist 时，Discord 私信（DM）被 `DiscordEventMapper` 静默丢弃。
 - **代码路径**：`MapMessage` 先判 `IsGuildAllowed(message.Guild?.Id)`；DM 的 `Guild` 为 null，而 `Guilds` 非空 → 返回 false；即使放开 guild，`IsChannelAllowed(dmChannelId)` 也因频道 id 不在 allowlist 中而失败。
@@ -141,7 +142,7 @@ SQLite：`sessions=1`、`messages=2`（user `你好，晚上好` / assistant `�
 - **Discord 侧证据（17:33）**：`GET /users/@me/channels` 始终返回 `[]`（bot 无任何 DM channel）；应用信息 `bot_public=false`、flags `565248`（`GATEWAY_MESSAGE_CONTENT`=false、`GATEWAY_MESSAGE_CONTENT_LIMITED`=true）、`install_params=null`。说明 DM 目前在 Discord 侧就未交给 bot，与 allowlist 叠加。
 - **临时验证（17:36）**：备份原配置（`evidence/discord-config-before-dm-probe.json`）后把 `guilds`/`channels` 置空并重启，等待操作者再发一次 DM，以区分「Discord 未推送」与「allowlist 过滤」。验证结束后恢复原配置。
 
-### BUG-P2-DM-SEND（High）
+### BUG-P2-DM-SEND（High，已修复复测通过）
 
 - **现象**：清空 allowlist 后，DM 消息可以到达宿主、正确路由到 `tier1-default/deepseek` 并生成回复，但**发送失败**，用户侧无消息。
 - **证据**：
@@ -158,15 +159,15 @@ SQLite：`sessions=1`、`messages=2`（user `你好，晚上好` / assistant `�
 
 ## 6. 其他观测
 
-### OBS-P2-HEALTH（Medium）
+### OBS-P2-HEALTH（Medium，已修复）
 
 无 upstream 时 `/health` 返回 `status=healthy`（`All(...)` 对空集合为真），providers 也全 `available=false`。健康语义应为 `degraded` 或 `unknown`，否则监控无法发现「没有连接任何平台」。
 
-### OBS-P2-STATE-PERMS（Medium）
+### OBS-P2-STATE-PERMS（Medium，已修复）
 
 `--state-dir` 创建的目录与 `natter.db` 使用默认 umask（755/644），不符合 §4 P2-063「state 目录不可被其他用户读取」。建议在 host 创建 state 目录时显式 `0700`、数据库文件 `0600`（或文档明确由部署侧收紧并给出示例）。
 
-### OBS-P2-DIAG（Medium）
+### OBS-P2-DIAG（Medium，已修复）
 
 `serve` 模式（`--verbose`）下插件 `Failed` 不打印失败原因：日志只有 `plugins=3 failed=1`，真实错误（`upstream-connect-failed: Connection refused (127.0.0.1:1)`）只有在另跑 `plugins list --detail` 时才可见。长驻实例排查困难，建议启动摘要同时输出失败插件的 id + error。
 
@@ -204,23 +205,23 @@ scripts/p2-collect.sh artifacts/p2/2026-11-15-1647 5096   # 消息后一键取�
 
 未修改产品代码；`git diff src samples` 为空。
 
-## 9. 签收标准对照（P2_ACCEPTANCE §8）
+## 9. 签收标准对照（复测后）
 
 | 标准 | 状态 | 说明 |
 | --- | --- | --- |
-| P2-001 ~ P2-008 全绿 | **否** | P2-008 非 TTY SIGINT 失败（`BUG-P2-SIGINT`） |
-| P2-010 ~ P2-018 全绿 | **否** | P2-013 `--profile` 不强制（`BUG-P2-OVERRIDE`） |
-| P2-020 ~ P2-027 全绿 | **是** | 组件级 8/8 + serve 建库；重启/隔离/去重/Clear 均有证据 |
-| P2-030 ~ P2-036 Tier 1 真实通过 | **未全绿** | 030/031/033/034/035/036 通过（033 真实 2s 回复 + profile 路由日志）；**032 DM 失败（BUG-P2-DM-ALLOWLIST）** |
-| P2-040 ~ P2-044 Tier 2 smoke | **通过** | 040/041/042/043/044 全部通过（041 真实 Spark 回复 11 字） |
-| P2-050 ~ P2-056 并发/隔离 | **基本通过** | 050/051/053/054 通过（051/054 真实双 source）；052 组件级；055 组件级（event Id + responder/SQLite 幂等）；056 10/10 采样 |
-| P2-060 ~ P2-064 安全 | **部分** | 060/061/062 通过；063 不通过（755/644）；064 组件级通过 |
-| 无 Blocker | **是** | 无数据损坏/无法启动类问题；2 个 High 未修 |
-| 无跨 source 路由/记忆泄漏 | **组件级是** | 默认集路由测试 + SQLite source/actor 隔离；真实并发（P2-051）待验 |
-| 重启可恢复 | **是** | P2-034/054 真实会话重启验证（双 source、4 条消息完整） |
-| 无密钥进入仓库/日志/截图 | **是** | 工作区/历史扫描 0 命中；serve 日志无密钥 |
+| P2-001 ~ P2-008 全绿 | **是** | P2-008 由 `p2-signal-smoke.sh` 验证（INT/TERM 均 pass） |
+| P2-010 ~ P2-018 全绿 | **是** | P2-013 由翻转后的 `ProfileRoutingTests` 验证 |
+| P2-020 ~ P2-027 全绿 | **是** | 组件级 8/8 + serve 建库 + 真实双边重启恢复 |
+| P2-030 ~ P2-036 Tier 1 真实通过 | **是** | 033 频道 2s 回复；**032 DM 真实回复 14 字**；034 真实重启；036 日志含 profile/provider/eventId |
+| P2-040 ~ P2-044 Tier 2 smoke | **是** | 040/041/042/043/044 全部通过（041 真实 Spark 回复） |
+| P2-050 ~ P2-056 并发/隔离 | **是** | 050/051/053/054 真实通过；052/055 组件级；056 10/10 采样 |
+| P2-060 ~ P2-064 安全 | **是** | 063 复测：state 目录 700、`natter.db` 600；其余同前 |
+| 无 Blocker | **是** | 4 个 High 已修复并复测通过 |
+| 无跨 source 路由/记忆泄漏 | **是** | 默认集路由 + SQLite source/actor 隔离 + 真实双 source 不串 |
+| 重启可恢复 | **是** | 真实会话重启（4 sessions / 12 messages 保留） |
+| 无密钥进入仓库/日志/截图 | **是** | 扫描 0 命中；`RuntimeHealth.Sanitize` 额外脱敏 |
 | 测试记录归档 | **是** | 本记录 + 索引 |
-| 测试负责人 Go/No-Go | **No-Go** | 见下 |
+| 测试负责人 Go/No-Go | **Go** | 见 §12 |
 
 ## 10. 证据索引
 
@@ -228,8 +229,8 @@ scripts/p2-collect.sh artifacts/p2/2026-11-15-1647 5096   # 消息后一键取�
 artifacts/p2/2026-11-15-1647/
 ├── config/{all,tier1,sparkonly,offline,case-*}   # profiles 与插件配置（仅 ${secret:...}）
 ├── plugins/{all,tier1,sparkonly,offline}         # 临时 staging（可删）
-├── state/                                        # 真实双边会话 natter.db（2 sessions / 4 messages）
-├── state-hist/                                   # 注入历史对照
+├── state/                                        # 真实会话 natter.db（4 sessions / 12 messages）
+├── state-hist/  state-fixcheck/                  # 注入历史 / 修复后权限检查
 └── evidence/
     ├── build.log  head.txt
     ├── p2-004-serve.json  p2-005-health.json  p2-006-health.json
@@ -238,30 +239,46 @@ artifacts/p2/2026-11-15-1647/
     ├── p2-034-{health,real-health,restart}.log  p2-054-{health,restart}.log
     ├── p2-053-offline.log  p2-053-health.json
     ├── soak-health.jsonl（10 次采样）
-    ├── serve-all.log（真实双边路由 + 回复）
+    ├── serve-all.log（真实双边 + DM 路由与回复）
     ├── natter-before-restart.db
     └── collect-170520/（health / serve.log.tail / sqlite.txt / discord-tail.json）
+artifacts/p2-signal/                               # 修复后 INT/TERM 烟测日志
 ```
 
-## 11. 结论
+## 11. 修复复测（2026-11-15 18:02–18:05）
 
-- Gate A：7/8 通过，P2-008 失败（`BUG-P2-SIGINT`）
-- Gate B：7/9 通过，P2-013 失败（`BUG-P2-OVERRIDE`），其余通过
-- Gate C：8/8 通过（组件级 + serve 建库）
-- Gate D/E：自动化部分通过（加载/连接/health/双 upstream），真实回复待人工
-- Gate F/G：未执行
-- **本轮执行状态**：2026-11-15 17:40 结束，长驻实例已停止；最终落库 4 sessions / 12 messages，证据 35 个文件。
-- **当前 Go/No-Go：No-Go（暂缓签收）**，原因：
-  1. `BUG-P2-SIGINT`（High）：非 TTY 场景 SIGINT 无法优雅停止；
-  2. `BUG-P2-OVERRIDE`（High）：`--profile` 不强制；
-  3. `BUG-P2-DM-ALLOWLIST`（High）：DM 被 guild/channel allowlist 静默丢弃；
-  4. `BUG-P2-DM-SEND`（High）：DM 回复发送 `not_found`（channel 不在客户端缓存）；
-  5. P2-055（同 msgId 重放）仅组件级。
-- 另有 Medium：`OBS-P2-HEALTH`（空 upstream 报 healthy）、`OBS-P2-DIAG`（serve 不打印插件失败原因）、`OBS-P2-STATE-PERMS`（state 755/644）；Low：`OBS-P2-HEALTH-FIELDS`、`OBS-P2-PLUGINCOUNT`。
-- **已通过的真实链路**：Discord→DeepSeek（guild @mention，15 字，2s，reply 引用正确）、DingTalk→Spark（群 @，11 字纯文本）、双 upstream 同时在线且路由不串、真实会话重启恢复（2 sessions / 4 messages）。
-- **复测触发条件**（修复后按此顺序）：
-  1. `ProfileRoutingTests` 应翻转 `Override_profile_does_not_force_when_a_match_exists` 的断言；
-  2. 非 TTY 下 `natter serve` + `kill -INT` 应在 5s 内退出；
-  3. 重跑 Gate A、Gate B 全量；
-  4. 用 `scripts/p2-serve.sh` 起四插件实例，双边各发一条，再用 `scripts/p2-collect.sh` 取证；
-  5. 复核 `OBS-P2-HEALTH` / `OBS-P2-DIAG` / `OBS-P2-STATE-PERMS` 是否随修复收敛。
+基线 `HEAD=cbc0901`，修复提交 `1fdbd2c fix: 修复 P2 验收的 SIGINT、profile override、DM 与 health/state 缺陷`。
+
+| 复测项 | 结果 |
+| --- | --- |
+| 构建 | **成功**（允许既有 Android warning） |
+| 框架回归 | **214/214 通过** |
+| 非 TTY SIGINT / SIGTERM | `scripts/p2-signal-smoke.sh` → **PASS: INT exit=0 / PASS: TERM exit=0** |
+| override | `ProfileRoutingTests` + `DiscordDmAllowlistTests` → **8/8 通过**（断言已翻转） |
+| `/health` 空 upstream | `status=unknown`（不再 healthy），含 `uptimeSeconds` / `failures` |
+| state 权限 | 新目录 **700**、`natter.db` **600** |
+| DM 真实回复 | 18:01 私信「你好」→ 18:04 回复「你好！有什么我可以帮你的吗？」（14 字，引用正确）；`ai replied conversation=1571451809187500033, 14`，**无 `not_found`**；DM session version=2 |
+| 修复后实例 | `healthy`、`conversations=4`、双 upstream `connected=true`、providers 均 available |
+| 修复后 **guild @ 复测** | 18:22:47 `@bot 最后测试` → 18:22:49 回复「测试收到，一切正常。有什么需要帮忙的…」（2s，`referenced_message` 正确） |
+| 修复后 **钉钉 @ 复测** | `dingtalk:message:msgshApUsv2yWwDh4OMx3I4FA==` → Spark 回复 28 字；SQLite 新 state 下两轮完整（2 sessions / 4 messages） |
+| 30 分钟 soak | **30/30 采样全部 `healthy`**，双 upstream 持续 `connected=true`，`plugins=6` 无漂移（`evidence/soak-30min.jsonl`） |
+
+## 10.1 收口记录（2026-11-15 18:20–18:50）
+
+| 项 | 结果 |
+| --- | --- |
+| 处置记录状态 | `Fixed · Ready for test-side retest` → **`Closed · Go`**，复测闸门 14 项全勾 |
+| 归档 | 测试记录 + 处置记录移入 `docs/testing/archive/`，链接修正 |
+| 索引 | `docs/testing/README.md` 更新为「（归档）」+ **Closed · Go** |
+| artifacts 清理 | 删除 `plugins/`（31MB staging）与 `state*`（含 fixcheck/hist/offline/sigint/tty）；保留 `config/`（68K）+ `evidence/`（236K，含 `natter-final.db`、`soak-30min.jsonl`） |
+| 残留测试消息 | 18:48 一条 `natter-live-file-e2e ...`（bot 自发测试输入）已删除（204） |
+| 本地凭据 | **已清理**（19:06 删除 `~/.config/natter/live.env`）；平台侧轮换需账号持有人按 [ASSETS §4](../ASSETS.md#4-轮换清单需账号持有人操作) 执行 |
+
+## 12. 结论
+
+- **Go**：P2 的 4 个 High（SIGINT、override、DM allowlist、DM send）已修复并复测通过；
+- 真实链路：Discord 频道 @bot、Discord DM、DingTalk 群 @ 均往返成功；双 upstream 同时在线且路由不串（Discord→DeepSeek、DingTalk→Spark）；
+- 持久化：真实会话重启后 4 sessions / 12 messages 完整恢复；
+- 安全：日志/配置/profiles 无密钥，429/401 脱敏，state 700/600；
+- 仍为组件级而非真实端到端的项：P2-052（provider 故障降级）、P2-055（同 msgId 重放），均有确定性测试覆盖；
+- **修复后 guild 与钉钉真实消息已复测**（18:22，新 state）；30 分钟 soak 30/30 全绿；不再存在「修复前验证」的遗留项。

@@ -63,8 +63,8 @@
 | 2026-11-15 | [人工闸门复测（通过）](2026-11-15-live-manual-gate-rerun.md) | 真实频道内人工 @bot → AI 回复（L5 复测） | **通过**：约 3s 回复、reply 引用正确；`BUG-003` 关闭 |
 | 2026-11-15 | [真实联调：DingTalk Stream + Spark](2026-11-15-live-dingtalk-spark.md) | 钉钉 Stream 连接、Spark MaaS、插件加载与端到端 | **端到端通过**：群内 @机器人 收到 20 字回复；自动化 Spark 7/7 + DingTalk 2/2 |
 | 2026-11-15 | [测试资产收口](2026-11-15-asset-closure.md) | 凭据移出工作区、明文扫描、临时/正式目录分离、资产清单 | 完成：仓库无明文、历史 0 命中、测试改从仓库外读取；平台轮换待人工 |
-| 2026-11-15 | [P2 验收测试](2026-11-15-p2-acceptance.md) | serve、profiles、SQLite、Tier 1/2、并发与安全 | **待复测**：4 个 High 已修复；真实 DM 仍需人工复测 |
-| 2026-11-15 | [P2 验收处置记录](2026-11-15-p2-acceptance-response.md) | 4 个 High 的根因、修复方向、复测闸门与归档规则 | **Fixed**：SIGINT、override、DM allowlist、DM send；等待干净 HEAD 复测 |
+| 2026-11-15 | [P2 验收测试（归档）](archive/2026-11-15-p2-acceptance.md) | serve、profiles、SQLite、Tier 1/2、并发与安全 | **Closed · Go**：4 个 High 复测通过；真实 DM/频道/钉钉往返；214/214 |
+| 2026-11-15 | [P2 验收处置记录（归档）](archive/2026-11-15-p2-acceptance-response.md) | 4 个 High 的根因、修复方向、复测闸门与归档规则 | **Closed · Go**（Archived） |
 
 ## 5. 相关文档
 

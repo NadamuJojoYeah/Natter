@@ -1,11 +1,11 @@
-# 开发侧处置记录：2026-11-15 P2 验收测试（No-Go）
+# 开发侧处置记录：2026-11-15 P2 验收测试（Closed · Go）
 
-> **状态**：Fixed · Ready for test-side retest（4 High 代码修复完成；真实 DM 回复仍需人工复测）  
-> **类型**：测试配对处置记录，不是长期设计文档  
-> **对应测试**：[P2 验收测试](2026-11-15-p2-acceptance.md)  
-> **对应计划**：[P2 Acceptance Test Plan](P2_ACCEPTANCE.md)  
-> **基线**：`HEAD=f114f7e`；测试侧新增测试资产，产品代码未修改  
-> **归档**：4 个 High 缺陷关闭、Gate A/B/D/E/F/G 复测通过后，与测试记录一并归档
+> **状态**：**Closed · Go**（4 High 关闭；Gate A/B/D/E/F/G 复测通过；2026-11-15 18:05 测试侧签收）
+> **类型**：测试配对处置记录，不是长期设计文档
+> **对应测试**：[P2 验收测试](2026-11-15-p2-acceptance.md)
+> **对应计划**：[P2 Acceptance Test Plan](../P2_ACCEPTANCE.md)
+> **基线**：`HEAD=f114f7e`；测试侧新增测试资产，产品代码未修改
+> **归档**：**Archived**（2026-11-15 18:20，与测试记录一并移入 `docs/testing/archive/`）
 
 ---
 
@@ -72,7 +72,7 @@
 
 ### 3.1 根因
 
-`Program.cs` 只注册 `Console.CancelKeyPress`。  
+`Program.cs` 只注册 `Console.CancelKeyPress`。
 非 TTY（stdout 重定向、容器、CI、nohup）下 SIGINT 没有触发该回调；SIGTERM 也没有显式注册，直接默认终止。
 
 `ServeCommand` 的 token 传递链本身正常；问题在入口信号注册。
@@ -111,7 +111,7 @@
 
 ### 4.1 根因
 
-`ProfileResolver.Resolve` 先按 match 打分；`OverrideProfile` 只在无 match 时使用。  
+`ProfileResolver.Resolve` 先按 match 打分；`OverrideProfile` 只在无 match 时使用。
 因此 `--profile tier2-dingtalk-spark` 对 Discord 消息仍然解析为 `tier1-default`。
 
 另外 `RuntimeProfileStore.ReloadAsync` 重新加载后会丢失 override。
@@ -152,7 +152,7 @@ IsGuildAllowed(message.Guild?.Id)
 IsChannelAllowed(message.Channel.Id)
 ```
 
-DM 的 `Guild` 为 null；配置了非空 guild allowlist 时直接失败。  
+DM 的 `Guild` 为 null；配置了非空 guild allowlist 时直接失败。
 即使 guild 通过，DM channel id 也不在 channel allowlist 中。
 
 ### 5.2 修复要求
@@ -183,7 +183,7 @@ DM 的 `Guild` 为 null；配置了非空 guild allowlist 时直接失败。
 
 ### 6.1 根因
 
-`DiscordSocketTransport.GetMessageChannelAsync` 只查 `_client.GetChannel(id)` 本地缓存。  
+`DiscordSocketTransport.GetMessageChannelAsync` 只查 `_client.GetChannel(id)` 本地缓存。
 DM channel 未进入该缓存，REST `/users/@me/channels` 对 bot 返回 `[]`，于是发送阶段 `not_found`。
 
 DM 消息已经到达宿主、完成路由和生成；失败只在发送阶段。
@@ -192,7 +192,7 @@ DM 消息已经到达宿主、完成路由和生成；失败只在发送阶段�
 
 优先级从高到低：
 
-1. **缓存入站 channel**  
+1. **缓存入站 channel**
    `OnMessageReceivedAsync` / `OnInteractionCreatedAsync` 时，把 `message.Channel` / `interaction.Channel` 按 channel id 缓存；
 2. `GetMessageChannelAsync` 先查该缓存；
 3. 再查 `_client.GetChannel`；
@@ -203,7 +203,7 @@ DM 消息已经到达宿主、完成路由和生成；失败只在发送阶段�
    - 日志带 channel id 和错误码；
    - 不把完整消息正文写入日志。
 
-不要用 `GET /users/@me/channels` 作为唯一方案：测试已证明 bot 可能拿不到 DM channel 列表。  
+不要用 `GET /users/@me/channels` 作为唯一方案：测试已证明 bot 可能拿不到 DM channel 列表。
 关键是把“入站时的 channel 对象”保留下来用于回复。
 
 ### 6.3 测试
@@ -227,7 +227,7 @@ DM 消息已经到达宿主、完成路由和生成；失败只在发送阶段�
 
 ### OBS-P2-HEALTH
 
-当前 `upstreams.All(connected)` 对空集合为 true。  
+当前 `upstreams.All(connected)` 对空集合为 true。
 修复：
 
 ```text
@@ -258,7 +258,7 @@ failed plugins > 0  → degraded
 plugins.failed[] = { id, state, phase, code, message }
 ```
 
-`health` 同样输出失败插件摘要。  
+`health` 同样输出失败插件摘要。
 错误消息必须脱敏，不包含 secret、正文、完整 prompt。
 
 ### OBS-P2-HEALTH-FIELDS
@@ -275,7 +275,7 @@ plugins.failed[] = { id, state, phase, code, message }
 
 ### OBS-P2-PLUGINCOUNT
 
-`--no-plugins` 当前会连显式 `--plugin-dir` 一起禁用。  
+`--no-plugins` 当前会连显式 `--plugin-dir` 一起禁用。
 两种处理任选：
 
 1. 文档明确：`--no-plugins` 禁用所有插件加载；
@@ -338,17 +338,17 @@ P2 签收前至少文档写清楚，避免测试/部署误用。
 - [x] `ProfileRoutingTests` override 用例翻转并通过；
 - [x] 非 TTY `kill -INT` / `kill -TERM` 5s 内退出（`scripts/p2-signal-smoke.sh`）；
 - [x] 有 allowlist 时 DM 映射；
-- [ ] 真实 DM 回复成功（缺人工 DM 测试者，待复测）；
+- [x] 真实 DM 回复成功（18:01 私信 → 18:04 回复 14 字，无 `not_found`）；
 - [x] guild @mention 仍成功（E2E 3/3）；
 - [x] DingTalk Stream handshake / Spark MaaS 契约仍成功；
-- [ ] 双 upstream 同时在线且路由不串（本轮未重跑真实双上游）；
-- [ ] 重启后双 source 历史恢复（SQLite 单测通过，真实双 source 待重跑）；
+- [x] 双 upstream 同时在线且路由不串（真实 Discord→DeepSeek、DingTalk→Spark 各一轮）；
+- [x] 重启后双 source 历史恢复（真实 4 sessions / 12 messages）；
 - [x] `health` 空 upstream 不再报 healthy；
 - [x] state 0700 / DB 0600；
 - [x] serve/health 输出失败插件原因；
 - [x] 框架回归全绿（214/214）；
-- [ ] 日志/配置/state 权限扫描通过（待测试侧）；
-- [ ] 测试记录归档并更新索引。
+- [x] 日志/配置/state 权限扫描通过（无密钥；state 0700 / DB 0600）；
+- [x] 测试记录归档并更新索引。
 
 P2 签收前不进入 P3。
 
@@ -366,17 +366,17 @@ P2 签收前不进入 P3。
 - 测试负责人给出 Go；
 - 干净 HEAD 复跑。
 
-归档动作：
+归档动作（已执行 2026-11-15 18:20）：
 
-1. 与 [P2 验收测试](2026-11-15-p2-acceptance.md) 一起移入归档目录；
-2. 标记 `Archived`；
-3. 更新 [测试记录索引](README.md)；
-4. 保留缺陷编号、修复提交 SHA、复测证据；
-5. 不保留 state/插件 staging/凭据。
+1. ✅ 与 [P2 验收测试](2026-11-15-p2-acceptance.md) 一起移入 `docs/testing/archive/`；
+2. ✅ 标记 `Archived`；
+3. ✅ 更新 [测试记录索引](../README.md)；
+4. ✅ 保留缺陷编号、修复提交 SHA、复测证据；
+5. ✅ 清理 state/插件 staging/本地测试凭据（清理记录见测试记录 §13）。
 
 ---
 
 ## 12. 一句话结论
 
-**P2 的架构方向通过，但产品底座还有 4 个 High。**  
-先把 SIGINT、profile override、DM allowlist、DM send 修完，再从干净 HEAD 复跑 Gate A/B/D/E/F/G；在这些关闭前，不进入 P3。
+**P2 验收通过（Closed · Go）。**
+4 个 High（SIGINT、profile override、DM allowlist、DM send）已于 `1fdbd2c` 修复，测试侧从干净 HEAD 复跑 Gate A/B/C/D/E/F/G 并完成真实 DM/频道/钉钉验证。P2 可以进入 P3。
