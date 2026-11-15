@@ -19,6 +19,7 @@
 | 插件运行时 | `Natter.Infrastructure/Plugins/Nps` 的 manifest reader、依赖图、插件本地容器、contribution staging、激活回滚、端口路由与诊断 |
 | 插件包/存储 | `Natter.Plugin.Store` 的 `.natter-plugin.zip` 校验、SHA-256/ECDSA 签名、app 私有安装/更新/回退 store |
 | Discord transport | `Natter.Chat.Discord` 的 Discord.Net transport、DTO 映射与 `DiscordChatUpstream`；示例 NPS 插件 `natter.transport.discord` |
+| AI responder | `Natter.Feature.Ai.DeepSeek` 的 M.E.AI `IChatClient`、DeepSeek adapter、history/gate 与 `chat.responder` |
 
 依赖规则：
 
@@ -38,6 +39,7 @@ Domain   Application  Chat    Cli.Abstractions
                        │
              Natter.Chat.Satori（协议适配）
              Natter.Chat.Discord（Discord 协议适配）
+             Natter.Feature.Ai.DeepSeek（模型调用，不依赖协议）
 ```
 
 - `Natter.Abstractions` 不引用任何产品程序集，只依赖 `Microsoft.Extensions.DependencyInjection.Abstractions`（用于契约中的服务注册）。
@@ -270,7 +272,27 @@ ChatOrchestrator / IChatResponder / feature plugins
 - slash：transport 在 3 秒内 defer 并缓存 interaction token；core 路由到 responder，`interaction.respond` 走 followup。
 - fake transport 覆盖 CI；真实网关需要手动集成。
 
-### 6.5 加载上下文
+### 6.5 AI responder
+
+```text
+NLMP MessageCreated / InteractionCreated
+        │
+ChatOrchestrator
+        │ IChatResponder (priority)
+DeepSeekResponder
+        │ IChatClient (Microsoft.Extensions.AI)
+DeepSeekChatClient
+        │ POST /chat/completions
+DeepSeek API
+```
+
+- `ChatCompositionModule` 默认注册 `ChatOrchestrator`，`chat.responder` 插件由宿主事件流驱动。
+- `DeepSeekResponder` 按 `(source, conversation.id)` 读取内存历史、per-conversation gate 串行、event id 幂等。
+- `DeepSeekChatClient` 负责 DeepSeek 非标准 `thinking`/`reasoning_effort`/`reasoning_content`，只把 `content` 交给 NLMP。
+- API key 只来自 NPS secret provider；prompt/response/reasoning 不写日志。
+- v1 固定非思考、非流式、无 tools；能力边界明确，不用 OpenAI connector 假装完整适配。
+
+### 6.6 加载上下文
 
 - 每个文件插件一个 `PluginLoadContext`（`isCollectible: true`）：
   - `Natter.*`、`Microsoft.Extensions.*`、`System.*`、`System.Reactive*` 回落到默认上下文，保证**端口与契约类型身份共享**；
@@ -301,6 +323,7 @@ ChatOrchestrator / IChatResponder / feature plugins
 - NPS Phase 2–4（Discord transport、AI feature、启用/禁用 CLI、市场、签名、out-of-process 宿主）尚未交付。
 - Android dynamic 已完成 store/校验/安装/回退/构建骨架；文件选择器/完整管理 UI、真机矩阵、远程下载器与崩溃前自动回滚仍待补。
 - Discord transport 已交付消息/编辑/删除/typing/slash 核心；附件上传、按钮/Modal、stream edit、真实网关集成矩阵仍待补。
+- DeepSeek responder 已交付非思考、非流式、无 tools 的 fake 测试闭环；真实 DeepSeek + 真实 Discord 联合验证、流式/tools/持久化/多 provider 仍待补。
 - 权限是宿主治理与可观测性，不是进程内安全沙箱；不可信第三方插件需要独立进程/容器。
 - NLMP 不包含 wire transport、远程插件、握手/服务发现；Satori WebSocket/HTTP 客户端与原生 Discord 适配器不在框架内。
 - Satori message elements 采用有损文本化（v0.1），富文本/按钮/Modal 需要后续能力扩展。

@@ -238,6 +238,36 @@ lib/Natter.Chat.Discord.dll
 
 详细设计见 [Discord Transport Plugin Design](DISCORD_PLUGIN_DESIGN.md)。
 
+### 3.6 DeepSeek AI responder 插件
+
+`natter.feature.ai.deepseek` 是 NPS feature 插件，使用 Microsoft.Extensions.AI 的 `IChatClient`，不依赖 Discord.Net。
+
+```bash
+dotnet build src/Natter.Feature.Ai.DeepSeek/Natter.Feature.Ai.DeepSeek.csproj -c Release
+```
+
+插件目录：
+
+```text
+plugin.json
+config.schema.json
+config.json                 # 不含 key 明文
+lib/Natter.Feature.Ai.DeepSeek.dll
+lib/Microsoft.Extensions.AI*.dll
+lib/Natter.Chat.dll / Natter.Application.dll
+```
+
+发布前：
+
+1. `DEEPSEEK_API_KEY` 只放在宿主的 secret provider；config 只写 `"apiKey": "${secret:DEEPSEEK_API_KEY}"`；
+2. v1 保持 `"thinking": "disabled"`、`"streaming": false`、`"tools": []`；
+3. 限制 `maxOutputTokens`、`historyMaxMessages`、`historyMaxCharacters` 和 `timeoutSeconds`；
+4. 不把真实 key、config.json、prompt/response 日志打进包；
+5. 先跑 fake `IChatClient`/fake HTTP 测试，再用测试 key 做真实 API + fake Discord；
+6. 真实 Discord + 真实 DeepSeek 只在测试 guild/限额下执行。
+
+CI 不调用真实 DeepSeek。详细设计见 [AI Provider Design](AI_PROVIDER_DESIGN.md)。
+
 ## 4. 发布检查清单
 
 - [ ] `dotnet test tests/Natter.Framework.Tests` 全绿；
@@ -250,4 +280,6 @@ lib/Natter.Chat.Discord.dll
 - [ ] plugin store 的 `installed.json` / `pending.json` 不含秘密；
 - [ ] Discord 插件 `config.json` 只含 secret reference，token 只在 secret provider；
 - [ ] Discord `selfId` 与 token 对应的 bot 一致，intents 已在 Developer Portal 开启；
+- [ ] DeepSeek `apiKey` 只含 secret reference，thinking 默认关闭，reasoning_content 不进入回复/日志；
+- [ ] AI 插件使用 fake 测试通过，真实 API 验证不在 CI；
 - [ ] 生产环境替换内存适配器（仓储、UoW、事件日志）并评估事件可靠性。

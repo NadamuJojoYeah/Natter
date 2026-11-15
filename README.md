@@ -15,10 +15,11 @@ Natter 只交付**框架能力**：端口契约、组合根、插件加载、DI 
 - **NPS v1 插件内核**：manifest/schema、Host API、类型化 contribution、依赖图与 host API 校验、配置 schema、秘密、权限、插件本地 DI、激活回滚、legacy 兼容。
 - **Android 插件宿主**：平台无关的签名包校验/安装/回退 store；embedded 默认，`DynamicPlugins` 构建从 app 私有目录加载，AOT/Trim 关闭；Android Keystore 秘密提供者与 debug inbox。
 - **Discord transport**：`natter.transport.discord` NPS 插件；Discord Gateway/REST 抽象、NLMP 双向映射、allowlist/bot/mention 过滤、分片、slash interaction、`AllowedMentions.None` 与 `discord status`。
+- **DeepSeek AI responder**：`natter.feature.ai.deepseek`；Microsoft.Extensions.AI `IChatClient`、自定义 DeepSeek Chat Completions client、thinking/reasoning 隔离、内存历史、按会话串行、幂等、错误降级与 `ai status`。
 - **插件机制**：目录扫描、`plugin.json` 清单、可回收 `AssemblyLoadContext`、端口适配器覆盖、CLI 命令贡献、生命周期订阅。
 - **CLI 内核**：平台无关的命令注册表、解析器、帮助、JSON 输出、`exec` 同宿主命令链；Console 与 Android 宿主共用。
 - **多平台发布**：自包含单文件（win/linux/osx）+ Android APK；示例插件随发布目录部署或嵌入宿主。
-- **测试**：151 个框架级测试覆盖聚合事件、Rx 总线、DI 管道、解析器、插件加载、CLI、NLMP 一致性与 NPS v1 插件内核。
+- **测试**：169 个框架级测试覆盖聚合事件、Rx 总线、DI 管道、解析器、插件加载、CLI、NLMP 一致性与 NPS v1 插件内核。
 
 ## 架构
 
@@ -79,6 +80,7 @@ Natter 只交付**框架能力**：端口契约、组合根、插件加载、DI 
 | `src/Natter.Plugin.Abstractions` | 插件 Host API | NPS v1 manifest、INatterPlugin/IPluginContext、contribution、配置 schema、秘密、权限与诊断模型 |
 | `src/Natter.Plugin.Store` | 插件包/存储 | `.natter-plugin.zip` 校验、哈希/ECDSA 签名、app 私有 store、安装/更新/回退/卸载 |
 | `src/Natter.Chat.Discord` | Discord 适配 | Discord.Net transport、DTO 映射、NLMP upstream、能力与错误映射 |
+| `src/Natter.Feature.Ai.DeepSeek` | AI responder | M.E.AI `IChatClient`、DeepSeek HTTP adapter、历史/并发/幂等与 `ai status` |
 | `src/Natter.Cli.Abstractions` | CLI 契约 | `IConsole`、命令/选项描述符、处理器 |
 | `src/Natter.Cli.Core` | CLI 内核 | 解析、注册表、内建命令、JSON/表格输出 |
 | `src/Natter.Cli` | 宿主 | Console 入口，发布为 `natter` / `natter.exe` |
@@ -147,6 +149,7 @@ natter <command> [arguments] [options]
 | `plugins store enable\|disable\|rollback\|uninstall <id>` | 启用/禁用/回退/卸载（重启生效） |
 | `plugins store cleanup` | 清理 staging/trash |
 | `discord status [--json]` | Discord 连接、Source、延迟、allowlist 与 capabilities |
+| `ai status [--json]` | DeepSeek model/thinking、请求/错误、延迟、token 与缓存命中 |
 | `plugins list [--failed] [--json]` | 已加载/失败的插件 |
 | `plugins inspect <directory> [--json]` | 只探测插件目录，不注册 |
 | `demo [--name] [--amount] [--times] [--json]` | 聚合 → 仓储 → 领域事件 → Rx 全链路 |
@@ -209,6 +212,7 @@ Android 产物位于 `artifacts/android/`。示例构建使用默认调试签名
 - [插件规范（NPS v1）](docs/PLUGIN_SPEC.md)：manifest、contribution、依赖图、Host API、配置/秘密、权限与激活回滚。
 - [Android 插件宿主](docs/ANDROID_PLUGIN_HOST.md)：embedded/dynamic 双发行、AOT off 动态加载、签名安装与回滚。
 - [Discord 上游设计](docs/DISCORD_PLUGIN_DESIGN.md)：manifest、config、transport 边界、NLMP 映射、slash 前置与测试。
+- [AI Provider 设计](docs/AI_PROVIDER_DESIGN.md)：Microsoft.Extensions.AI、IChatClient、DeepSeek 适配、thinking/reasoning 与 responder 设计。
 - [插件 Manifest Schema](docs/plugin.schema.json)：NPS v1 `plugin.json` 的机器可读 JSON Schema。
 - [发布指南](docs/PUBLISHING.md)：RID 矩阵、单文件、Android 签名与裁剪。
 
@@ -221,7 +225,7 @@ Android 产物位于 `artifacts/android/`。示例构建使用默认调试签名
 - Android 无法扫描 APK 内的插件目录，因此示例以 embedded plugin 方式注册。
 - NLMP 默认是进程内模型：不包含远程 transport、握手或服务发现；`Natter.Chat.Satori` 只做映射，不包含 WebSocket/HTTP 客户端。
 - Satori message elements 是有损映射（v0.1 只保留文本、附件和 mentions）；富文本/按钮/复杂布局需要后续能力扩展。
-- NPS v1 Phase 1 已交付内核；Android 动态 store/签名包/host 骨架已交付；Discord transport Phase 1/2（消息、typing、编辑/删除、slash interaction、状态命令）已交付。management UI、真机矩阵、AI feature、插件市场/热禁用与 out-of-process 宿主仍待补，见 [插件规范 §16](docs/PLUGIN_SPEC.md)、[Android 插件宿主](docs/ANDROID_PLUGIN_HOST.md) 与 [Discord 设计](docs/DISCORD_PLUGIN_DESIGN.md)。
+- NPS v1 Phase 1 已交付内核；Android 动态 store/签名包/host 骨架已交付；Discord transport Phase 1/2 已交付；DeepSeek AI responder 核心已交付（非思考、非流式、无 tools、内存历史）。management UI、真机矩阵、真实 DeepSeek/Discord 联合集成、插件市场/热禁用与 out-of-process 宿主仍待补，见 [插件规范 §16](docs/PLUGIN_SPEC.md)、[Android 插件宿主](docs/ANDROID_PLUGIN_HOST.md)、[Discord 设计](docs/DISCORD_PLUGIN_DESIGN.md) 与 [AI Provider 设计](docs/AI_PROVIDER_DESIGN.md)。
 
 ## 许可
 
