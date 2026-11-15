@@ -734,7 +734,7 @@ model
 | Tier 1 真实记忆召回 | 未执行（缺人工/真实测试脚本） | — |
 | Tier 2 smoke | 共享 pipeline fake/契约测试通过，真实未重跑 | — |
 
-测试：`Natter.Framework.Tests` **224/224**；P2 的 214 基线未回归。
+测试：`Natter.Framework.Tests` **225/225**；P2 的 214 基线未回归。
 
 ## 14. 验收标准
 
