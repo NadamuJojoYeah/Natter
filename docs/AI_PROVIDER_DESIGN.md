@@ -1,6 +1,6 @@
 # Natter AI Provider Design（Microsoft.Extensions.AI + DeepSeek）
 
-> **状态**：Accepted design · Phase 1/2 核心已实现；真实 DeepSeek + Discord 联调已跑通（Conditional Pass；BUG-001/002 未关闭，见 [处置记录](testing/2026-11-15-live-deepseek-discord-response.md)）
+> **状态**：Accepted design · Phase 1/2 核心已实现；真实 DeepSeek + Discord 联调已跑通（26/26 live 复测通过；BUG-001/002 已关闭，L5 人工闸门待执行，见 [处置记录](testing/2026-11-15-live-deepseek-discord-response.md)）
 > **日期**：2026-11-15
 > **定位**：Natter 的 AI provider/responder 设计。DeepSeek 作为第一个真实模型 provider；`Microsoft.Extensions.AI` 作为模型调用抽象；NPS 负责插件、权限、秘密和生命周期。
 > **关联**：[NPS v1](PLUGIN_SPEC.md)、[NLMP](NLMP.md)、[Discord transport 设计](DISCORD_PLUGIN_DESIGN.md)
@@ -749,18 +749,18 @@ CI 不调用真实 DeepSeek。
 - ✅ fake IChatClient / fake HTTP 测试；
 - ✅ manifest/config/secret/permissions。
 
-### Phase 3：真实 API + fake Discord（待手动执行）
+### Phase 3：真实 API + fake Discord（已通过）
 
-- 真实 DeepSeek key，限额；
-- 验证错误、超时、usage；
-- 验证 slash 回复和 interaction token。
+- ✅ 真实 DeepSeek key，限额；
+- ✅ 验证错误、超时、usage；
+- ✅ fake Discord / NLMP 下发路径与真实 API 往返。
 
-### Phase 4：真实 Discord + 真实 DeepSeek
+### Phase 4：真实 Discord + 真实 DeepSeek（自动用例已通过，L5 人工待执行）
 
-- 测试 guild；
-- 先 echo/连接冒烟，再 AI；
-- 并发、限流、重连；
-- 记录成本和延迟。
+- ✅ 测试 guild；
+- ✅ 先 echo/连接冒烟，再 AI；
+- ✅ 自动覆盖文件插件、独立 CLI、idempotency；L5 真人 gate 待执行；
+- ✅ 记录成本和延迟（`ai status`）。
 
 ### Phase 5：拆分 provider 与 responder
 
@@ -792,8 +792,9 @@ CI 不调用真实 DeepSeek。
 - [x] 429/5xx/网络/超时有界重试，401/402/400 不重试；
 - [x] usage 有记录，reasoning_content 不输出；
 - [x] fake `IChatClient` / fake HTTP 测试全绿；
-- [ ] 真实 DeepSeek + fake Discord 通过（需要真实 key，CI 不调用）；
-- [ ] 真实 Discord + 真实 DeepSeek 测试 guild 通过（需要测试 bot/额度）；
+- [x] 真实 DeepSeek + fake Discord 通过（L1/L3/L4；CI 默认不调用）；
+- [x] 真实 Discord + 真实 DeepSeek 测试 guild 自动用例通过（26/26）；
+- [ ] L5 真人 @bot 人工闸门通过；
 - [x] Discord 插件不 import DeepSeek/AI SDK；
 - [x] DeepSeek 插件不 import Discord.Net。
 
@@ -841,7 +842,7 @@ CI 不调用真实 DeepSeek。
 
 ### 18.3 未交付
 
-- 真实 DeepSeek API + 真实 Discord 测试 guild 联合验证；
+- L5 真人 @bot 人工闸门；
 - 流式输出 / SSE；
 - tools / function invocation；
 - 持久化会话、多实例共享；

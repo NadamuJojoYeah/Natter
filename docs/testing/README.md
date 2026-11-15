@@ -57,7 +57,7 @@
 | 日期 | 记录 | 范围 | 结果 |
 | --- | --- | --- | --- |
 | 2026-11-15 | [真实 API 联调：Discord + DeepSeek](2026-11-15-live-deepseek-discord.md) | `natter.transport.discord`、`natter.feature.ai.deepseek` 的分层真实测试（L1–L5） | 26/26 live 通过，172/172 框架回归通过；2 个缺陷、2 个观测、2 个环境限制 |
-| 2026-11-15 | [开发侧处置记录](2026-11-15-live-deepseek-discord-response.md) | BUG/OBS 处置、临时改动、发布闸门与归档规则 | Conditional Pass；BUG-001/002 开放，产品验收阻塞 |
+| 2026-11-15 | [开发侧处置记录](2026-11-15-live-deepseek-discord-response.md) | BUG/OBS 处置、临时改动、发布闸门与归档规则 | BUG-001/002 已修复；26/26 live 复测通过；L5 人工闸门待执行 |
 
 ## 5. 相关文档
 

@@ -1,6 +1,6 @@
 # 开发侧处置记录：2026-11-15 真实 API 联调（Discord + DeepSeek）
 
-> **状态**：Temporary / Active  
+> **状态**：Temporary / Active（BUG-001/002 已修复；26/26 live 已从正式修复复测通过；L5 人工闸门待执行）  
 > **类型**：测试配对处置记录，不是长期设计文档  
 > **对应测试**：[真实 API 联调：Discord + DeepSeek](2026-11-15-live-deepseek-discord.md)  
 > **基线**：`HEAD=201e4ff` + 测试侧未提交临时改动  
@@ -12,8 +12,8 @@
 
 本次真实联调的结论应定为：
 
-> **Live Integration: Conditional Pass**  
-> **Product Acceptance: Blocked by BUG-001 / BUG-002**
+> **Live Integration: Pass（26/26，正式修复后）**  
+> **Product Acceptance: Pending L5 manual gate（BUG-001/002 已关闭）**
 
 测试本身有效：真实 DeepSeek、真实 Discord、真实插件加载、真实 CLI 部署都被覆盖了。  
 但 `26/26` 是在**测试侧临时修改产品代码**后得到的，不等于干净 HEAD 通过，也不等于产品验收通过。
@@ -23,8 +23,8 @@
 1. 测试报告可以作为真实环境基线保留；
 2. BUG-001 / BUG-002 是产品缺陷，不是测试环境问题；
 3. 测试侧临时补丁只作为定位证据，不直接视为最终修复；
-4. 在正式修复并从干净 HEAD 复测前，不把 Discord + DeepSeek 标记为“已交付”；
-5. OBS-001 / OBS-002 需要产品决策，不能只停留在测试记录里。
+4. 正式修复后 26/26 live 已复测通过，BUG-001/002 关闭；L5 人工闸门单独留待执行；
+5. OBS-001 / OBS-002 已落地策略与守护测试。
 
 当前复核状态：
 
@@ -51,7 +51,7 @@ L4 deployment live:     5/5 passed
 L3/L3b E2E live:        2/2 passed
 ```
 
-已覆盖 15/26 项 live；Discord transport（9）与 gateway ingress（2）本轮未重跑，因此仍不宣称 26/26。剩余验收：全量 26 项 live 从干净 HEAD 复跑、L5 人工闸门；在完成前保持 `Product Acceptance: Blocked`。
+正式修复后全量 live 已复测：L1 8/8、L2 9/9、L2b 2/2、L3/L3b 2/2、L4 5/5，共 **26/26**。剩余验收仅为 L5 人工闸门（真人在测试频道 @bot）；未通过前保持 `Product Acceptance: Pending L5`。
 
 ---
 
@@ -59,8 +59,8 @@ L3/L3b E2E live:        2/2 passed
 
 | ID | 类型 | 严重度 | 处置 | 责任侧 | 发布闸门 |
 | --- | --- | --- | --- | --- | --- |
-| BUG-001 | 插件加载上下文 | 阻塞 | **已修复**，正式契约白名单 + 私有依赖策略 | NPS / 插件运行时 | 待全量 live |
-| BUG-002 | 插件打包 | 高 | **已修复**，共享 staging target 含 deps.json | 插件打包 / 构建 | 待全量 live |
+| BUG-001 | 插件加载上下文 | 阻塞 | **已关闭**，正式契约白名单 + 私有依赖策略；26/26 live 复测 | NPS / 插件运行时 | 已通过 |
+| BUG-002 | 插件打包 | 高 | **已关闭**，共享 staging target 含 deps.json；26/26 live 复测 | 插件打包 / 构建 | 已通过 |
 | OBS-001 | DeepSeek 550 | 中 | **已实现**，有界重试 + responder fallback | AI provider / responder | 已关闭（策略） |
 | OBS-002 | bot 自发消息 | 信息 | **已固化**，三层过滤 + 守护测试 | Discord transport | 已关闭 |
 | ENV-001 | 测试频道权限 | 环境 | 不修产品；改进测试环境 | 测试侧 | 不阻塞 |
@@ -294,7 +294,7 @@ L3/L3b E2E live:        2/2 passed
 - [x] 测试侧临时产品补丁已由正式实现取代；
 - [x] 从干净构建成功；
 - [x] 175/175 框架回归通过；
-- [ ] 26/26 live 用例从干净 HEAD 通过（L4 5/5、L3/L3b 2/2 已通过，全量待复跑）；
+- [x] 26/26 live 用例从正式修复构建通过（L1 8、L2 9、L2b 2、L3/L3b 2、L4 5）；
 - [ ] L5 人工闸门至少通过一次；
 - [x] OBS-001 重试/降级策略落地；
 - [x] OBS-002 三层过滤有守护测试和文档；

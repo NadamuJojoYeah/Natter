@@ -232,7 +232,7 @@ Android 产物位于 `artifacts/android/`。示例构建使用默认调试签名
 - Android 无法扫描 APK 内的插件目录，因此示例以 embedded plugin 方式注册。
 - NLMP 默认是进程内模型：不包含远程 transport、握手或服务发现；`Natter.Chat.Satori` 只做映射，不包含 WebSocket/HTTP 客户端。
 - Satori message elements 是有损映射（v0.1 只保留文本、附件和 mentions）；富文本/按钮/复杂布局需要后续能力扩展。
-- NPS v1 Phase 1 已交付内核；Android 动态 store/签名包/host 骨架已交付；Discord transport Phase 1/2 已交付；DeepSeek AI responder 核心已交付（非思考、非流式、无 tools、内存历史）。management UI、真机矩阵、真实 DeepSeek/Discord 联合集成、插件市场/热禁用与 out-of-process 宿主仍待补，见 [插件规范 §16](docs/PLUGIN_SPEC.md)、[Android 插件宿主](docs/ANDROID_PLUGIN_HOST.md)、[Discord 设计](docs/DISCORD_PLUGIN_DESIGN.md) 与 [AI Provider 设计](docs/AI_PROVIDER_DESIGN.md)。
+- NPS v1 Phase 1 已交付内核；Android 动态 store/签名包/host 骨架已交付；Discord transport Phase 1/2 已交付；DeepSeek AI responder 核心已交付（非思考、非流式、无 tools、内存历史）。management UI、真机矩阵、L5 真人闸门、插件市场/热禁用与 out-of-process 宿主仍待补，见 [插件规范 §16](docs/PLUGIN_SPEC.md)、[Android 插件宿主](docs/ANDROID_PLUGIN_HOST.md)、[Discord 设计](docs/DISCORD_PLUGIN_DESIGN.md) 与 [AI Provider 设计](docs/AI_PROVIDER_DESIGN.md)。
 
 ## 许可
 

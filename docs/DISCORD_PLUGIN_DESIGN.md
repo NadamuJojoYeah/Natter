@@ -1,6 +1,6 @@
 # Natter Discord Transport Plugin Design
 
-> **状态**：Accepted design · Phase 1/2 核心已实现；真实 Discord 网关/REST 联调已跑通（Conditional Pass；BUG-001/002 未关闭，见 [处置记录](testing/2026-11-15-live-deepseek-discord-response.md)）
+> **状态**：Accepted design · Phase 1/2 核心已实现；真实 Discord 网关/REST 联调已跑通（26/26 live 复测通过；BUG-001/002 已关闭，L5 人工闸门待执行，见 [处置记录](testing/2026-11-15-live-deepseek-discord-response.md)）
 > **日期**：2026-11-15
 > **定位**：NPS v1 的 `transport` 插件，只负责 Discord 连接、事件映射、命令发送和能力声明，不包含 AI、prompt、记忆或业务规则。
 > **关联**：[Natter Plugin Specification v1](PLUGIN_SPEC.md)、[NLMP](NLMP.md)、[插件开发指南](PLUGINS.md)

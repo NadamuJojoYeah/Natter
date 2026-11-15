@@ -10,7 +10,7 @@
 
 ## 0. 一句话结论
 
-两个插件在 **真实 Discord 网关 + 真实 DeepSeek Chat Completions** 上完成了「入站 → NLMP → responder → 出站」的完整链路，基线轮 `Category=Live` 的 **26 项真实测试全部通过**（另有 1 项人工闸门默认跳过）、**172 项框架单测回归通过**；开发修复后本轮已重跑 L1 8/8、L4 5/5、L3/L3b 2/2，框架回归 **175/175**。过程中记录了 2 个会直接导致 CLI 无法加载插件的真实缺陷（见 §7，已由开发修复，待全量 live 复测）。
+两个插件在 **真实 Discord 网关 + 真实 DeepSeek Chat Completions** 上完成了「入站 → NLMP → responder → 出站」的完整链路。开发修复后已从正式修复构建重跑全部自动 live：**26/26 通过**（L1 8、L2 9、L2b 2、L3/L3b 2、L4 5），**175/175 框架回归通过**；仅 L5 人工闸门待执行。过程中记录并修复了 2 个会直接导致 CLI 无法加载插件的真实缺陷（见 §7）。
 
 ---
 
@@ -188,7 +188,7 @@ discord status: connected=true guildCount=1 channelCount=4 latencyMs=497
 
 ```text
 Natter.Framework.Tests: Failed 0, Passed 175, Skipped 0
-Live re-run after fixes: L1 8/8, L4 5/5, L3/L3b 2/2 (15/26; discord/ingress pending)
+Live re-run after fixes: L1 8/8, L2 9/9, L2b 2/2, L3/L3b 2/2, L4 5/5 = 26/26
 ```
 
 ---
