@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
@@ -31,6 +32,28 @@ public static partial class PluginManifestReader
         AllowTrailingCommas = true,
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
     };
+
+    /// <summary>Reads a manifest embedded as a resource (used by the Android embedded profile).</summary>
+    public static PluginManifest ReadEmbedded(Assembly assembly, string resourceName)
+    {
+        ArgumentNullException.ThrowIfNull(assembly);
+        ArgumentException.ThrowIfNullOrWhiteSpace(resourceName);
+
+        using var stream = assembly.GetManifestResourceStream(resourceName)
+                           ?? throw new InvalidOperationException(
+                               $"Embedded manifest '{resourceName}' was not found in '{assembly.GetName().Name}'.");
+        using var reader = new StreamReader(stream);
+        var result = Parse(reader.ReadToEnd());
+
+        if (!result.IsValid || result.Manifest is null)
+        {
+            throw new InvalidOperationException(
+                "Embedded manifest is invalid: "
+                + string.Join("; ", result.Errors.Select(issue => $"{issue.Path}: {issue.Message}")));
+        }
+
+        return result.Manifest;
+    }
 
     public static PluginManifestReadResult Read(string pluginDirectory)
     {

@@ -167,7 +167,7 @@ internal sealed partial class NpsPluginRuntime
 
         if (candidate is not null)
         {
-            var load = NpsPluginConfigLoader.Load(candidate.Manifest, candidate.Directory);
+            var load = NpsPluginConfigLoader.Load(candidate.Manifest, candidate.Directory, _options.ConfigDirectory);
             return new PluginConfigValidationResult(pluginId, load.Valid, load.Issues);
         }
 
@@ -193,7 +193,7 @@ internal sealed partial class NpsPluginRuntime
                     : [new PluginConfigIssue("/", "Plugin is legacy; NPS config validation is not applicable.", "NPS manifest", "legacy plugin")]);
         }
 
-        var loaded = NpsPluginConfigLoader.Load(read.Manifest, descriptor.Directory);
+        var loaded = NpsPluginConfigLoader.Load(read.Manifest, descriptor.Directory, _options.ConfigDirectory);
         return new PluginConfigValidationResult(pluginId, loaded.Valid, loaded.Issues);
     }
 

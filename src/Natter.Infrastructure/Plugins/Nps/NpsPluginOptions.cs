@@ -19,6 +19,9 @@ public sealed class NpsPluginOptions
 
     public ISecretProvider SecretProvider { get; set; } = new EnvironmentSecretProvider();
 
+    /// <summary>Optional app-private config directory; see CompositionOptions.PluginConfigDirectory.</summary>
+    public string? ConfigDirectory { get; set; }
+
     public HashSet<string> DisabledPlugins { get; } = new(StringComparer.Ordinal);
 
     public HashSet<string> ForceGrantedPermissions { get; } = new(StringComparer.Ordinal);

@@ -152,6 +152,8 @@ public sealed class NatterApplicationBuilder
         _services.AddSingleton<IPluginCatalog>(_pluginCatalog);
         _services.AddSingleton<IPluginProbe, PluginProbe>();
 
+        _npsOptions.ConfigDirectory = _options.PluginConfigDirectory;
+
         var scan = ScanPlugins();
         var loadedPlugins = scan.LegacyPlugins;
 

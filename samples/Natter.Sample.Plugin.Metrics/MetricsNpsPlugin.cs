@@ -7,6 +7,10 @@ namespace Natter.Sample.Plugin.Metrics;
 /// <summary>NPS v1 sample: contributes a CLI command and starts an event counter on activation.</summary>
 public sealed class MetricsNpsPlugin : INatterPlugin
 {
+    public static PluginManifest Manifest { get; } = PluginManifestReader.ReadEmbedded(
+        typeof(MetricsNpsPlugin).Assembly,
+        "Natter.Sample.Plugin.Metrics.plugin.json");
+
     public ValueTask ConfigureAsync(IPluginContext context, CancellationToken cancellationToken = default)
     {
         var services = context.Services.Collection;

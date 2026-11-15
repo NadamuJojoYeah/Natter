@@ -27,10 +27,11 @@
     <ProjectReference Include="../../src/Natter.Chat/Natter.Chat.csproj" />
     <ProjectReference Include="../../src/Natter.Chat.Satori/Natter.Chat.Satori.csproj" />
     <ProjectReference Include="../../src/Natter.Plugin.Abstractions/Natter.Plugin.Abstractions.csproj" />
+    <ProjectReference Include="../../src/Natter.Plugin.Store/Natter.Plugin.Store.csproj" />
     <ProjectReference Include="../../src/Natter.Application/Natter.Application.csproj" />
     <ProjectReference Include="../../src/Natter.Domain/Natter.Domain.csproj" />
-    <ProjectReference Include="../../samples/Natter.Sample.Plugin.Greetings/Natter.Sample.Plugin.Greetings.csproj"
-                      ReferenceOutputAssembly="false" />
+    <ProjectReference Include="../../samples/Natter.Sample.Plugin.Greetings/Natter.Sample.Plugin.Greetings.csproj" />
+    <ProjectReference Include="../../samples/Natter.Sample.Plugin.Metrics/Natter.Sample.Plugin.Metrics.csproj" />
   </ItemGroup>
 
   <Target Name="CopyTestPlugins" AfterTargets="Build">

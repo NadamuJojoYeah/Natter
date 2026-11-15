@@ -11,6 +11,10 @@ namespace Natter.Sample.Plugin.Greetings;
 /// </summary>
 public sealed class GreetingsNpsPlugin : INatterPlugin
 {
+    public static PluginManifest Manifest { get; } = PluginManifestReader.ReadEmbedded(
+        typeof(GreetingsNpsPlugin).Assembly,
+        "Natter.Sample.Plugin.Greetings.plugin.json");
+
     public ValueTask ConfigureAsync(IPluginContext context, CancellationToken cancellationToken = default)
     {
         var services = context.Services.Collection;

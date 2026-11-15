@@ -40,5 +40,11 @@ public sealed class CompositionOptions
     /// <summary>Directories scanned for plugins (each subdirectory is one plugin).</summary>
     public IList<string> PluginDirectories { get; } = new List<string>();
 
+    /// <summary>
+    /// Optional external config directory. NPS plugins read <c>&lt;dir&gt;/&lt;pluginId&gt;.json</c>
+    /// before falling back to <c>pluginDirectory/config.json</c> (used by app-private stores).
+    /// </summary>
+    public string? PluginConfigDirectory { get; set; }
+
     public bool ValidateOnBuild { get; set; } = true;
 }

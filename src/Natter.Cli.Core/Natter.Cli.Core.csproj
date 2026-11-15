@@ -19,6 +19,7 @@
     <ProjectReference Include="../Natter.Application/Natter.Application.csproj" />
     <ProjectReference Include="../Natter.Infrastructure/Natter.Infrastructure.csproj" />
     <ProjectReference Include="../Natter.Plugin.Abstractions/Natter.Plugin.Abstractions.csproj" />
+    <ProjectReference Include="../Natter.Plugin.Store/Natter.Plugin.Store.csproj" />
     <ProjectReference Include="../Natter.Chat/Natter.Chat.csproj" />
     <ProjectReference Include="../Natter.Chat.Satori/Natter.Chat.Satori.csproj" />
     <ProjectReference Include="../Natter.Cli.Abstractions/Natter.Cli.Abstractions.csproj" />

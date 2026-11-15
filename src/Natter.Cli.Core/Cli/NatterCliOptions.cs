@@ -14,6 +14,12 @@ public sealed class NatterCliOptions
     /// <summary>Arguments left after global options were removed.</summary>
     public string[] CommandArgs { get; set; } = [];
 
+    /// <summary>
+    /// Optional callback invoked after the host and NPS runtime started but before the first
+    /// command runs. App-private plugin stores use it to reconcile pending activations.
+    /// </summary>
+    public Func<IServiceProvider, ValueTask>? OnHostStartedAsync { get; set; }
+
     /// <summary>Parses global options out of the argument vector, keeping the command arguments.</summary>
     public static NatterCliOptions Parse(IReadOnlyList<string> args)
     {

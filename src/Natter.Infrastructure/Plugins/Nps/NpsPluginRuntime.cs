@@ -425,7 +425,7 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
 
     private bool LoadConfig(NpsPluginCandidate candidate)
     {
-        var load = NpsPluginConfigLoader.Load(candidate.Manifest, candidate.Directory);
+        var load = NpsPluginConfigLoader.Load(candidate.Manifest, candidate.Directory, _options.ConfigDirectory);
         candidate.ConfigLoad = load;
 
         if (!load.Valid)

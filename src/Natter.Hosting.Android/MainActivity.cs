@@ -5,8 +5,8 @@ using Android.Graphics;
 using Android.Widget;
 using Natter.Cli.Abstractions;
 using Natter.Cli.Core;
-using Natter.Sample.Plugin.Greetings;
-using Natter.Sample.Plugin.Metrics;
+using Natter.Infrastructure.Composition;
+using Natter.Plugin.Store;
 
 namespace Natter.Hosting.Android;
 
@@ -51,18 +51,30 @@ public sealed class MainActivity : Activity
 
         try
         {
-            var options = new NatterCliOptions
+            var options = new NatterCliOptions();
+            PluginStore? store = null;
+
+            if (AndroidPluginHost.IsDynamic)
             {
-                LoadPlugins = false,
-            };
+                store = AndroidPluginHost.CreateStore(global::Android.App.Application.Context);
+                await store.CleanupAsync();
+
+                foreach (var plugin in store.GetInstalledPlugins())
+                {
+                    console.Out.WriteLine(
+                        $"[plugin] {plugin.Id} {plugin.ActiveVersion} enabled={plugin.Enabled} state={plugin.LastKnownState}");
+                }
+            }
+
+            var args = AndroidPluginHost.IsDynamic
+                ? new[] { "exec", "plugins list --detail", "plugins graph", "plugins contributions" }
+                : new[] { "exec", "doctor", "plugins list --detail", "demo --times 2", "metrics", "greetings recent" };
 
             var exitCode = await NatterCli.RunAsync(
-                ["exec", "doctor", "demo --times 2", "metrics", "greetings recent"],
+                args,
                 console,
                 options,
-                builder => builder
-                    .AddEmbeddedPlugin<GreetingsPlugin>()
-                    .AddEmbeddedPlugin<MetricsPlugin>());
+                builder => AndroidPluginHost.Configure(global::Android.App.Application.Context, options, builder, store));
 
             console.Out.WriteLine($"exit code: {exitCode}");
         }

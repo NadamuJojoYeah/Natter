@@ -147,6 +147,77 @@ internal static class BuiltInCommands
         },
         new CliCommandDescriptor
         {
+            Name = "plugins store list",
+            Description = "List packages installed in the app-private plugin store.",
+            Options = [JsonOption, .. PluginStoreCli.CommonOptions()],
+            Origin = Origin,
+            HandlerFactory = services => services.GetRequiredService<PluginsStoreListCommand>(),
+        },
+        new CliCommandDescriptor
+        {
+            Name = "plugins store install",
+            Description = "Validate and install a .natter-plugin.zip package.",
+            Arguments = [new CliArgumentDescriptor("package", "Package path.", Required: true)],
+            Options =
+            [
+                JsonOption,
+                new CliOptionDescriptor("no-update", "Reject updates for an already-installed plugin."),
+                .. PluginStoreCli.CommonOptions(),
+            ],
+            Origin = Origin,
+            HandlerFactory = services => services.GetRequiredService<PluginsStoreInstallCommand>(),
+        },
+        new CliCommandDescriptor
+        {
+            Name = "plugins store enable",
+            Description = "Enable an installed plugin (restart required).",
+            Arguments = [new CliArgumentDescriptor("plugin-id", "Plugin id.", Required: true)],
+            Options = [.. PluginStoreCli.CommonOptions()],
+            Origin = Origin,
+            HandlerFactory = services => new PluginsStoreEnableCommand(enabled: true),
+        },
+        new CliCommandDescriptor
+        {
+            Name = "plugins store disable",
+            Description = "Disable an installed plugin (restart required).",
+            Arguments = [new CliArgumentDescriptor("plugin-id", "Plugin id.", Required: true)],
+            Options = [.. PluginStoreCli.CommonOptions()],
+            Origin = Origin,
+            HandlerFactory = services => new PluginsStoreEnableCommand(enabled: false),
+        },
+        new CliCommandDescriptor
+        {
+            Name = "plugins store rollback",
+            Description = "Roll an installed plugin back to its previous version.",
+            Arguments = [new CliArgumentDescriptor("plugin-id", "Plugin id.", Required: true)],
+            Options = [.. PluginStoreCli.CommonOptions()],
+            Origin = Origin,
+            HandlerFactory = services => services.GetRequiredService<PluginsStoreRollbackCommand>(),
+        },
+        new CliCommandDescriptor
+        {
+            Name = "plugins store uninstall",
+            Description = "Uninstall an installed plugin package.",
+            Arguments = [new CliArgumentDescriptor("plugin-id", "Plugin id.", Required: true)],
+            Options =
+            [
+                new CliOptionDescriptor("delete-data", "Delete plugin-data."),
+                new CliOptionDescriptor("delete-config", "Delete plugin-config."),
+                .. PluginStoreCli.CommonOptions(),
+            ],
+            Origin = Origin,
+            HandlerFactory = services => services.GetRequiredService<PluginsStoreUninstallCommand>(),
+        },
+        new CliCommandDescriptor
+        {
+            Name = "plugins store cleanup",
+            Description = "Remove staging/trash leftovers from the plugin store.",
+            Options = [.. PluginStoreCli.CommonOptions()],
+            Origin = Origin,
+            HandlerFactory = services => services.GetRequiredService<PluginsStoreCleanupCommand>(),
+        },
+        new CliCommandDescriptor
+        {
             Name = "plugins graph",
             Description = "Show the NPS dependency/order graph (nodes and edges).",
             Options = [JsonOption],

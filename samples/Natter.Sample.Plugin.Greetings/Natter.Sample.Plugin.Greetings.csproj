@@ -21,6 +21,7 @@
 
   <ItemGroup>
     <None Include="plugin.json" CopyToOutputDirectory="Never" CopyToPublishDirectory="Never" />
+    <EmbeddedResource Include="plugin.json" LogicalName="Natter.Sample.Plugin.Greetings.plugin.json" />
   </ItemGroup>
 
 </Project>

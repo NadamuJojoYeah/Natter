@@ -566,6 +566,47 @@ public sealed class NpsRuntimeTests
     }
 
     [Fact]
+    public async Task External_config_directory_is_used_before_plugin_directory_config()
+    {
+        var pluginDirectory = Path.Combine(Path.GetTempPath(), "natter-nps-" + Guid.NewGuid().ToString("N"));
+        var configDirectory = Path.Combine(Path.GetTempPath(), "natter-cfg-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(pluginDirectory);
+        Directory.CreateDirectory(configDirectory);
+        File.WriteAllText(
+            Path.Combine(pluginDirectory, "config.schema.json"),
+            """{ "type": "object", "properties": { "name": { "type": "string" }, "count": { "type": "integer" } } }""");
+        File.WriteAllText(
+            Path.Combine(configDirectory, "natter.test.external.json"),
+            """{ "name": "external", "count": 7 }""");
+
+        try
+        {
+            var plugin = new ConfigPlugin();
+            var manifest = Manifest(
+                "natter.test.external",
+                permissions: [],
+                contributions: [],
+                configSchema: "config.schema.json");
+
+            var builder = NatterApplicationBuilder.Create()
+                .AddNatterFramework()
+                .ConfigureOptions(options => options.PluginConfigDirectory = configDirectory)
+                .AddEmbeddedNpsPlugin(manifest, plugin, pluginDirectory);
+
+            await using var host = builder.Build();
+            await host.StartAsync();
+
+            Assert.Equal("external", plugin.Config?.Name);
+            Assert.Equal(7, plugin.Config?.Count);
+        }
+        finally
+        {
+            Directory.Delete(pluginDirectory, recursive: true);
+            Directory.Delete(configDirectory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Invalid_config_fails_before_activation_and_is_visible_to_diagnostics()
     {
         var directory = CreateTempPluginDirectory(

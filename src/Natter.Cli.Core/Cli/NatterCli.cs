@@ -64,6 +64,9 @@ public static class NatterCli
         await using var host = builder.Build();
         await host.StartAsync(cancellationToken).ConfigureAwait(false);
 
+        if (options.OnHostStartedAsync is not null)
+            await options.OnHostStartedAsync(host.Services).ConfigureAwait(false);
+
         try
         {
             var runner = host.Services.GetRequiredService<CliRunner>();

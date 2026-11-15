@@ -4,6 +4,7 @@
   <Project Path="src/Natter.Domain/Natter.Domain.csproj" />
   <Project Path="src/Natter.Chat/Natter.Chat.csproj" />
   <Project Path="src/Natter.Plugin.Abstractions/Natter.Plugin.Abstractions.csproj" />
+  <Project Path="src/Natter.Plugin.Store/Natter.Plugin.Store.csproj" />
   <Project Path="src/Natter.Chat.Satori/Natter.Chat.Satori.csproj" />
   <Project Path="src/Natter.Application/Natter.Application.csproj" />
   <Project Path="src/Natter.Infrastructure/Natter.Infrastructure.csproj" />

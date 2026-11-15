@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Natter.Plugin.Store</RootNamespace>
+    <AssemblyName>Natter.Plugin.Store</AssemblyName>
+    <Description>Platform-neutral NPS plugin package validator and app-private plugin store.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Natter.Plugin.Abstractions/Natter.Plugin.Abstractions.csproj" />
+    <ProjectReference Include="../Natter.Abstractions/Natter.Abstractions.csproj" />
+  </ItemGroup>
+
+</Project>

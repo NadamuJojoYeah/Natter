@@ -15,10 +15,17 @@ internal sealed record NpsConfigLoadResult(
 /// <summary>Reads config.json/config.schema.json and validates the documented schema subset.</summary>
 internal static class NpsPluginConfigLoader
 {
-    public static NpsConfigLoadResult Load(PluginManifest manifest, string pluginDirectory)
+    public static NpsConfigLoadResult Load(PluginManifest manifest, string pluginDirectory, string? configDirectory = null)
     {
         var issues = new List<PluginConfigIssue>();
-        var configPath = Path.Combine(pluginDirectory, "config.json");
+        var embeddedConfigPath = Path.Combine(pluginDirectory, "config.json");
+        var externalConfigPath = string.IsNullOrWhiteSpace(configDirectory)
+            ? null
+            : Path.Combine(configDirectory, manifest.Id + ".json");
+
+        var configPath = externalConfigPath is not null && File.Exists(externalConfigPath)
+            ? externalConfigPath
+            : embeddedConfigPath;
         var configExists = File.Exists(configPath);
         var schemaPath = manifest.ConfigSchema is null
             ? null

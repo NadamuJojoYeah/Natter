@@ -16,11 +16,28 @@
     <PublishTrimmed>false</PublishTrimmed>
     <RunAOTCompilation>false</RunAOTCompilation>
     <AndroidLinkMode>None</AndroidLinkMode>
+    <NatterPluginMode Condition="'$(NatterPluginMode)' == ''">embedded</NatterPluginMode>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)' == 'DynamicPlugins'">
+    <NatterPluginMode>dynamic</NatterPluginMode>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(NatterPluginMode)' == 'dynamic'">
+    <DefineConstants>$(DefineConstants);NATTER_DYNAMIC_PLUGINS</DefineConstants>
+    <RunAOTCompilation>false</RunAOTCompilation>
+    <AndroidEnableProfiledAot>false</AndroidEnableProfiledAot>
+    <PublishTrimmed>false</PublishTrimmed>
+    <AndroidLinkMode>None</AndroidLinkMode>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="../Natter.Cli.Core/Natter.Cli.Core.csproj" />
     <ProjectReference Include="../Natter.Cli.Abstractions/Natter.Cli.Abstractions.csproj" />
+    <ProjectReference Include="../Natter.Plugin.Store/Natter.Plugin.Store.csproj" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(NatterPluginMode)' != 'dynamic'">
     <ProjectReference Include="../../samples/Natter.Sample.Plugin.Greetings/Natter.Sample.Plugin.Greetings.csproj" />
     <ProjectReference Include="../../samples/Natter.Sample.Plugin.Metrics/Natter.Sample.Plugin.Metrics.csproj" />
   </ItemGroup>

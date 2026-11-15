@@ -4,6 +4,8 @@ using Natter.Abstractions.Ports;
 using Natter.Cli.Core;
 using Natter.Infrastructure.Composition;
 using Natter.Infrastructure.Plugins;
+using Natter.Sample.Plugin.Greetings;
+using Natter.Sample.Plugin.Metrics;
 using Xunit;
 
 namespace Natter.Framework.Tests;
@@ -55,6 +57,30 @@ public sealed class PluginLoadingTests
             && adapter.Port.EndsWith(nameof(IGreetingPort), StringComparison.Ordinal));
 
         await host.StopAsync();
+    }
+
+    [Fact]
+    public async Task Embedded_nps_sample_manifests_are_loadable_on_android_profiles()
+    {
+        var builder = NatterApplicationBuilder.Create()
+            .AddNatterFramework()
+            .AddModule<CliCoreCompositionModule>()
+            .AddEmbeddedNpsPlugin(GreetingsNpsPlugin.Manifest, new GreetingsNpsPlugin())
+            .AddEmbeddedNpsPlugin(MetricsNpsPlugin.Manifest, new MetricsNpsPlugin());
+
+        await using var host = builder.Build();
+        await host.StartAsync();
+
+        var catalog = host.Services.GetRequiredService<IPluginCatalog>();
+        Assert.All(
+            catalog.Plugins,
+            plugin => Assert.Equal(PluginState.Activated, plugin.State));
+
+        var greeting = await host.Services.GetRequiredService<IGreetingPort>().GreetAsync("android");
+        Assert.Contains("greetings plugin adapter", greeting);
+
+        var registry = host.Services.GetRequiredService<CliCommandRegistry>();
+        Assert.True(registry.TryGet("metrics", out _));
     }
 
     [Fact]
