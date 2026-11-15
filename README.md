@@ -22,7 +22,8 @@ Natter 只交付**框架能力**：端口契约、组合根、插件加载、DI 
 - **多平台发布**：自包含单文件（win/linux/osx）+ Android APK；示例插件随发布目录部署或嵌入宿主。
 - **Runtime/Profile**：`profiles.json` 显式 provider 路由、SQLite 会话、`serve`/`health`、`--config-dir`/`--state-dir`、Tier 1/2 启动策略。
 - **Context/Memory**：host prompt/context/memory pipeline、SQLite `summaries`/`memory_items`、确定性摘要、显式 `remember`/`forget`、scope 隔离。
-- **测试**：232 个框架级测试覆盖聚合事件、Rx 总线、DI 管道、解析器、插件加载、CLI、NLMP 一致性与 NPS v1 插件内核；另有可选的 live 套件对真实 Discord 与 DeepSeek API 做分层联调（见 [真实 API 联调测试方案](docs/LIVE_TEST_PLAN.md)）。
+- **P4 Tier 1 UX**：Discord `/ask` `/remember` `/forget` `/memory` `/reset`，sample `memory.store` 插件，deploy/backup 示例。
+- **测试**：236 个框架级测试覆盖聚合事件、Rx 总线、DI 管道、解析器、插件加载、CLI、NLMP 一致性与 NPS v1 插件内核；另有可选的 live 套件对真实 Discord 与 DeepSeek API 做分层联调（见 [真实 API 联调测试方案](docs/LIVE_TEST_PLAN.md)）。
 
 ## 架构
 
@@ -88,6 +89,7 @@ Natter 只交付**框架能力**：端口契约、组合根、插件加载、DI 
 | `src/Natter.Chat.DingTalk` | 钉钉 transport | Stream WebSocket（gateway/ticket/ack/重连）+ callback parser + sessionWebhook 回复 |
 | `samples/Natter.Sample.Plugin.DingTalk` | 钉钉 NPS 插件 | `natter.transport.dingtalk` manifest/config/status |
 | `src/Natter.Feature.Ai.Spark` | 星火 provider | OpenAI-compatible `IChatClient` + shared responder |
+| `samples/Natter.Sample.Plugin.Memory` | memory.store 示例 | 最小 NPS memory 插件 + profile 选择 |
 | `src/Natter.Cli.Abstractions` | CLI 契约 | `IConsole`、命令/选项描述符、处理器 |
 | `src/Natter.Cli.Core` | CLI 内核 | 解析、注册表、内建命令、JSON/表格输出 |
 | `src/Natter.Cli` | 宿主 | Console 入口，发布为 `natter` / `natter.exe` |
@@ -169,6 +171,8 @@ natter <command> [arguments] [options]
 | `remember <text> [--scope]` | 显式、用户确认的长期记忆 | `remember "likes tea" --scope user --source ...` |
 | `forget <id|text>` | 删除显式记忆并失效 summary | `forget "likes tea"` |
 | `memory list [--limit]` | 查看当前 source/conversation/actor 可见记忆 | `memory list --json` |
+| `memory export [--output]` | 导出当前 scope memory（文件 0600） | `memory export --output memory.json` |
+| `memory import --file` | 导入并校验 scope/schema | `memory import --file memory.json` |
 | `plugins list [--failed] [--json]` | 已加载/失败的插件 |
 | `plugins inspect <directory> [--json]` | 只探测插件目录，不注册 |
 | `demo [--name] [--amount] [--times] [--json]` | 聚合 → 仓储 → 领域事件 → Rx 全链路 |
@@ -234,6 +238,7 @@ Android 产物位于 `artifacts/android/`。示例构建使用默认调试签名
 - [第二上游/消费者验证](docs/SECOND_ADAPTER_VALIDATION.md)：钉钉 + 星火的接入测试矩阵、边界与验收。
 - [P2 Runtime & Profile 开发文档](docs/P2_RUNTIME_PROFILE.md)：serve、profiles、provider 路由、SQLite 会话、health 与一等/二等公民策略。
 - [P3 Context & Memory 开发文档](docs/P3_CONTEXT_MEMORY.md)：Prompt/Context/Memory 契约、profile 扩展、SQLite 摘要/记忆、NPS contribution 与验收。
+- [P4 Tier 1 产品化](docs/P4_TIER1_PRODUCTIZATION.md)：Discord 命令 UX、memory 用户入口、DeepSeek 稳定性、serve 部署/备份/24h soak 与发布闸门。
 - [插件开发](docs/PLUGINS.md)：清单、适配器覆盖、CLI 命令、生命周期、嵌入模式。
 - [插件规范（NPS v1）](docs/PLUGIN_SPEC.md)：manifest、contribution、依赖图、Host API、配置/秘密、权限与激活回滚。
 - [Android 插件宿主](docs/ANDROID_PLUGIN_HOST.md)：embedded/dynamic 双发行、AOT off 动态加载、签名安装与回滚。

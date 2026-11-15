@@ -697,6 +697,8 @@ providerRequestId
 
 ### Phase 3：第二平台
 
+> P4 的产品化计划见 [P4 Tier 1 Productization](P4_TIER1_PRODUCTIZATION.md)。
+
 > 钉钉 + 星火的验证计划见 [第二上游/消费者验证](SECOND_ADAPTER_VALIDATION.md)。
 
 - 新 transport plugin；
