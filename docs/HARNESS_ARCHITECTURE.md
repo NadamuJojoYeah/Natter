@@ -676,6 +676,8 @@ providerRequestId
 
 ### Phase 1：生产化底座
 
+> P2 的具体开发规格见 [P2 Runtime & Profile Foundation](P2_RUNTIME_PROFILE.md)。
+
 - `serve`；
 - 配置目录/secret；
 - SQLite/文件 store；

@@ -44,3 +44,31 @@ public sealed class DiscordLiveFactAttribute : FactAttribute
                 : null;
     }
 }
+
+/// <summary>A live fact that needs a reachable iFlytek Spark MaaS key.</summary>
+public sealed class SparkLiveFactAttribute : FactAttribute
+{
+    public SparkLiveFactAttribute()
+    {
+        var settings = LiveSettings.Current;
+        Skip = !settings.Enabled
+            ? $"Live tests are opt-in: set {LiveSettings.EnableVariable}=1. {settings.SkipReason}"
+            : !settings.HasSpark
+                ? "SPARK_API_KEY is not configured."
+                : null;
+    }
+}
+
+/// <summary>A live fact that needs DingTalk Stream credentials.</summary>
+public sealed class DingTalkLiveFactAttribute : FactAttribute
+{
+    public DingTalkLiveFactAttribute()
+    {
+        var settings = LiveSettings.Current;
+        Skip = !settings.Enabled
+            ? $"Live tests are opt-in: set {LiveSettings.EnableVariable}=1. {settings.SkipReason}"
+            : !settings.HasDingTalk
+                ? "DINGTALK_CLIENT_ID / DINGTALK_CLIENT_SECRET are not configured."
+                : null;
+    }
+}

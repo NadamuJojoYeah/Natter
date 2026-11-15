@@ -18,6 +18,10 @@ public sealed class LiveSettings
         string guildId,
         string channelId,
         string botUserId,
+        string sparkApiKey,
+        string dingTalkClientId,
+        string dingTalkClientSecret,
+        string dingTalkBotId,
         string? skipReason)
     {
         Enabled = enabled;
@@ -26,6 +30,10 @@ public sealed class LiveSettings
         GuildId = guildId;
         ChannelId = channelId;
         BotUserId = botUserId;
+        SparkApiKey = sparkApiKey;
+        DingTalkClientId = dingTalkClientId;
+        DingTalkClientSecret = dingTalkClientSecret;
+        DingTalkBotId = dingTalkBotId;
         SkipReason = skipReason;
     }
 
@@ -51,6 +59,19 @@ public sealed class LiveSettings
 
     public bool HasDeepSeek => !string.IsNullOrWhiteSpace(ApiKey);
 
+    public string SparkApiKey { get; }
+
+    public string DingTalkClientId { get; }
+
+    public string DingTalkClientSecret { get; }
+
+    public string DingTalkBotId { get; }
+
+    public bool HasSpark => !string.IsNullOrWhiteSpace(SparkApiKey);
+
+    public bool HasDingTalk => !string.IsNullOrWhiteSpace(DingTalkClientId)
+                               && !string.IsNullOrWhiteSpace(DingTalkClientSecret);
+
     public static string RepoRoot => FindRepoRoot();
 
     public static string ArtifactsRoot => Path.Combine(RepoRoot, "artifacts", "live");
@@ -67,7 +88,9 @@ public sealed class LiveSettings
         {
             reason.Append($"{EnableVariable}=1 not set; live tests are opt-in. ");
             ReadDotEnv(values);
-            return new LiveSettings(false, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty, reason.ToString());
+            return new LiveSettings(
+                false, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty,
+                string.Empty, string.Empty, string.Empty, string.Empty, reason.ToString());
         }
 
         foreach (var name in new[]
@@ -77,6 +100,10 @@ public sealed class LiveSettings
                      "DISCORD_TEST_GUILD_ID",
                      "DISCORD_TEST_CHANNEL_ID",
                      "DISCORD_BOT_USER_ID",
+                     "SPARK_API_KEY",
+                     "DINGTALK_CLIENT_ID",
+                     "DINGTALK_CLIENT_SECRET",
+                     "DINGTALK_BOT_ID",
                  })
         {
             var value = Environment.GetEnvironmentVariable(name);
@@ -84,7 +111,9 @@ public sealed class LiveSettings
                 values[name] = value;
         }
 
-        if (!values.ContainsKey("DEEPSEEK_API_KEY") || !values.ContainsKey("DISCORD_BOT_TOKEN"))
+        if (!values.ContainsKey("DEEPSEEK_API_KEY")
+            || !values.ContainsKey("DISCORD_BOT_TOKEN")
+            || !values.ContainsKey("SPARK_API_KEY"))
             ReadDotEnv(values);
 
         static string Get(Dictionary<string, string> source, string name)
@@ -97,29 +126,54 @@ public sealed class LiveSettings
             Get(values, "DISCORD_TEST_GUILD_ID"),
             Get(values, "DISCORD_TEST_CHANNEL_ID"),
             Get(values, "DISCORD_BOT_USER_ID"),
+            Get(values, "SPARK_API_KEY"),
+            Get(values, "DINGTALK_CLIENT_ID"),
+            Get(values, "DINGTALK_CLIENT_SECRET"),
+            Get(values, "DINGTALK_BOT_ID"),
             reason.Length == 0 ? null : reason.ToString());
+    }
+
+    /// <summary>
+    /// Credential file lookup order: NATTER_LIVE_ENV, then the user's private config
+    /// (~/.config/natter/live.env), then the legacy in-repo artifacts/live/.env.
+    /// </summary>
+    private static IEnumerable<string> DotEnvCandidates()
+    {
+        var explicitPath = Environment.GetEnvironmentVariable("NATTER_LIVE_ENV");
+        if (!string.IsNullOrWhiteSpace(explicitPath))
+            yield return explicitPath;
+
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        if (!string.IsNullOrWhiteSpace(home))
+            yield return Path.Combine(home, ".config", "natter", "live.env");
+
+        yield return Path.Combine(FindRepoRoot(), "artifacts", "live", ".env");
     }
 
     private static void ReadDotEnv(Dictionary<string, string> values)
     {
-        var path = Path.Combine(FindRepoRoot(), "artifacts", "live", ".env");
-        if (!File.Exists(path))
-            return;
-
-        foreach (var raw in File.ReadAllLines(path))
+        foreach (var path in DotEnvCandidates())
         {
-            var line = raw.Trim();
-            if (line.Length == 0 || line.StartsWith('#'))
+            if (!File.Exists(path))
                 continue;
 
-            var separator = line.IndexOf('=');
-            if (separator <= 0)
-                continue;
+            foreach (var raw in File.ReadAllLines(path))
+            {
+                var line = raw.Trim();
+                if (line.Length == 0 || line.StartsWith('#'))
+                    continue;
 
-            var name = line[..separator].Trim();
-            var value = line[(separator + 1)..].Trim().Trim('"').Trim('\'');
-            if (name.Length > 0 && !values.ContainsKey(name))
-                values[name] = value;
+                var separator = line.IndexOf('=');
+                if (separator <= 0)
+                    continue;
+
+                var name = line[..separator].Trim();
+                var value = line[(separator + 1)..].Trim().Trim('"').Trim('\'');
+                if (name.Length > 0 && !values.ContainsKey(name))
+                    values[name] = value;
+            }
+
+            return;
         }
     }
 

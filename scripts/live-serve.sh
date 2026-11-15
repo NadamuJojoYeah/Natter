@@ -15,7 +15,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ENV_FILE="${NATTER_LIVE_ENV:-$ROOT/artifacts/live/.env}"
+ENV_FILE="${NATTER_LIVE_ENV:-$HOME/.config/natter/live.env}"
+if [[ ! -f "$ENV_FILE" ]]; then ENV_FILE="$ROOT/artifacts/live/.env"; fi
 LIVE_DIR="${NATTER_LIVE_DIR:-$ROOT/artifacts/live}"
 PLUGIN_ROOT="$LIVE_DIR/plugins"
 SERVE_DIR="$LIVE_DIR/serve"

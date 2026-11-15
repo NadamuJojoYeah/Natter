@@ -24,6 +24,8 @@
     <ProjectReference Include="../../src/Natter.Chat/Natter.Chat.csproj" />
     <ProjectReference Include="../../src/Natter.Chat.Discord/Natter.Chat.Discord.csproj" />
     <ProjectReference Include="../../src/Natter.Feature.Ai.DeepSeek/Natter.Feature.Ai.DeepSeek.csproj" />
+    <ProjectReference Include="../../src/Natter.Feature.Ai.Spark/Natter.Feature.Ai.Spark.csproj" />
+    <ProjectReference Include="../../src/Natter.Chat.DingTalk/Natter.Chat.DingTalk.csproj" />
     <ProjectReference Include="../../src/Natter.Infrastructure/Natter.Infrastructure.csproj" />
     <ProjectReference Include="../../src/Natter.Cli.Core/Natter.Cli.Core.csproj" />
     <ProjectReference Include="../../src/Natter.Plugin.Abstractions/Natter.Plugin.Abstractions.csproj" />

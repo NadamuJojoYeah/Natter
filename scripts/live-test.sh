@@ -7,13 +7,16 @@
 #   scripts/live-test.sh ingress         # real gateway inbound -> NLMP
 #   scripts/live-test.sh e2e             # NLMP/file-plugin -> DeepSeek -> Discord
 #   scripts/live-test.sh deploy          # separate CLI process, file plugins, secrets
+#   scripts/live-test.sh spark           # iFlytek Spark MaaS (real API)
+#   scripts/live-test.sh dingtalk        # DingTalk Stream handshake (real gateway)
 #   scripts/live-test.sh manual          # requires a human message in Discord
 #
 # Credentials come from artifacts/live/.env (git-ignored) or the process environment.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ENV_FILE="${NATTER_LIVE_ENV:-$ROOT/artifacts/live/.env}"
+ENV_FILE="${NATTER_LIVE_ENV:-$HOME/.config/natter/live.env}"
+if [[ ! -f "$ENV_FILE" ]]; then ENV_FILE="$ROOT/artifacts/live/.env"; fi
 LAYER="${1:-all}"
 
 if [[ -f "$ENV_FILE" ]]; then
@@ -41,6 +44,8 @@ case "$LAYER" in
   ingress)  FILTER="FullyQualifiedName~GatewayIngressLiveTests" ;;
   e2e)      FILTER="FullyQualifiedName~OrchestrationLiveTests|FullyQualifiedName~FilePluginE2ELiveTests|FullyQualifiedName~RealInboundMentionLiveTests" ;;
   deploy)   FILTER="FullyQualifiedName~DeploymentCliLiveTests" ;;
+  spark)    FILTER="FullyQualifiedName~SparkLiveTests" ;;
+  dingtalk) FILTER="FullyQualifiedName~DingTalkStreamLiveTests" ;;
   manual)
     export NATTER_LIVE_MANUAL=1
     FILTER="FullyQualifiedName~ManualGateLiveTests" ;;
