@@ -77,6 +77,7 @@ plugins/
     ├── config.json                 # 用户配置（宿主/用户维护，可不存在）
     ├── lib/
     │   ├── Natter.Plugin.Discord.dll
+    │   ├── Natter.Plugin.Discord.deps.json
     │   └── ...私有依赖
     ├── README.md
     └── LICENSE
@@ -87,6 +88,8 @@ plugins/
 - `plugin.json` MUST 位于插件目录根部。
 - `entry.assembly` MUST 是插件目录内的相对路径；v1 推荐放在 `lib/`。
 - 插件私有依赖 MUST 放在插件目录内；框架共享程序集由宿主提供。
+- 入口程序集放在 `lib/` 时 SHOULD 同时包含 `<AssemblyName>.deps.json`，让 `AssemblyDependencyResolver` 看到依赖图；无 deps.json 的目录加载仅作为兼容兜底并产生诊断。
+- 共享程序集按显式契约白名单（`PluginContractAssemblies`）判断；不要按 `Natter.*` / `Microsoft.Extensions.*` 前缀共享 adapter/provider。
 - 插件目录 MUST NOT 包含 token、keystore、私钥或用户隐私数据。
 - `config.json` SHOULD 由宿主或用户维护，插件不应在运行时回写 manifest。
 - 插件目录名 SHOULD 与 manifest `id` 一致；不一致不阻断加载，但会产生诊断 warning。

@@ -19,7 +19,7 @@ Natter 只交付**框架能力**：端口契约、组合根、插件加载、DI 
 - **插件机制**：目录扫描、`plugin.json` 清单、可回收 `AssemblyLoadContext`、端口适配器覆盖、CLI 命令贡献、生命周期订阅。
 - **CLI 内核**：平台无关的命令注册表、解析器、帮助、JSON 输出、`exec` 同宿主命令链；Console 与 Android 宿主共用。
 - **多平台发布**：自包含单文件（win/linux/osx）+ Android APK；示例插件随发布目录部署或嵌入宿主。
-- **测试**：169 个框架级测试覆盖聚合事件、Rx 总线、DI 管道、解析器、插件加载、CLI、NLMP 一致性与 NPS v1 插件内核。
+- **测试**：175 个框架级测试覆盖聚合事件、Rx 总线、DI 管道、解析器、插件加载、CLI、NLMP 一致性与 NPS v1 插件内核；另有可选的 live 套件对真实 Discord 与 DeepSeek API 做分层联调（见 [真实 API 联调测试方案](docs/LIVE_TEST_PLAN.md)）。
 
 ## 架构
 
@@ -88,6 +88,7 @@ Natter 只交付**框架能力**：端口契约、组合根、插件加载、DI 
 | `samples/Natter.Sample.Plugin.Greetings` | 插件 | 覆盖 `IGreetingPort`、贡献 `greet` 命令、订阅事件 |
 | `samples/Natter.Sample.Plugin.Metrics` | 插件 | 独立消费 Rx 流、贡献 `metrics` 命令 |
 | `tests/Natter.Framework.Tests` | 测试 | xUnit 框架测试 |
+| `tests/Natter.Live.Tests` | 测试 | 可选 live 集成测试：真实 DeepSeek API、Discord 网关/REST、端到端与独立 CLI 部署 |
 
 ## 快速开始
 
@@ -107,6 +108,10 @@ dotnet run --project src/Natter.Cli -- satori status --features message.update,m
 dotnet run --project src/Natter.Cli -- exec "demo --times 3" "metrics" "greetings recent"
 
 dotnet test tests/Natter.Framework.Tests/Natter.Framework.Tests.csproj
+
+# 可选：对真实 Discord / DeepSeek API 的联调测试（需要 artifacts/live/.env）
+cp tests/Natter.Live.Tests/.env.example artifacts/live/.env && chmod 600 artifacts/live/.env
+scripts/live-test.sh all
 ```
 
 构建时两个示例插件会自动复制到 `src/Natter.Cli/bin/<Configuration>/net10.0/plugins/<id>/`，CLI 启动即加载。
@@ -206,6 +211,8 @@ Android 产物位于 `artifacts/android/`。示例构建使用默认调试签名
 ## 文档
 
 - [开发指南](docs/DEVELOPMENT.md)：环境、日常循环、扩展 recipe、DI 约定、测试与调试。
+- [真实 API 联调测试方案](docs/LIVE_TEST_PLAN.md)：分层测试矩阵、真实执行结果、部署级验证与问题登记。
+- [测试记录](docs/testing/README.md)：每轮测试的时间、内容、具体问题与临时改动登记（测试不负责修复）。
 - [轻量消息协议模型 (NLMP)](docs/NLMP.md)：源/会话/消息/事件/命令/能力模型，以及 Satori 映射。
 - [架构设计](docs/ARCHITECTURE.md)：六边形映射、组合根顺序、Rx 语义、插件加载器。
 - [插件开发](docs/PLUGINS.md)：清单、适配器覆盖、CLI 命令、生命周期、嵌入模式。

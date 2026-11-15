@@ -1,8 +1,8 @@
 # Natter Discord Transport Plugin Design
 
-> **状态**：Accepted design · Phase 1/2 核心已实现（消息上游、typing、编辑/删除、slash interaction、状态命令；真实网关集成待验证）  
-> **日期**：2026-11-15  
-> **定位**：NPS v1 的 `transport` 插件，只负责 Discord 连接、事件映射、命令发送和能力声明，不包含 AI、prompt、记忆或业务规则。  
+> **状态**：Accepted design · Phase 1/2 核心已实现；真实 Discord 网关/REST 联调已跑通（Conditional Pass；BUG-001/002 未关闭，见 [处置记录](testing/2026-11-15-live-deepseek-discord-response.md)）
+> **日期**：2026-11-15
+> **定位**：NPS v1 的 `transport` 插件，只负责 Discord 连接、事件映射、命令发送和能力声明，不包含 AI、prompt、记忆或业务规则。
 > **关联**：[Natter Plugin Specification v1](PLUGIN_SPEC.md)、[NLMP](NLMP.md)、[插件开发指南](PLUGINS.md)
 
 ---
@@ -449,7 +449,7 @@ if (chatEvent is InteractionCreatedEvent interaction)
 
 或者引入专门的 `IChatInteractionResponder`，但 v1 用 `IChatResponder` 已经足够。
 
-`ChatCommandFactory.Respond` 会使用 `Interaction.ReplyToken` 生成 `InteractionRespondCommand`。  
+`ChatCommandFactory.Respond` 会使用 `Interaction.ReplyToken` 生成 `InteractionRespondCommand`。
 在 core 路由补好之前，Discord 插件只能交付消息/@mention 路径，不要宣称 slash 已完成。
 
 ---
@@ -531,6 +531,16 @@ new Capabilities
 - NPS permissions 是治理声明，不是进程内安全沙箱；Discord 插件是可信第一方插件。
 
 ---
+
+### 12.1 bot 自发消息与三层过滤
+
+真实 Discord 测试确认：bot 会收到自己发送的 `MESSAGE_CREATE`。若 `ignoreSelf=false`，AI 回复可能被当成新输入，形成自问自答。默认安全行为是三层过滤：
+
+1. `DiscordOptions.IgnoreBots = true`：过滤所有 bot（包括自己）消息；
+2. `DiscordOptions.IgnoreSelf = true`：按 `Source.SelfId` 过滤自己；
+3. `ChatOrchestrationOptions.IgnoreSelfMessages = true`：即使上游放行，orchestrator 也不把 self 消息交给 responder。
+
+配置 schema 保留 `ignoreBots` / `ignoreSelf` 开关，但默认 true，并标注关闭风险。守护测试覆盖上游 self 过滤与 orchestrator self 过滤。
 
 ## 13. 诊断
 
@@ -692,5 +702,5 @@ new Capabilities
 
 ## 19. 一句话结论
 
-**Discord 插件只做 transport：`chat.upstream` + `IDiscordTransport` + NLMP 映射 + 能力声明。**  
+**Discord 插件只做 transport：`chat.upstream` + `IDiscordTransport` + NLMP 映射 + 能力声明。**
 **先补 `InteractionCreatedEvent` 路由，再谈 slash；先保证 `selfId`、权限、secret 和 NPS 生命周期，再谈 AI。**

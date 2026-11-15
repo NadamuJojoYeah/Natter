@@ -1,8 +1,8 @@
 # Natter AI Provider Design（Microsoft.Extensions.AI + DeepSeek）
 
-> **状态**：Accepted design · Phase 1/2 核心已实现（M.E.AI IChatClient、DeepSeek adapter、responder、内存历史、gate、幂等、ai status；真实 API 联合验证待补）  
-> **日期**：2026-11-15  
-> **定位**：Natter 的 AI provider/responder 设计。DeepSeek 作为第一个真实模型 provider；`Microsoft.Extensions.AI` 作为模型调用抽象；NPS 负责插件、权限、秘密和生命周期。  
+> **状态**：Accepted design · Phase 1/2 核心已实现；真实 DeepSeek + Discord 联调已跑通（Conditional Pass；BUG-001/002 未关闭，见 [处置记录](testing/2026-11-15-live-deepseek-discord-response.md)）
+> **日期**：2026-11-15
+> **定位**：Natter 的 AI provider/responder 设计。DeepSeek 作为第一个真实模型 provider；`Microsoft.Extensions.AI` 作为模型调用抽象；NPS 负责插件、权限、秘密和生命周期。
 > **关联**：[NPS v1](PLUGIN_SPEC.md)、[NLMP](NLMP.md)、[Discord transport 设计](DISCORD_PLUGIN_DESIGN.md)
 
 ---
@@ -44,9 +44,9 @@
 
 关键含义：
 
-1. **不要使用旧的 `deepseek-chat` / `deepseek-reasoner` 作为默认模型名**。  
+1. **不要使用旧的 `deepseek-chat` / `deepseek-reasoner` 作为默认模型名**。
    当前应使用 `deepseek-flash` 或 `deepseek-v4-pro`，并允许配置覆盖。
-2. **不要省略 thinking 配置**。  
+2. **不要省略 thinking 配置**。
    不传 `thinking` 且不传 `reasoning_effort` 时默认开启思考；Discord 聊天会变慢且成本更高。v1 应显式 `thinking: disabled`。
 3. **思考模式下 `temperature` 无效**，`presence_penalty` / `frequency_penalty` 已 deprecated。不要依赖这些参数。
 4. **思考 + tools 的历史轮次必须回传 `reasoning_content`**，否则可能 400。标准 OpenAI 消息模型不保证这一点，因此 v1 不开 tools。
@@ -112,7 +112,7 @@
 
 ### 2.2 不建议 Semantic Kernel
 
-Semantic Kernel 有自己的 kernel/plugin/agent/planner 体系。  
+Semantic Kernel 有自己的 kernel/plugin/agent/planner 体系。
 Natter 已经有 NPS plugin system 和 `IChatResponder`，再引入 SK 的插件模型会产生两套扩展点。
 
 M.E.AI 更轻，只负责模型调用抽象；这正合适。
@@ -279,6 +279,9 @@ Natter.Feature.Ai.Responder (chat.responder)
   "historyMaxMessages": 20,
   "historyMaxCharacters": 24000,
   "timeoutSeconds": 60,
+  "maxRetries": 2,
+  "retryBaseDelayMs": 250,
+  "retryMaxDelayMs": 2000,
 
   "streaming": false,
   "tools": []
@@ -299,13 +302,15 @@ Natter.Feature.Ai.Responder (chat.responder)
 | `maxOutputTokens` | 限制输出和成本 |
 | `historyMaxMessages` | 历史消息条数上限 |
 | `historyMaxCharacters` | 历史字符数上限 |
-| `timeoutSeconds` | HTTP 超时 |
+| `timeoutSeconds` | 单次 HTTP 超时 |
+| `maxRetries` | 可重试错误的最大重试次数（0–5，默认 2） |
+| `retryBaseDelayMs` / `retryMaxDelayMs` | 指数退避基数/上限；429 的 Retry-After 优先并受上限约束 |
 | `streaming` | v1 固定 false；后续再开 |
 | `tools` | v1 固定空；开启需要处理 reasoning_content 回传 |
 
 ### 6.2 默认关闭 thinking
 
-DeepSeek 文档明确：不传 `thinking` 且不传 `reasoning_effort` 时默认开启思考模式。  
+DeepSeek 文档明确：不传 `thinking` 且不传 `reasoning_effort` 时默认开启思考模式。
 对 Discord 聊天，这通常意味着：
 
 - 首 token 更慢；
@@ -480,7 +485,7 @@ InteractionCreatedEvent
   → ChatCommandFactory.Respond(source, interaction, content)
 ```
 
-Discord transport 已经 `DeferAsync`；AI 慢一点可以 `FollowupAsync`。  
+Discord transport 已经 `DeferAsync`；AI 慢一点可以 `FollowupAsync`。
 Interaction token 有过期时间；超时返回友好错误。
 
 ### 8.3 Typing
@@ -580,9 +585,10 @@ public void OnNext(ChatEvent value)
 ### 10.3 限流
 
 - 每个用户/频道限制请求频率；
-- DeepSeek 429 退避；
-- Discord 发送侧已有 `ChatCommandDispatcher` 和上游限流；
-- 不要让 AI 重试风暴打爆 Discord。
+- DeepSeek 429/5xx/网络/超时有界重试：默认最多 2 次，指数退避 + jitter；401/402/400/content_filter 不重试；
+- 重试发生在返回用户可见输出之前，responder 只生成一条回复；
+- 重试耗尽后由 responder 返回统一 unavailable fallback；
+- Discord 发送侧已有 `ChatCommandDispatcher` 和上游限流；不要让 AI 重试风暴打爆 Discord。
 
 ---
 
@@ -604,7 +610,7 @@ v1：
 
 ### 11.2 Tools
 
-v1 不做。  
+v1 不做。
 后续用 M.E.AI `AIFunctionFactory` + `UseFunctionInvocation`，但必须：
 
 - Natter tool 权限/审计；
@@ -615,7 +621,7 @@ v1 不做。
 
 ### 11.3 Streaming
 
-v1 不做。  
+v1 不做。
 后续：
 
 - M.E.AI `GetStreamingResponseAsync`；
@@ -629,6 +635,7 @@ v1 不做。
 ## 12. 安全
 
 - Discord 消息是不可信输入；prompt injection 由 system prompt/策略/工具权限共同处理；
+- Discord bot 会收到自己发送的消息；默认三层过滤（IgnoreBots / IgnoreSelf / IgnoreSelfMessages）必须保持开启，否则 AI 可能自问自答；
 - 不把 Discord 用户文本拼进 system prompt；
 - 限制用户消息长度、历史长度、输出 token；
 - API key 只从 `IPluginSecrets` 读取，不进入日志、异常、manifest、config 样例；
@@ -782,6 +789,7 @@ CI 不调用真实 DeepSeek。
 - [x] slash → InteractionRespondCommand；
 - [x] 历史裁剪、并发 gate、幂等生效；
 - [x] 401/402/429/5xx/timeout 有结构化错误；
+- [x] 429/5xx/网络/超时有界重试，401/402/400 不重试；
 - [x] usage 有记录，reasoning_content 不输出；
 - [x] fake `IChatClient` / fake HTTP 测试全绿；
 - [ ] 真实 DeepSeek + fake Discord 通过（需要真实 key，CI 不调用）；
@@ -818,7 +826,7 @@ CI 不调用真实 DeepSeek。
 | §7 IChatClient | 自定义 `DeepSeekChatClient`；`POST {baseUrl}/chat/completions`；M.E.AI `ChatResponse`/`UsageDetails` |
 | §8 Responder | `DeepSeekResponder`：普通消息、slash、replyTo、历史、gate、幂等、fallback |
 | §9 历史 | `DeepSeekConversationStore`：内存、条数/字符裁剪、source+conversation key |
-| §10 并发 | `DeepSeekConversationGate`：per-conversation 串行 + 全局并发上限；短期 processed/inflight 集 |
+| §10 并发 | `DeepSeekConversationGate`：per-conversation 串行 + 全局并发上限；短期 processed/inflight 集；`DeepSeekChatClient` 有界重试/退避 |
 | §11 thinking/tools/streaming | thinking disabled 默认；reasoning_content 丢弃；tools/streaming 明确拒绝 |
 | §12 安全 | API key 仅 secret；不记录 prompt/response/key；错误脱敏 |
 | §13 诊断 | `ai status [--json]`：model/thinking、请求/错误、p50/p95、token/cache |
@@ -829,7 +837,7 @@ CI 不调用真实 DeepSeek。
 - fake HTTP 验证请求 body、Authorization、thinking 开关、usage/reasoning 隔离、401/402/429/5xx/timeout；
 - fake `IChatClient` 验证消息/slash、历史裁剪、gate 串行、幂等、fallback；
 - NPS 全链路：插件加载、config/secret、`ChatOrchestrator` 自动调用 responder、`InMemoryChatUpstream` 收到回复、`ai status` 命令；
-- 169 个框架级测试全部通过。
+- 175 个框架级测试全部通过（含 550/5xx 重试、401 不重试、自发消息三层过滤、加载上下文与 deps staging 守护）。
 
 ### 18.3 未交付
 
@@ -842,5 +850,5 @@ CI 不调用真实 DeepSeek。
 
 ## 19. 一句话结论
 
-**用 Microsoft.Extensions.AI 做模型抽象，用自定义 `DeepSeekChatClient` 做 DeepSeek 适配，用 `chat.responder` 做业务。**  
+**用 Microsoft.Extensions.AI 做模型抽象，用自定义 `DeepSeekChatClient` 做 DeepSeek 适配，用 `chat.responder` 做业务。**
 第一版只做非思考、非流式、无 tools 的 DeepSeek responder；先 fake 测试，再真实 API，最后真实 Discord。不要用 OpenAI connector 假装自己已经完整支持 DeepSeek。

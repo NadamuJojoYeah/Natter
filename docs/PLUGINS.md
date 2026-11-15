@@ -256,7 +256,9 @@ my-plugin/
 └── <plugin-private-dependencies>.dll
 ```
 
-框架程序集（`Natter.*`、`Microsoft.Extensions.*`、`System.*`、`System.Reactive*`）由默认 `AssemblyLoadContext` 共享，**不要**在插件目录重复携带不同版本，否则会出现类型身份冲突。
+只有**契约程序集**（`Natter.Abstractions`、`Natter.Plugin.Abstractions`、`Natter.Chat`、`Natter.Application`、`Natter.Domain`、`Natter.Cli.Abstractions`）以及宿主明确拥有的 `Microsoft.Extensions.DependencyInjection.Abstractions` / `Logging.Abstractions` / `System.Reactive` 由默认 `AssemblyLoadContext` 共享。插件 adapter（如 `Natter.Chat.Discord`）、provider（如 `Natter.Feature.Ai.DeepSeek`）、`Discord.Net.*`、`Microsoft.Extensions.AI*` 属于插件私有依赖，应放在 `lib/`。
+
+插件包必须把入口程序集、`<AssemblyName>.deps.json` 和私有依赖放在 `lib/`；设置 `<NpsPlugin>true</NpsPlugin>` 的工程会通过共享的 [Natter.Plugin.targets](../build/Natter.Plugin.targets) 自动 staging。无 deps.json 的纯目录加载仍支持按文件名兜底，但会记录解析诊断。
 
 ## 8. 嵌入插件
 
