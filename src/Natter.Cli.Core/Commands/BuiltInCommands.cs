@@ -129,7 +129,8 @@ internal static class BuiltInCommands
             Description = "List loaded/failed plugins.",
             Options =
             [
-                new CliOptionDescriptor("failed", "Only show plugins that failed to load."),
+                new CliOptionDescriptor("failed", "Only show plugins that are not active."),
+                new CliOptionDescriptor("detail", "Include NPS kind and host API columns."),
                 JsonOption,
             ],
             Origin = Origin,
@@ -143,6 +144,48 @@ internal static class BuiltInCommands
             Options = [JsonOption],
             Origin = Origin,
             HandlerFactory = services => services.GetRequiredService<PluginsInspectCommand>(),
+        },
+        new CliCommandDescriptor
+        {
+            Name = "plugins graph",
+            Description = "Show the NPS dependency/order graph (nodes and edges).",
+            Options = [JsonOption],
+            Origin = Origin,
+            HandlerFactory = services => services.GetRequiredService<PluginsGraphCommand>(),
+        },
+        new CliCommandDescriptor
+        {
+            Name = "plugins doctor",
+            Description = "Show detailed manifest/config/permission/activation diagnosis for one plugin.",
+            Arguments = [new CliArgumentDescriptor("plugin-id", "Plugin id.", Required: true)],
+            Options = [JsonOption],
+            Origin = Origin,
+            HandlerFactory = services => services.GetRequiredService<PluginsDoctorCommand>(),
+        },
+        new CliCommandDescriptor
+        {
+            Name = "plugins contributions",
+            Description = "List declared/staged/active NPS contributions.",
+            Options = [JsonOption],
+            Origin = Origin,
+            HandlerFactory = services => services.GetRequiredService<PluginsContributionsCommand>(),
+        },
+        new CliCommandDescriptor
+        {
+            Name = "plugins permissions",
+            Description = "List requested/granted/denied plugin permissions.",
+            Options = [JsonOption],
+            Origin = Origin,
+            HandlerFactory = services => services.GetRequiredService<PluginsPermissionsCommand>(),
+        },
+        new CliCommandDescriptor
+        {
+            Name = "plugins config validate",
+            Description = "Validate plugin config.json against its declared schema.",
+            Arguments = [new CliArgumentDescriptor("plugin-id", "Plugin id.", Required: true)],
+            Options = [JsonOption],
+            Origin = Origin,
+            HandlerFactory = services => services.GetRequiredService<PluginsConfigValidateCommand>(),
         },
         new CliCommandDescriptor
         {

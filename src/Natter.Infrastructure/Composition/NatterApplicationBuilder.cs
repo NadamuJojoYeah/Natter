@@ -6,6 +6,8 @@ using Natter.Abstractions.Ports;
 using Natter.Infrastructure.Chat;
 using Natter.Infrastructure.Modules;
 using Natter.Infrastructure.Plugins;
+using Natter.Infrastructure.Plugins.Nps;
+using Natter.Plugin.Abstractions;
 using Natter.Application;
 
 namespace Natter.Infrastructure.Composition;
@@ -21,13 +23,17 @@ public sealed class NatterApplicationBuilder
     private readonly PluginCatalog _pluginCatalog = new();
     private readonly List<ICompositionModule> _modules = [];
     private readonly List<IPluginModule> _embeddedPlugins = [];
+    private readonly List<(PluginManifest Manifest, INatterPlugin Plugin, string? Directory)> _embeddedNpsPlugins = [];
     private readonly List<Action<IServiceCollection>> _serviceConfigurations = [];
+    private readonly NpsPluginOptions _npsOptions = new();
+    private readonly NpsPluginRuntime _npsRuntime;
     private readonly CompositionOptions _options = new();
     private Action<ILoggingBuilder>? _loggingConfiguration;
     private bool _built;
 
     private NatterApplicationBuilder()
     {
+        _npsRuntime = new NpsPluginRuntime(_npsOptions, _pluginCatalog, _adapterRegistry);
     }
 
     public static NatterApplicationBuilder Create() => new();
@@ -73,7 +79,32 @@ public sealed class NatterApplicationBuilder
         return this;
     }
 
-    /// <summary>Registers a plugin compiled into the host instead of loaded from disk.</summary>
+    /// <summary>Configures NPS v1 host policy (trust, permissions, secrets).</summary>
+    public NatterApplicationBuilder ConfigurePlugins(Action<NpsPluginOptions> configure)
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+        configure(_npsOptions);
+        return this;
+    }
+
+    /// <summary>Registers an NPS v1 plugin compiled into the host instead of loaded from disk.</summary>
+    public NatterApplicationBuilder AddEmbeddedNpsPlugin(
+        PluginManifest manifest,
+        INatterPlugin plugin,
+        string? directory = null)
+    {
+        ArgumentNullException.ThrowIfNull(manifest);
+        ArgumentNullException.ThrowIfNull(plugin);
+        _embeddedNpsPlugins.Add((manifest, plugin, directory));
+        return this;
+    }
+
+    public NatterApplicationBuilder AddEmbeddedNpsPlugin<TPlugin>()
+        where TPlugin : INatterPlugin, new()
+        => throw new NotSupportedException(
+            "Embedded NPS plugins need an explicit manifest: AddEmbeddedNpsPlugin(manifest, plugin).");
+
+    /// <summary>Registers a legacy plugin compiled into the host instead of loaded from disk.</summary>
     public NatterApplicationBuilder AddEmbeddedPlugin<TPlugin>()
         where TPlugin : IPluginModule, new()
         => AddEmbeddedPlugin(new TPlugin());
@@ -126,7 +157,39 @@ public sealed class NatterApplicationBuilder
         _services.AddSingleton<IPluginCatalog>(_pluginCatalog);
         _services.AddSingleton<IPluginProbe, PluginProbe>();
 
-        var loadedPlugins = LoadPluginDirectories();
+        var scan = ScanPlugins();
+        var loadedPlugins = scan.LegacyPlugins;
+
+        foreach (var failure in scan.Failures)
+            _pluginCatalog.RegisterDescriptor(failure);
+
+        foreach (var embedded in _embeddedNpsPlugins)
+        {
+            var directory = Path.GetFullPath(embedded.Directory ?? AppContext.BaseDirectory);
+            var validation = PluginManifestReader.ValidateManifest(embedded.Manifest, directory);
+            if (validation.Errors.Count > 0)
+            {
+                var message = string.Join("; ", validation.Errors.Select(issue => $"{issue.Path}: {issue.Message}"));
+                _pluginCatalog.RegisterDescriptor(new PluginDescriptor(
+                    embedded.Manifest.Id,
+                    embedded.Manifest.Name,
+                    embedded.Manifest.Version,
+                    "<embedded>",
+                    directory,
+                    PluginState.Failed,
+                    message,
+                    embedded.Manifest.Capabilities,
+                    embedded.Manifest.Description,
+                    IsDynamic: true,
+                    Kind: embedded.Manifest.Kind.ToString().ToLowerInvariant(),
+                    HostApi: embedded.Manifest.HostApi,
+                    ErrorDetail: new PluginErrorDescriptor("manifest", "manifest-invalid", message)));
+                continue;
+            }
+
+            scan.Candidates.Add(NpsPluginCandidate.FromEmbedded(embedded.Manifest, embedded.Plugin, directory));
+        }
+
         var compositionContext = new CompositionContext
         {
             Options = _options,
@@ -143,8 +206,15 @@ public sealed class NatterApplicationBuilder
         foreach (var plugin in _embeddedPlugins)
         {
             var descriptor = _pluginCatalog.RegisterEmbedded(plugin);
+            scan.LegacyDescriptors.Add(descriptor);
             ConfigurePlugin(plugin, descriptor, compositionContext);
         }
+
+        _npsRuntime.Prepare(
+            scan.Candidates,
+            scan.LegacyDescriptors,
+            _services,
+            (module, descriptor) => ConfigurePlugin(module, descriptor, compositionContext));
 
         foreach (var configure in _serviceConfigurations)
             configure(_services);
@@ -165,25 +235,90 @@ public sealed class NatterApplicationBuilder
                 ex);
         }
 
-        return new NatterHost(provider, _pluginCatalog);
+        _npsRuntime.Attach(provider, provider.GetRequiredService<ILoggerFactory>());
+        return new NatterHost(provider, _pluginCatalog, _npsRuntime);
     }
 
-    private List<LoadedPlugin> LoadPluginDirectories()
+    private PluginScanResult ScanPlugins()
     {
-        var loaded = new List<LoadedPlugin>();
+        var result = new PluginScanResult();
         if (!_options.EnablePluginLoading)
-            return loaded;
+            return result;
 
         var loader = new PluginLoader();
+        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var directory in _options.PluginDirectories
-                     .Distinct(StringComparer.OrdinalIgnoreCase))
+        foreach (var root in _options.PluginDirectories.Distinct(StringComparer.OrdinalIgnoreCase))
         {
-            var result = loader.LoadDirectory(directory);
-            loaded.AddRange(_pluginCatalog.Add(result));
+            if (!Directory.Exists(root))
+            {
+                result.Failures.Add(new PluginDescriptor(
+                    Path.GetFileName(Path.TrimEndingDirectorySeparator(root)),
+                    Path.GetFileName(Path.TrimEndingDirectorySeparator(root)),
+                    "0.0.0",
+                    string.Empty,
+                    root,
+                    PluginState.Failed,
+                    "Plugin directory does not exist.",
+                    ErrorDetail: new PluginErrorDescriptor("manifest", "directory-missing", "Plugin directory does not exist.")));
+                continue;
+            }
+
+            foreach (var pluginDirectory in PluginDirectoryScanner.Discover(root))
+            {
+                var fullPath = Path.GetFullPath(pluginDirectory);
+                if (!visited.Add(fullPath))
+                    continue;
+
+                var read = PluginManifestReader.Read(fullPath);
+                if (read.IsNps)
+                {
+                    if (!read.IsValid || read.Manifest is null)
+                    {
+                        result.Failures.Add(CreateNpsFailure(fullPath, read));
+                        continue;
+                    }
+
+                    result.Candidates.Add(NpsPluginCandidate.FromManifest(
+                        read.Manifest,
+                        fullPath,
+                        read,
+                        _npsOptions.FilePluginTrustLevel));
+                    continue;
+                }
+
+                var loaded = loader.LoadPluginDirectory(fullPath);
+                var accepted = _pluginCatalog.Add(loaded);
+                result.LegacyPlugins.AddRange(accepted);
+                result.LegacyDescriptors.AddRange(accepted.Select(plugin => plugin.Descriptor));
+                result.Failures.AddRange(loaded.Failures);
+            }
         }
 
-        return loaded;
+        return result;
+    }
+
+    private static PluginDescriptor CreateNpsFailure(string directory, PluginManifestReadResult read)
+    {
+        var manifest = read.Manifest;
+        var id = string.IsNullOrWhiteSpace(manifest?.Id)
+            ? Path.GetFileName(Path.TrimEndingDirectorySeparator(directory))
+            : manifest!.Id;
+        var message = string.Join("; ", read.Errors.Select(issue => $"{issue.Path}: {issue.Message}"));
+
+        return new PluginDescriptor(
+            id,
+            manifest?.Name ?? id,
+            manifest?.Version ?? "0.0.0",
+            manifest?.Entry?.Assembly ?? string.Empty,
+            directory,
+            PluginState.Failed,
+            message,
+            manifest?.Capabilities,
+            manifest?.Description,
+            Kind: manifest?.Kind.ToString().ToLowerInvariant(),
+            HostApi: manifest?.HostApi,
+            ErrorDetail: new PluginErrorDescriptor("manifest", "manifest-invalid", message));
     }
 
     private void ConfigurePlugin(

@@ -26,6 +26,8 @@ public interface IChatUpstreamRegistry
 {
     void Register(IChatUpstream upstream);
 
+    bool Unregister(Source source);
+
     bool TryGet(Source source, out IChatUpstream? upstream);
 
     IReadOnlyList<IChatUpstream> Upstreams { get; }

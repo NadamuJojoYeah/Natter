@@ -27,7 +27,7 @@ public sealed class PluginLoader
             return new PluginLoadResult(plugins, failures);
         }
 
-        foreach (var pluginDirectory in DiscoverPluginDirectories(root))
+        foreach (var pluginDirectory in PluginDirectoryScanner.Discover(root))
         {
             var (plugin, failure) = LoadPlugin(pluginDirectory);
 
@@ -41,34 +41,38 @@ public sealed class PluginLoader
         return new PluginLoadResult(plugins, failures);
     }
 
-    private static IReadOnlyList<string> DiscoverPluginDirectories(string root)
+    /// <summary>Loads exactly one plugin directory (used by the NPS/legacy classifier).</summary>
+    public PluginLoadResult LoadPluginDirectory(string directory)
     {
-        if (File.Exists(Path.Combine(root, "plugin.json")))
-            return [root];
+        if (string.IsNullOrWhiteSpace(directory))
+            return new PluginLoadResult([], [CreateFailure(string.Empty, "Plugin directory must not be empty.")]);
 
-        var subdirectories = Directory.GetDirectories(root)
-            .Where(directory =>
-                File.Exists(Path.Combine(directory, "plugin.json"))
-                || Directory.GetFiles(directory, "*.dll").Length > 0)
-            .OrderBy(directory => directory, StringComparer.OrdinalIgnoreCase)
-            .ToList();
+        var root = Path.GetFullPath(directory);
+        if (!Directory.Exists(root))
+            return new PluginLoadResult([], [CreateFailure(root, "Plugin directory does not exist.")]);
 
-        if (subdirectories.Count > 0)
-            return subdirectories;
-
-        return Directory.GetFiles(root, "*.dll").Length > 0 ? [root] : [];
+        var (plugin, failure) = LoadPlugin(root);
+        return new PluginLoadResult(
+            plugin is null ? [] : [plugin],
+            failure is null ? [] : [failure]);
     }
 
     private static (LoadedPlugin? Plugin, PluginDescriptor? Failure) LoadPlugin(string directory)
     {
-        PluginManifest? manifest;
+        LegacyPluginManifest? manifest;
         try
         {
-            manifest = PluginManifest.Read(directory);
+            manifest = LegacyPluginManifest.Read(directory);
         }
         catch (Exception ex)
         {
             return (null, CreateFailure(directory, ex.Message));
+        }
+
+        if (manifest?.SchemaVersion == 1)
+        {
+            // NPS v1 manifests are owned by the NPS runtime; the legacy loader must not guess.
+            return (null, null);
         }
 
         if (manifest?.Enabled == false)

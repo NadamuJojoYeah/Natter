@@ -37,6 +37,10 @@ public sealed class ChatCompositionModule : ICompositionModule
         services.AddSingleton(ChatOutboundPolicy.Default);
         services.AddSingleton<IChatCommandDispatcher, ChatCommandDispatcher>();
         services.AddSingleton<ChatCommandFactory>();
+        services.AddSingleton<Natter.Application.Chat.ChatResponderRegistry>();
+        services.AddSingleton<Natter.Application.Chat.IChatResponderRegistry>(provider =>
+            provider.GetRequiredService<Natter.Application.Chat.ChatResponderRegistry>());
+        services.AddSingleton<Natter.Application.Chat.IChatResponder, Natter.Application.Chat.CompositeChatResponder>();
 
         services.AddSingleton<ChatIngressLifecycle>();
         services.AddSingleton<IPluginLifecycle>(provider => provider.GetRequiredService<ChatIngressLifecycle>());

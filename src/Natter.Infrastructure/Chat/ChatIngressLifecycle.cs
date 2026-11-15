@@ -36,6 +36,7 @@ public sealed class ChatIngressLifecycle : IPluginLifecycle, IDisposable
 
             _started = true;
             _registry.UpstreamRegistered += OnUpstreamRegistered;
+            _registry.UpstreamUnregistered += OnUpstreamUnregistered;
 
             foreach (var upstream in _registry.Upstreams)
                 SubscribeLocked(upstream);
@@ -53,6 +54,7 @@ public sealed class ChatIngressLifecycle : IPluginLifecycle, IDisposable
 
             _started = false;
             _registry.UpstreamRegistered -= OnUpstreamRegistered;
+            _registry.UpstreamUnregistered -= OnUpstreamUnregistered;
 
             foreach (var (_, subscription) in _subscriptions)
                 subscription.Dispose();
@@ -68,6 +70,7 @@ public sealed class ChatIngressLifecycle : IPluginLifecycle, IDisposable
         lock (_gate)
         {
             _registry.UpstreamRegistered -= OnUpstreamRegistered;
+            _registry.UpstreamUnregistered -= OnUpstreamUnregistered;
 
             foreach (var (_, subscription) in _subscriptions)
                 subscription.Dispose();
@@ -83,6 +86,19 @@ public sealed class ChatIngressLifecycle : IPluginLifecycle, IDisposable
         {
             if (_started)
                 SubscribeLocked(upstream);
+        }
+    }
+
+    private void OnUpstreamUnregistered(IChatUpstream upstream)
+    {
+        lock (_gate)
+        {
+            var index = _subscriptions.FindIndex(entry => ReferenceEquals(entry.Upstream, upstream));
+            if (index < 0)
+                return;
+
+            _subscriptions[index].Subscription.Dispose();
+            _subscriptions.RemoveAt(index);
         }
     }
 

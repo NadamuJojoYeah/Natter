@@ -6,6 +6,7 @@ using Natter.Abstractions.Ports;
 using Natter.Chat;
 using Natter.Cli.Abstractions;
 using Natter.Cli.Core.Rendering;
+using Natter.Plugin.Abstractions;
 
 namespace Natter.Cli.Core.Commands;
 
@@ -26,9 +27,13 @@ public sealed class DoctorCommand : ICliCommandHandler
         var journal = _services.GetService<IEventJournal>();
         var chatHub = _services.GetService<IChatEventDiagnostics>();
         var chatUpstreams = _services.GetService<IChatUpstreamRegistry>();
+        var nps = _services.GetService<IPluginRuntimeDiagnostics>();
 
-        var loaded = plugins.Plugins.Count(plugin => plugin.State == PluginState.Loaded);
+        var active = plugins.Plugins.Count(plugin =>
+            plugin.State is PluginState.Loaded or PluginState.Activated or PluginState.Configured);
         var failed = plugins.Plugins.Count(plugin => plugin.State == PluginState.Failed);
+        var blocked = plugins.Plugins.Count(plugin => plugin.State == PluginState.Blocked);
+        var disabled = plugins.Plugins.Count(plugin => plugin.State is PluginState.Disabled or PluginState.Skipped);
 
         if (invocation.HasFlag("json"))
         {
@@ -41,7 +46,16 @@ public sealed class DoctorCommand : ICliCommandHandler
                 architecture = NatterInfo.Architecture,
                 environment = composition.EnvironmentName,
                 pluginLoading = composition.EnablePluginLoading,
-                plugins = new { total = plugins.Plugins.Count, loaded, failed },
+                plugins = new
+                {
+                    total = plugins.Plugins.Count,
+                    active,
+                    loaded = active,
+                    failed,
+                    blocked,
+                    disabled,
+                    contributions = nps?.Contributions.Count ?? 0,
+                },
                 commands = commandRegistry.CommandCount,
                 portAdapters = adapters.Adapters.Count,
                 eventBus = new { published = bus.PublishedCount, subscribers = bus.SubscriberCount },
@@ -67,7 +81,8 @@ public sealed class DoctorCommand : ICliCommandHandler
         output.WriteLine($"os             : {NatterInfo.Os}");
         output.WriteLine($"architecture   : {NatterInfo.Architecture}");
         output.WriteLine($"environment    : {composition.EnvironmentName}");
-        output.WriteLine($"plugins        : {plugins.Plugins.Count} total, {loaded} loaded, {failed} failed");
+        output.WriteLine($"plugins        : {plugins.Plugins.Count} total, {active} active, {failed} failed, {blocked} blocked, {disabled} disabled");
+        output.WriteLine($"contributions  : {nps?.Contributions.Count ?? 0} NPS contribution(s)");
         output.WriteLine($"commands       : {commandRegistry.CommandCount} registered");
         output.WriteLine($"port adapters  : {adapters.Adapters.Count} binding(s)");
         output.WriteLine($"event bus      : {bus.PublishedCount} published, {bus.SubscriberCount} subscriber(s)");

@@ -11,6 +11,9 @@ public sealed class ChatUpstreamRegistry : IChatUpstreamRegistry
     /// <summary>Raised after a new upstream is registered (used to attach ingress subscriptions).</summary>
     public event Action<IChatUpstream>? UpstreamRegistered;
 
+    /// <summary>Raised after an upstream is removed (used to detach ingress subscriptions).</summary>
+    public event Action<IChatUpstream>? UpstreamUnregistered;
+
     public IReadOnlyList<IChatUpstream> Upstreams
     {
         get
@@ -38,6 +41,22 @@ public sealed class ChatUpstreamRegistry : IChatUpstreamRegistry
             _upstreams[source] = upstream;
 
         UpstreamRegistered?.Invoke(upstream);
+    }
+
+    public bool Unregister(Source source)
+    {
+        if (source is null)
+            return false;
+
+        IChatUpstream? removed;
+        lock (_gate)
+        {
+            if (!_upstreams.Remove(source, out removed))
+                return false;
+        }
+
+        UpstreamUnregistered?.Invoke(removed);
+        return true;
     }
 
     public bool TryGet(Source source, out IChatUpstream? upstream)

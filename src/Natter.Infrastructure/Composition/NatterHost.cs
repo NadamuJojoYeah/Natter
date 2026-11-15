@@ -4,6 +4,7 @@ using Natter.Abstractions.Events;
 using Natter.Abstractions.Plugins;
 using Natter.Abstractions.Ports;
 using Natter.Infrastructure.Plugins;
+using Natter.Infrastructure.Plugins.Nps;
 
 namespace Natter.Infrastructure.Composition;
 
@@ -15,15 +16,17 @@ public sealed class NatterHost : IAsyncDisposable
 {
     private readonly ServiceProvider _rootProvider;
     private readonly PluginCatalog _pluginCatalog;
+    private readonly NpsPluginRuntime? _npsRuntime;
     private readonly ILogger<NatterHost> _logger;
     private readonly List<IPluginLifecycle> _startedLifecycles = [];
     private bool _started;
     private bool _disposed;
 
-    internal NatterHost(ServiceProvider rootProvider, PluginCatalog pluginCatalog)
+    internal NatterHost(ServiceProvider rootProvider, PluginCatalog pluginCatalog, NpsPluginRuntime? npsRuntime = null)
     {
         _rootProvider = rootProvider;
         _pluginCatalog = pluginCatalog;
+        _npsRuntime = npsRuntime;
         _logger = rootProvider.GetRequiredService<ILogger<NatterHost>>();
     }
 
@@ -64,6 +67,11 @@ public sealed class NatterHost : IAsyncDisposable
             }
         }
 
+        // Activate NPS plugins and connect their upstreams after host lifecycles have
+        // subscribed (ChatIngressLifecycle attaches to upstreams at registration).
+        if (_npsRuntime is not null)
+            await _npsRuntime.StartAsync(cancellationToken).ConfigureAwait(false);
+
         _logger.LogInformation(
             "Natter host started with {PluginCount} plugin(s) and {LifecycleCount} lifecycle hook(s).",
             _pluginCatalog.Plugins.Count,
@@ -73,6 +81,9 @@ public sealed class NatterHost : IAsyncDisposable
     public async ValueTask StopAsync(CancellationToken cancellationToken = default)
     {
         if (!_started) return;
+
+        if (_npsRuntime is not null)
+            await _npsRuntime.StopAsync(cancellationToken).ConfigureAwait(false);
 
         for (var index = _startedLifecycles.Count - 1; index >= 0; index--)
         {
@@ -96,6 +107,9 @@ public sealed class NatterHost : IAsyncDisposable
 
         await StopAsync().ConfigureAwait(false);
         _disposed = true;
+
+        if (_npsRuntime is not null)
+            await _npsRuntime.DisposeAsync().ConfigureAwait(false);
 
         await _rootProvider.DisposeAsync().ConfigureAwait(false);
         _pluginCatalog.Dispose();

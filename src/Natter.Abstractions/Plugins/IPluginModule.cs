@@ -58,10 +58,32 @@ public interface IPluginLifecycle
 
 public enum PluginState
 {
+    Discovered,
+    Validated,
     Loaded,
+    Configured,
+    Activated,
+    Stopped,
+    Unloaded,
     Failed,
+    Blocked,
+    Disabled,
     Skipped,
 }
+
+/// <summary>Declared or runtime contribution, shown by `plugins contributions`.</summary>
+public sealed record PluginContributionDescriptor(
+    string Type,
+    string Id,
+    int Priority = 0,
+    string Status = "declared");
+
+/// <summary>Structured plugin error (manifest/dependency/config/permission/load/configure/activate/runtime).</summary>
+public sealed record PluginErrorDescriptor(
+    string Phase,
+    string Code,
+    string Message,
+    IReadOnlyDictionary<string, string>? Detail = null);
 
 /// <summary>Immutable snapshot of a plugin as seen by the catalog.</summary>
 public sealed record PluginDescriptor(
@@ -74,7 +96,15 @@ public sealed record PluginDescriptor(
     string? Error = null,
     IReadOnlyList<string>? Capabilities = null,
     string? Description = null,
-    bool IsDynamic = false);
+    bool IsDynamic = false,
+    string? Kind = null,
+    string? HostApi = null,
+    string? Trust = null,
+    IReadOnlyList<string>? Dependencies = null,
+    IReadOnlyList<string>? Permissions = null,
+    IReadOnlyList<string>? GrantedPermissions = null,
+    IReadOnlyList<PluginContributionDescriptor>? Contributions = null,
+    PluginErrorDescriptor? ErrorDetail = null);
 
 /// <summary>Runtime view of loaded plugins.</summary>
 public interface IPluginCatalog
@@ -96,7 +126,15 @@ public sealed record PluginProbeResult(
     string? Version = null,
     string? EntryAssembly = null,
     IReadOnlyList<string>? Assemblies = null,
-    IReadOnlyList<string>? Capabilities = null);
+    IReadOnlyList<string>? Capabilities = null,
+    int? SchemaVersion = null,
+    string? Kind = null,
+    string? HostApi = null,
+    string? EntryType = null,
+    IReadOnlyList<string>? Dependencies = null,
+    IReadOnlyList<string>? Permissions = null,
+    IReadOnlyList<PluginContributionDescriptor>? Contributions = null,
+    IReadOnlyList<string>? Warnings = null);
 
 /// <summary>Read-only plugin inspection port (used by the CLI).</summary>
 public interface IPluginProbe

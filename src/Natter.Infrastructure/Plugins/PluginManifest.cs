@@ -3,7 +3,7 @@ using System.Text.Json;
 namespace Natter.Infrastructure.Plugins;
 
 /// <summary>Optional `plugin.json` manifest that lives next to the plugin assembly.</summary>
-internal sealed class PluginManifest
+internal sealed class LegacyPluginManifest
 {
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
@@ -11,6 +11,8 @@ internal sealed class PluginManifest
         ReadCommentHandling = JsonCommentHandling.Skip,
         AllowTrailingCommas = true,
     };
+
+    public int? SchemaVersion { get; set; }
 
     public string? Id { get; set; }
 
@@ -28,7 +30,7 @@ internal sealed class PluginManifest
 
     public List<string>? Capabilities { get; set; }
 
-    public static PluginManifest? Read(string directory)
+    public static LegacyPluginManifest? Read(string directory)
     {
         var path = Path.Combine(directory, "plugin.json");
         if (!File.Exists(path))
@@ -37,8 +39,8 @@ internal sealed class PluginManifest
         try
         {
             var json = File.ReadAllText(path);
-            return JsonSerializer.Deserialize<PluginManifest>(json, SerializerOptions)
-                   ?? new PluginManifest();
+            return JsonSerializer.Deserialize<LegacyPluginManifest>(json, SerializerOptions)
+                   ?? new LegacyPluginManifest();
         }
         catch (Exception ex) when (ex is JsonException or IOException)
         {

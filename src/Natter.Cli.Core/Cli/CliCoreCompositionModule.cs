@@ -28,6 +28,11 @@ public sealed class CliCoreCompositionModule : ICompositionModule
         services.AddTransient<PortsCommand>();
         services.AddTransient<PluginsListCommand>();
         services.AddTransient<PluginsInspectCommand>();
+        services.AddTransient<PluginsGraphCommand>();
+        services.AddTransient<PluginsDoctorCommand>();
+        services.AddTransient<PluginsContributionsCommand>();
+        services.AddTransient<PluginsPermissionsCommand>();
+        services.AddTransient<PluginsConfigValidateCommand>();
         services.AddTransient<EventsListCommand>();
         services.AddTransient<EventsWatchCommand>();
         services.AddTransient<EventsClearCommand>();

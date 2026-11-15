@@ -36,6 +36,33 @@ public sealed class PluginCatalog : IPluginCatalog, IDisposable
         lock (_gate) return _ids.Contains(pluginId);
     }
 
+    /// <summary>Adds a descriptor discovered by the NPS loader (entry is not loaded yet).</summary>
+    public void RegisterDescriptor(PluginDescriptor descriptor)
+    {
+        ArgumentNullException.ThrowIfNull(descriptor);
+
+        lock (_gate)
+        {
+            _descriptors.Add(descriptor);
+            _ids.Add(descriptor.Id);
+        }
+    }
+
+    /// <summary>Replaces the first descriptor with the same id (state/error/diagnostic update).</summary>
+    public void UpdateDescriptor(string pluginId, Func<PluginDescriptor, PluginDescriptor> update)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(pluginId);
+        ArgumentNullException.ThrowIfNull(update);
+
+        lock (_gate)
+        {
+            var index = _descriptors.FindIndex(existing =>
+                string.Equals(existing.Id, pluginId, StringComparison.OrdinalIgnoreCase));
+            if (index >= 0)
+                _descriptors[index] = update(_descriptors[index]);
+        }
+    }
+
     /// <summary>Adds a loader result and returns the plugins that were actually accepted.</summary>
     public IReadOnlyList<LoadedPlugin> Add(PluginLoadResult result)
     {

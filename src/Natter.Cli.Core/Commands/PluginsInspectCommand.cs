@@ -30,9 +30,17 @@ public sealed class PluginsInspectCommand : ICliCommandHandler
             output.WriteLine($"id             : {result.Id ?? "-"}");
             output.WriteLine($"name           : {result.Name ?? "-"}");
             output.WriteLine($"version        : {result.Version ?? "-"}");
+            output.WriteLine($"schema version : {result.SchemaVersion?.ToString() ?? "legacy"}");
+            output.WriteLine($"kind           : {result.Kind ?? "-"}");
+            output.WriteLine($"host API       : {result.HostApi ?? "-"}");
             output.WriteLine($"entry assembly : {result.EntryAssembly ?? "-"}");
+            output.WriteLine($"entry type     : {result.EntryType ?? "-"}");
             output.WriteLine($"assemblies     : {(result.Assemblies is null ? "-" : string.Join(", ", result.Assemblies))}");
+            output.WriteLine($"dependencies   : {(result.Dependencies is null ? "-" : string.Join(", ", result.Dependencies))}");
+            output.WriteLine($"permissions    : {(result.Permissions is null ? "-" : string.Join(", ", result.Permissions))}");
+            output.WriteLine($"contributions  : {(result.Contributions is null ? "-" : string.Join(", ", result.Contributions.Select(contribution => $"{contribution.Type}/{contribution.Id}")))}");
             output.WriteLine($"capabilities   : {(result.Capabilities is null ? "-" : string.Join(", ", result.Capabilities))}");
+            output.WriteLine($"warnings       : {(result.Warnings is null ? "-" : string.Join("; ", result.Warnings))}");
 
             if (!string.IsNullOrWhiteSpace(result.Error))
                 output.WriteLine($"error          : {result.Error}");
