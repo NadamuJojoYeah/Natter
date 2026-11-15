@@ -180,7 +180,13 @@ public sealed class DiscordTransportTests
         var command = factory.Send(
             source,
             conversation,
-            new Content("abcdefghijkl", Mentions: [new Mention(MentionKind.User, "human-1")]),
+            new Content(
+                "abcdefghijkl",
+                Mentions:
+                [
+                    new Mention(MentionKind.User, "human-1"),
+                    new Mention(MentionKind.User, "bot"),
+                ]),
             replyTo: "reply-id",
             idempotencyKey: "send-1");
 
@@ -192,12 +198,29 @@ public sealed class DiscordTransportTests
         Assert.Equal("fghij", transport.Sent[1].Content);
         Assert.Equal("kl", transport.Sent[2].Content);
         Assert.Equal("reply-id", transport.Sent[0].ReplyToMessageId);
-        Assert.All(transport.Sent, sent => Assert.Contains("human-1", sent.MentionUserIds!));
+        Assert.All(transport.Sent, sent =>
+        {
+            Assert.Contains("human-1", sent.MentionUserIds!);
+            Assert.DoesNotContain("bot", sent.MentionUserIds!);
+        });
         Assert.Equal(3, ack.Result!.MessageIds!.Count);
 
         var duplicate = await upstream.ExecuteAsync(command);
         Assert.True(duplicate.Ok);
         Assert.Equal(3, transport.Sent.Count);
+
+        var update = factory.Update(
+            source,
+            conversation,
+            "message-1",
+            new Content("updated", Mentions:
+            [
+                new Mention(MentionKind.User, "human-1"),
+                new Mention(MentionKind.User, "bot"),
+            ]));
+        await upstream.ExecuteAsync(update);
+        Assert.DoesNotContain("bot", transport.Updated[0].MentionUserIds!);
+        Assert.Contains("human-1", transport.Updated[0].MentionUserIds!);
     }
 
     [Fact]

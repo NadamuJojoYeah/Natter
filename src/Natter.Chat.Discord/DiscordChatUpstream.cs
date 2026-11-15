@@ -214,11 +214,7 @@ public sealed class DiscordChatUpstream : IChatUpstream, IDisposable
 
         var chunks = ChatTextChunker.Chunk(payload.Content, _capabilities.MaxMessageLength);
         var messageIds = new List<string>(chunks.Count);
-        var mentionIds = payload.Content.Mentions?
-            .Where(mention => mention.Kind == MentionKind.User && mention.Id is not null)
-            .Select(mention => mention.Id!)
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
+        var mentionIds = OutboundMentionIds(payload.Content);
 
         for (var index = 0; index < chunks.Count; index++)
         {
@@ -247,11 +243,7 @@ public sealed class DiscordChatUpstream : IChatUpstream, IDisposable
         var payload = ChatCapabilityDegrader.DegradeUpdate(command, _capabilities).Payload;
         payload.Content.EnsureValid();
 
-        var mentionIds = payload.Content.Mentions?
-            .Where(mention => mention.Kind == MentionKind.User && mention.Id is not null)
-            .Select(mention => mention.Id!)
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
+        var mentionIds = OutboundMentionIds(payload.Content);
 
         var result = await _transport.UpdateMessageAsync(
             new DiscordUpdateMessage(payload.Conversation.Id, payload.MessageId, payload.Content.Text, mentionIds),
@@ -498,6 +490,16 @@ public sealed class DiscordChatUpstream : IChatUpstream, IDisposable
                 _connected = false;
         }
     }
+
+    private string[] OutboundMentionIds(Content content)
+        => content.Mentions?
+            .Where(mention => mention.Kind == MentionKind.User
+                              && mention.Id is not null
+                              && !string.Equals(mention.Id, Source.SelfId, StringComparison.Ordinal))
+            .Select(mention => mention.Id!)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray()
+           ?? [];
 
     private static ChatError ToError(DiscordSendResult result)
     {

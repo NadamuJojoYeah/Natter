@@ -34,9 +34,10 @@ public sealed class DiscordEventMapper
 
         if (_options.RequireMention
             && conversation.Kind is ConversationKind.Guild or ConversationKind.Thread
-            && !selfMentioned
-            && !message.MentionEveryone)
+            && !selfMentioned)
         {
+            // @everyone is not equivalent to a direct bot mention. It may remain a structured
+            // mention for downstream policy, but it must not pass the bot-addressing gate.
             return null;
         }
 
@@ -147,9 +148,9 @@ public sealed class DiscordEventMapper
 
         foreach (var user in message.MentionedUsers ?? [])
         {
-            if (string.Equals(user.Id, _source.SelfId, StringComparison.Ordinal))
-                continue;
-
+            // Keep self in the structured mention list: it is the only portable signal that
+            // the inbound message addressed this bot. Outbound self-mention filtering belongs
+            // to DiscordChatUpstream, not to the inbound mapper.
             mentions.Add(new Mention(MentionKind.User, user.Id, user.DisplayName));
         }
 

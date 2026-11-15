@@ -105,6 +105,11 @@ public sealed class ChatOrchestrator : IChatMessageHandler, IPluginLifecycle, ID
             && message.Conversation.Kind != ConversationKind.Direct
             && !MentionsSelf(message, chatEvent.Source.SelfId))
         {
+            _logger?.LogDebug(
+                "NLMP message dropped by mention gate: source={Source} conversation={Conversation} message={MessageId}",
+                chatEvent.Source.Key,
+                message.Conversation.Id,
+                message.Id);
             return;
         }
 
