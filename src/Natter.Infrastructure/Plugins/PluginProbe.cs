@@ -72,6 +72,15 @@ public sealed class PluginProbe : IPluginProbe
                     && File.Exists(Path.Combine(directory, entry))
                     && !string.IsNullOrWhiteSpace(manifest.Entry?.Type);
 
+        var warnings = read.Warnings.Select(issue => $"{issue.Path}: {issue.Message}").ToList();
+        if (!string.IsNullOrWhiteSpace(entry)
+            && entry.Replace('\\', '/').StartsWith("lib/", StringComparison.Ordinal)
+            && !File.Exists(Path.Combine(directory, Path.GetDirectoryName(entry) ?? string.Empty,
+                Path.GetFileNameWithoutExtension(entry) + ".deps.json")))
+        {
+            warnings.Add("Entry assembly has no sibling deps.json; load uses directory fallback. Stage lib/<Entry>.deps.json.");
+        }
+
         return new PluginProbeResult(
             Directory: directory,
             IsValid: valid,
@@ -93,7 +102,7 @@ public sealed class PluginProbe : IPluginProbe
                     contribution.Id,
                     contribution.Priority))
                 .ToArray(),
-            Warnings: read.Warnings.Select(issue => $"{issue.Path}: {issue.Message}").ToArray());
+            Warnings: warnings.ToArray());
     }
 
     private static PluginProbeResult ProbeLegacy(string directory)

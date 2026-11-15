@@ -458,7 +458,7 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
 
         try
         {
-            candidate.LoadContext = new PluginLoadContext(candidate.AssemblyPath, candidate.Id);
+            candidate.LoadContext = new PluginLoadContext(candidate.AssemblyPath, candidate.Id, _options.LoadContextOptions);
             var assembly = candidate.LoadContext.LoadFromAssemblyPath(candidate.AssemblyPath);
             var type = assembly.GetType(candidate.Manifest.Entry.Type, throwOnError: false, ignoreCase: false);
 
@@ -524,7 +524,11 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
         }
         catch (Exception ex)
         {
-            SetFailure(candidate, "load", "load-failed", ex.Message, ex);
+            var diagnostics = candidate.LoadContext?.Diagnostics;
+            var message = diagnostics is { Count: > 0 }
+                ? ex.Message + " Resolution: " + string.Join(" | ", diagnostics)
+                : ex.Message;
+            SetFailure(candidate, "load", "load-failed", message, ex);
             return false;
         }
     }

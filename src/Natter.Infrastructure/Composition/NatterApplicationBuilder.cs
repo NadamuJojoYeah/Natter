@@ -242,7 +242,7 @@ public sealed class NatterApplicationBuilder
         if (!_options.EnablePluginLoading)
             return result;
 
-        var loader = new PluginLoader();
+        var loader = new PluginLoader(_npsOptions.LoadContextOptions);
         var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var root in _options.PluginDirectories.Distinct(StringComparer.OrdinalIgnoreCase))

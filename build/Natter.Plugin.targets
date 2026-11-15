@@ -1,0 +1,20 @@
+<Project>
+  <!--
+    Shared NPS plugin staging contract. Plugin projects set <NpsPlugin>true</NpsPlugin>
+    and import this file; the entry assembly, deps.json and private dependencies are placed
+    under $(OutDir)lib so AssemblyDependencyResolver can see the dependency graph.
+  -->
+  <Target Name="StageNpsPlugin" AfterTargets="Build" Condition="'$(NpsPlugin)' == 'true'">
+    <ItemGroup>
+      <NpsPluginRuntime Include="$(TargetPath)" />
+      <NpsPluginRuntime Include="@(ReferenceCopyLocalPaths)" />
+      <NpsPluginRuntime Include="$(TargetDir)$(AssemblyName).deps.json"
+                        Condition="Exists('$(TargetDir)$(AssemblyName).deps.json')" />
+    </ItemGroup>
+    <Copy SourceFiles="@(NpsPluginRuntime)"
+          DestinationFolder="$(OutDir)lib"
+          SkipUnchangedFiles="true" />
+    <Error Condition="!Exists('$(OutDir)lib/$(AssemblyName).deps.json')"
+           Text="NPS plugin staging is missing lib/$(AssemblyName).deps.json; check Natter.Plugin.targets." />
+  </Target>
+</Project>

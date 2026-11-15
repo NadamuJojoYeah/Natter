@@ -7,8 +7,10 @@ namespace Natter.Infrastructure.Plugins;
 /// <see cref="PluginLoadContext"/> and instantiates the <see cref="IPluginModule"/>.
 /// Every failure is captured as a descriptor instead of aborting host startup.
 /// </summary>
-public sealed class PluginLoader
+public sealed class PluginLoader(PluginLoadContextOptions? loadContextOptions = null)
 {
+    private readonly PluginLoadContextOptions _loadContextOptions = loadContextOptions ?? PluginLoadContextOptions.Default;
+
     public PluginLoadResult LoadDirectory(string directory)
     {
         var plugins = new List<LoadedPlugin>();
@@ -57,7 +59,7 @@ public sealed class PluginLoader
             failure is null ? [] : [failure]);
     }
 
-    private static (LoadedPlugin? Plugin, PluginDescriptor? Failure) LoadPlugin(string directory)
+    private (LoadedPlugin? Plugin, PluginDescriptor? Failure) LoadPlugin(string directory)
     {
         LegacyPluginManifest? manifest;
         try
@@ -104,7 +106,7 @@ public sealed class PluginLoader
 
         try
         {
-            loadContext = new PluginLoadContext(entryPath, pluginId);
+            loadContext = new PluginLoadContext(entryPath, pluginId, _loadContextOptions);
             var assembly = loadContext.LoadFromAssemblyPath(entryPath);
 
             var moduleType = PluginLoadContext.GetLoadableTypes(assembly)
@@ -142,10 +144,15 @@ public sealed class PluginLoader
         }
         catch (Exception ex)
         {
+            var diagnostics = loadContext?.Diagnostics;
             loadContext?.Unload();
+            var error = $"{ex.GetType().Name}: {ex.Message}";
+            if (diagnostics is { Count: > 0 })
+                error += " Resolution: " + string.Join(" | ", diagnostics);
+
             return (null, CreateFailure(
                 directory,
-                $"{ex.GetType().Name}: {ex.Message}",
+                error,
                 assemblyPath: entryPath,
                 id: pluginId));
         }

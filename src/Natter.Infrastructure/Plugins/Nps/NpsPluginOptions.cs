@@ -19,6 +19,9 @@ public sealed class NpsPluginOptions
 
     public ISecretProvider SecretProvider { get; set; } = new EnvironmentSecretProvider();
 
+    /// <summary>Explicit contract/private assembly policy used by NPS file loading.</summary>
+    public PluginLoadContextOptions LoadContextOptions { get; set; } = PluginLoadContextOptions.Default;
+
     /// <summary>Optional app-private config directory; see CompositionOptions.PluginConfigDirectory.</summary>
     public string? ConfigDirectory { get; set; }
 
@@ -38,6 +41,7 @@ public sealed class NpsPluginOptions
             AutoGrantBundledPermissions = AutoGrantBundledPermissions,
             LoadUntrustedPlugins = LoadUntrustedPlugins,
             SecretProvider = SecretProvider,
+            LoadContextOptions = LoadContextOptions,
         };
 
         foreach (var plugin in DisabledPlugins)

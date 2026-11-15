@@ -5,6 +5,7 @@
     <RootNamespace>Natter.Sample.Plugin.Discord</RootNamespace>
     <AssemblyName>Natter.Sample.Plugin.Discord</AssemblyName>
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <NpsPlugin>true</NpsPlugin>
   </PropertyGroup>
 
   <ItemGroup>
@@ -20,12 +21,7 @@
     <EmbeddedResource Include="config.schema.json" LogicalName="Natter.Sample.Plugin.Discord.config.schema.json" />
   </ItemGroup>
 
-  <Target Name="StageDiscordPlugin" AfterTargets="Build">
-    <ItemGroup>
-      <DiscordPluginRuntime Include="$(TargetPath)" />
-      <DiscordPluginRuntime Include="@(ReferenceCopyLocalPaths)" />
-    </ItemGroup>
-    <Copy SourceFiles="@(DiscordPluginRuntime)" DestinationFolder="$(OutDir)lib" SkipUnchangedFiles="true" />
-  </Target>
+
+  <Import Project="$(MSBuildThisFileDirectory)../../build/Natter.Plugin.targets" />
 
 </Project>
