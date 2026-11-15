@@ -57,6 +57,38 @@ public sealed class NpsRuntimeTests
     }
 
     [Fact]
+    public async Task P3_context_contribution_is_registered_and_rolled_back()
+    {
+        var plugin = new PromptContributionPlugin();
+        var manifest = Manifest(
+            "natter.test.prompt",
+            permissions: [],
+            contributions: [new PluginContribution { Type = PluginContributionTypes.PromptProvider, Id = "static" }]);
+
+        var builder = NatterApplicationBuilder.Create()
+            .AddNatterFramework()
+            .AddEmbeddedNpsPlugin(manifest, plugin);
+
+        await using var host = builder.Build();
+        await host.StartAsync();
+
+        var catalog = host.Services.GetRequiredService<IContextComponentCatalog>();
+        Assert.True(catalog.TryGetPrompt("natter.test.prompt#static", out var prompt));
+        Assert.NotNull(prompt);
+        var bundle = await prompt!.GetAsync(new PromptRequest(
+            new RuntimeProfile { Id = "p" },
+            Source.Create("discord", "discord", "bot"),
+            new Conversation("c", ConversationKind.Direct),
+            new User("u", "U"),
+            null,
+            new Dictionary<string, string>()));
+        Assert.Equal("plugin prompt", bundle.SystemPrompt);
+
+        await host.StopAsync();
+        Assert.False(catalog.TryGetPrompt("natter.test.prompt#static", out _));
+    }
+
+    [Fact]
     public async Task Activation_failure_is_reported_and_rolls_back()
     {
         var plugin = new FailingPlugin();
@@ -1048,4 +1080,25 @@ public sealed class NpsRuntimeTests
         public ValueTask<ChatAck> ExecuteAsync(ChatCommand command, CancellationToken cancellationToken = default)
             => ValueTask.FromResult(ChatAck.Success(command, ["fake-message"]));
     }
+    public sealed class PromptContributionPlugin : INatterPlugin
+    {
+        public ValueTask ConfigureAsync(IPluginContext context, CancellationToken cancellationToken = default)
+        {
+            context.Contributions.AddPromptProvider<PluginPromptProvider>("static");
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask ActivateAsync(IPluginContext context, CancellationToken cancellationToken = default)
+            => ValueTask.CompletedTask;
+
+        public ValueTask DeactivateAsync(IPluginContext context, CancellationToken cancellationToken = default)
+            => ValueTask.CompletedTask;
+    }
+
+    public sealed class PluginPromptProvider : IPromptProvider
+    {
+        public ValueTask<PromptBundle> GetAsync(PromptRequest request, CancellationToken cancellationToken = default)
+            => ValueTask.FromResult(new PromptBundle("plugin prompt", null, "plugin-v1"));
+    }
+
 }

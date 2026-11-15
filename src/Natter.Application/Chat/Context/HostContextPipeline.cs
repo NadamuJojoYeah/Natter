@@ -98,7 +98,12 @@ public sealed class HostContextPipeline(
         try
         {
             memoryItems = await memoryStore.SearchAsync(
-                new MemoryQuery(source, conversation, user, budget.MaxMemoryItems),
+                new MemoryQuery(
+                    source,
+                    conversation,
+                    user,
+                    budget.MaxMemoryItems,
+                    IncludePrivate: conversation.Kind is ConversationKind.Direct or ConversationKind.Group),
                 cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex)

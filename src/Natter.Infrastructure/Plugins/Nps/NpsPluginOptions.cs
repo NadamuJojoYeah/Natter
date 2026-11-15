@@ -123,6 +123,8 @@ public static class NpsPermissionPolicy
                 [PluginPermissions.ChatRead],
             PluginContributionTypes.CliCommand =>
                 [PluginPermissions.CliCommands],
+            PluginContributionTypes.MemoryStore =>
+                [PluginPermissions.Storage],
             _ => [],
         };
 }

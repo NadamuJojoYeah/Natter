@@ -14,6 +14,8 @@ public interface IContextComponentCatalog
     bool TryGetAssembler(string reference, out IContextAssembler? assembler);
 
     bool TryGetMemory(string reference, out IMemoryStore? store);
+
+    void Unregister(string reference);
 }
 
 public sealed class ContextComponentCatalog : IContextComponentCatalog
@@ -51,5 +53,15 @@ public sealed class ContextComponentCatalog : IContextComponentCatalog
     public bool TryGetMemory(string reference, out IMemoryStore? store)
     {
         lock (_gate) return _memories.TryGetValue(reference, out store);
+    }
+
+    public void Unregister(string reference)
+    {
+        lock (_gate)
+        {
+            _prompts.Remove(reference);
+            _assemblers.Remove(reference);
+            _memories.Remove(reference);
+        }
     }
 }

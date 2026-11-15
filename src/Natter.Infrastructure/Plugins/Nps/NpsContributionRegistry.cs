@@ -124,6 +124,31 @@ internal sealed class NpsContributionRegistry : IContributionRegistry
         Stage(PluginContributionTypes.CliCommand, id, 0, typeof(ICliCommandHandler), null, ServiceLifetime.Singleton, staged);
     }
 
+    public void AddPromptProvider<TProvider>(string id)
+        where TProvider : class, IPromptProvider
+    {
+        Require(PluginContributionTypes.PromptProvider, id);
+        _services.Collection.TryAddSingleton<TProvider>();
+        Stage(PluginContributionTypes.PromptProvider, id, 0, typeof(IPromptProvider), typeof(TProvider), ServiceLifetime.Singleton, null);
+    }
+
+    public void AddContextAssembler<TAssembler>(string id)
+        where TAssembler : class, IContextAssembler
+    {
+        Require(PluginContributionTypes.ContextAssembler, id);
+        _services.Collection.TryAddSingleton<TAssembler>();
+        Stage(PluginContributionTypes.ContextAssembler, id, 0, typeof(IContextAssembler), typeof(TAssembler), ServiceLifetime.Singleton, null);
+    }
+
+    public void AddMemoryStore<TStore>(string id)
+        where TStore : class, IMemoryStore
+    {
+        Require(PluginContributionTypes.MemoryStore, id);
+        RequirePermissions(PluginContributionTypes.MemoryStore);
+        _services.Collection.TryAddSingleton<TStore>();
+        Stage(PluginContributionTypes.MemoryStore, id, 0, typeof(IMemoryStore), typeof(TStore), ServiceLifetime.Singleton, null);
+    }
+
     public void AddPortAdapter<TService, TImplementation>(
         string id,
         ServiceLifetime lifetime = ServiceLifetime.Singleton)

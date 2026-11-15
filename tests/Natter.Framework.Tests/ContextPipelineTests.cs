@@ -166,6 +166,33 @@ public sealed class ContextPipelineTests
     }
 
     [Fact]
+    public async Task Private_memory_is_not_injected_into_guild_context()
+    {
+        var source = Source.Create("discord", "discord", "bot");
+        var dm = new Conversation("dm", ConversationKind.Direct);
+        var guild = new Conversation("guild-channel", ConversationKind.Guild, GuildId: "g1");
+        var user = new User("u1", "User");
+        var memories = new InMemoryMemoryStore();
+        await memories.WriteAsync(new MemoryWriteRequest(
+            source, dm, user, MemoryScopeType.User, "preference", "normal memory", Sensitivity: "normal"));
+        await memories.WriteAsync(new MemoryWriteRequest(
+            source, dm, user, MemoryScopeType.User, "preference", "private memory", Sensitivity: "private"));
+        var pipeline = new HostContextPipeline(
+            new InMemoryConversationStore(),
+            memories,
+            new InMemorySummaryStore(),
+            new HostStaticPromptProvider(),
+            new HostRecentWindowContextAssembler());
+
+        var dmBundle = await pipeline.AssembleAsync(source, dm, user, "dm");
+        var guildBundle = await pipeline.AssembleAsync(source, guild, user, "guild");
+
+        Assert.Contains(dmBundle.Messages, message => message.Text!.Contains("private memory", StringComparison.Ordinal));
+        Assert.DoesNotContain(guildBundle.Messages, message => message.Text!.Contains("private memory", StringComparison.Ordinal));
+        Assert.Contains(guildBundle.Messages, message => message.Text!.Contains("normal memory", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task Pipeline_degrades_when_memory_store_throws()
     {
         var source = Source.Create("discord", "discord", "bot");

@@ -681,6 +681,29 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
                     break;
                 }
 
+                case PluginContributionTypes.PromptProvider:
+                case PluginContributionTypes.ContextAssembler:
+                case PluginContributionTypes.MemoryStore:
+                {
+                    var catalog = _hostProvider!.GetRequiredService<Natter.Application.Chat.IContextComponentCatalog>();
+                    var reference = $"{candidate.Id}#{registration.Id}";
+                    var implementation = provider.GetRequiredService(registration.ImplementationType!);
+                    switch (registration.Type)
+                    {
+                        case PluginContributionTypes.PromptProvider:
+                            catalog.RegisterPrompt(reference, (Natter.Application.Chat.IPromptProvider)implementation);
+                            break;
+                        case PluginContributionTypes.ContextAssembler:
+                            catalog.RegisterAssembler(reference, (Natter.Application.Chat.IContextAssembler)implementation);
+                            break;
+                        case PluginContributionTypes.MemoryStore:
+                            catalog.RegisterMemory(reference, (Natter.Application.Chat.IMemoryStore)implementation);
+                            break;
+                    }
+                    active.ContextComponents.Add(reference);
+                    break;
+                }
+
                 case PluginContributionTypes.ChatEventSubscriber:
                 {
                     var subscriber = (IChatEventSubscriber)provider.GetRequiredService(registration.ImplementationType!);
@@ -728,10 +751,15 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
 
             foreach (var subscription in active.Subscriptions)
                 subscription.Dispose();
+            var catalog = _hostProvider?.GetService<Natter.Application.Chat.IContextComponentCatalog>();
+            if (catalog is not null)
+                foreach (var reference in active.ContextComponents)
+                    catalog.Unregister(reference);
 
             active.Upstreams.Clear();
             active.Responders.Clear();
             active.Subscriptions.Clear();
+            active.ContextComponents.Clear();
         }
 
         try
@@ -782,10 +810,15 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
 
             foreach (var subscription in active.Subscriptions)
                 subscription.Dispose();
+            var catalog = _hostProvider?.GetService<Natter.Application.Chat.IContextComponentCatalog>();
+            if (catalog is not null)
+                foreach (var reference in active.ContextComponents)
+                    catalog.Unregister(reference);
 
             active.Upstreams.Clear();
             active.Responders.Clear();
             active.Subscriptions.Clear();
+            active.ContextComponents.Clear();
         }
 
         await candidate.Lifetime.StopAsync().ConfigureAwait(false);
@@ -945,7 +978,8 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
     private sealed record ActiveContributions(
         List<IChatUpstream> Upstreams,
         List<(string Owner, string Id)> Responders,
-        List<IDisposable> Subscriptions);
+        List<IDisposable> Subscriptions,
+        List<string> ContextComponents);
 
     private readonly Dictionary<string, ActiveContributions> _activeContributions = new(StringComparer.Ordinal);
 
@@ -955,7 +989,7 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
         {
             if (!_activeContributions.TryGetValue(candidate.Id, out var active))
             {
-                active = new ActiveContributions([], [], []);
+                active = new ActiveContributions([], [], [], []);
                 _activeContributions[candidate.Id] = active;
             }
 

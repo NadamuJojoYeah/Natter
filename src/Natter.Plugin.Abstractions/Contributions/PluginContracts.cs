@@ -115,6 +115,15 @@ public interface IContributionRegistry
         ServiceLifetime lifetime = ServiceLifetime.Singleton)
         where TService : class
         where TImplementation : class, TService;
+
+    void AddPromptProvider<TProvider>(string id)
+        where TProvider : class, IPromptProvider;
+
+    void AddContextAssembler<TAssembler>(string id)
+        where TAssembler : class, IContextAssembler;
+
+    void AddMemoryStore<TStore>(string id)
+        where TStore : class, IMemoryStore;
 }
 
 /// <summary>Token-like secret reference used in config values; never contains the secret.</summary>
