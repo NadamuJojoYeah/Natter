@@ -2,6 +2,7 @@ using System.Net.Http;
 using System.Text.Json;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
+using Natter.Application.Chat;
 using Natter.Feature.Ai;
 using Natter.Cli.Abstractions;
 using Natter.Plugin.Abstractions;
@@ -62,7 +63,10 @@ public sealed class DeepSeekPlugin : INatterPlugin
         services.AddSingleton(responderOptions);
         services.AddSingleton<DeepSeekMetrics>();
         services.AddSingleton<AiConversationStore>();
-        services.AddSingleton<IAiConversationStore>(provider => provider.GetRequiredService<AiConversationStore>());
+        services.AddSingleton<IAiConversationStore>(provider =>
+            provider.GetService<IConversationStore>() is { } host
+                ? new HostConversationStoreAdapter(host, responderOptions)
+                : provider.GetRequiredService<AiConversationStore>());
         services.AddSingleton<AiConversationGate>();
         services.AddSingleton<HttpClient>(_ => new HttpClient { Timeout = Timeout.InfiniteTimeSpan });
         services.AddSingleton<IChatClient>(provider => _chatClient ?? new DeepSeekChatClient(
@@ -144,7 +148,7 @@ public sealed class DeepSeekPlugin : INatterPlugin
 public sealed class DeepSeekStatusCommandHandler(
     DeepSeekOptions options,
     DeepSeekMetrics metrics,
-    AiConversationStore history) : ICliCommandHandler
+    IConversationStore history) : ICliCommandHandler
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -152,8 +156,9 @@ public sealed class DeepSeekStatusCommandHandler(
         WriteIndented = false,
     };
 
-    public ValueTask<int> ExecuteAsync(CliInvocation invocation, CancellationToken cancellationToken = default)
+    public async ValueTask<int> ExecuteAsync(CliInvocation invocation, CancellationToken cancellationToken = default)
     {
+        var historyCount = await history.CountAsync(cancellationToken).ConfigureAwait(false);
         var baseHost = Uri.TryCreate(options.BaseUrl, UriKind.Absolute, out var uri) ? uri.Host : "invalid";
         var snapshot = new DeepSeekStatusSnapshot(
             "deepseek",
@@ -164,13 +169,13 @@ public sealed class DeepSeekStatusCommandHandler(
             options.Streaming,
             options.HistoryMaxMessages,
             options.HistoryMaxCharacters,
-            history.Count,
+            historyCount,
             metrics.Snapshot());
 
         if (invocation.HasFlag("json"))
         {
             invocation.Console.Out.WriteLine(JsonSerializer.Serialize(snapshot, JsonOptions));
-            return ValueTask.FromResult(CliExitCodes.Success);
+            return CliExitCodes.Success;
         }
 
         invocation.Console.Out.WriteLine($"provider: deepseek");
@@ -189,7 +194,7 @@ public sealed class DeepSeekStatusCommandHandler(
         invocation.Console.Out.WriteLine($"reasoningTokens: {snapshot.Metrics.ReasoningTokens}");
         invocation.Console.Out.WriteLine($"lastError: {snapshot.Metrics.LastError ?? "-"}");
 
-        return ValueTask.FromResult(CliExitCodes.Success);
+        return CliExitCodes.Success;
     }
 }
 

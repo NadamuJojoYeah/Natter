@@ -38,10 +38,30 @@ public sealed class ChatCompositionModule : ICompositionModule
         services.AddSingleton(ChatOutboundPolicy.Default);
         services.AddSingleton<IChatCommandDispatcher, ChatCommandDispatcher>();
         services.AddSingleton<ChatCommandFactory>();
+        services.AddSingleton<Natter.Application.Chat.IConversationStore>(_ =>
+            string.IsNullOrWhiteSpace(context.Options.StateDirectory)
+                ? new Natter.Application.Chat.InMemoryConversationStore()
+                : new SqliteConversationStore(Path.Combine(
+                    Path.GetFullPath(context.Options.StateDirectory),
+                    "natter.db")));
         services.AddSingleton<Natter.Application.Chat.ChatResponderRegistry>();
         services.AddSingleton<Natter.Application.Chat.IChatResponderRegistry>(provider =>
             provider.GetRequiredService<Natter.Application.Chat.ChatResponderRegistry>());
-        services.AddSingleton<Natter.Application.Chat.IChatResponder, Natter.Application.Chat.CompositeChatResponder>();
+        services.AddSingleton<Natter.Application.Chat.CompositeChatResponder>();
+        services.AddSingleton<Natter.Application.Chat.IChatResponder>(provider =>
+            provider.GetRequiredService<Natter.Application.Chat.CompositeChatResponder>());
+        services.AddSingleton<Natter.Application.Chat.IRuntimeProfileStore>(_ =>
+            new Natter.Application.Chat.RuntimeProfileStore(
+                context.Options.PluginConfigDirectory,
+                context.Options.ProfileOverride));
+        services.AddSingleton<Natter.Application.Chat.IProfileResolver, Natter.Application.Chat.ProfileResolver>();
+        services.AddSingleton<Natter.Application.Chat.IChatResponder>(provider =>
+            new Natter.Application.Chat.ProfileAwareChatResponder(
+                provider.GetRequiredService<Natter.Application.Chat.IChatResponderRegistry>(),
+                provider.GetRequiredService<Natter.Application.Chat.IRuntimeProfileStore>(),
+                provider.GetRequiredService<Natter.Application.Chat.IProfileResolver>(),
+                provider.GetRequiredService<Natter.Application.Chat.CompositeChatResponder>(),
+                provider.GetService<Microsoft.Extensions.Logging.ILogger<Natter.Application.Chat.ProfileAwareChatResponder>>()));
 
         services.AddSingleton<ChatIngressLifecycle>();
         services.AddSingleton<IPluginLifecycle>(provider => provider.GetRequiredService<ChatIngressLifecycle>());

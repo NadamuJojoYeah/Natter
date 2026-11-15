@@ -81,6 +81,12 @@ public sealed class NatterHost : IAsyncDisposable
             }
         }
 
+        if (_rootProvider.GetService(typeof(Natter.Application.Chat.IRuntimeProfileStore)) is Natter.Application.Chat.IRuntimeProfileStore profileStore
+            && _rootProvider.GetService(typeof(Natter.Application.Chat.IChatResponderRegistry)) is Natter.Application.Chat.IChatResponderRegistry responderRegistry)
+        {
+            Natter.Application.Chat.RuntimeProfileValidator.Validate(profileStore, responderRegistry);
+        }
+
         _logger.LogInformation(
             "Natter host started with {PluginCount} plugin(s) and {LifecycleCount} lifecycle hook(s).",
             _pluginCatalog.Plugins.Count,

@@ -18,6 +18,7 @@
     "chat.read",
     "chat.send",
     "chat.interactions",
+    "storage",
     "cli.commands"
   ],
   "secrets": [

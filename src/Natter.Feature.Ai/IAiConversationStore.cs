@@ -8,7 +8,15 @@ public interface IAiConversationStore
 {
     string GetKey(Source source, Conversation conversation, string senderId);
 
-    IReadOnlyList<ChatMessage> GetMessages(string key);
+    ValueTask<IReadOnlyList<ChatMessage>> GetMessagesAsync(string key, CancellationToken cancellationToken = default);
 
-    void AppendTurn(string key, string userText, string assistantText);
+    ValueTask AppendTurnAsync(string key, string userText, string assistantText, CancellationToken cancellationToken = default);
+
+    ValueTask AppendTurnAsync(
+        string key,
+        string userText,
+        string assistantText,
+        string? sourceEventId,
+        CancellationToken cancellationToken = default)
+        => AppendTurnAsync(key, userText, assistantText, cancellationToken);
 }

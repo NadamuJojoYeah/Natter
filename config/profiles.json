@@ -1,0 +1,53 @@
+{
+  "$schema": "./profiles.schema.json",
+  "schemaVersion": 1,
+  "defaultProfile": "tier1-default",
+  "profiles": [
+    {
+      "id": "tier1-default",
+      "supportTier": 1,
+      "match": {
+        "protocols": ["discord"],
+        "platforms": ["discord"],
+        "guilds": [],
+        "conversations": [],
+        "actors": []
+      },
+      "ai": {
+        "provider": "natter.feature.ai.deepseek#deepseek",
+        "model": "deepseek-flash"
+      },
+      "history": {
+        "scope": "conversation",
+        "maxMessages": 20,
+        "maxCharacters": 24000
+      },
+      "policy": {
+        "enabled": true
+      }
+    },
+    {
+      "id": "tier2-dingtalk-spark",
+      "supportTier": 2,
+      "match": {
+        "protocols": ["dingtalk"],
+        "platforms": ["dingtalk"],
+        "guilds": [],
+        "conversations": [],
+        "actors": []
+      },
+      "ai": {
+        "provider": "natter.feature.ai.spark#spark",
+        "model": "spark-x2.5-1.7b"
+      },
+      "history": {
+        "scope": "conversation",
+        "maxMessages": 20,
+        "maxCharacters": 24000
+      },
+      "policy": {
+        "enabled": true
+      }
+    }
+  ]
+}

@@ -11,6 +11,12 @@ public sealed class NatterCliOptions
 
     public bool TraceEvents { get; set; }
 
+    public string? ConfigDirectory { get; set; }
+
+    public string? StateDirectory { get; set; }
+
+    public string? ProfileOverride { get; set; }
+
     /// <summary>Arguments left after global options were removed.</summary>
     public string[] CommandArgs { get; set; } = [];
 
@@ -50,9 +56,33 @@ public sealed class NatterCliOptions
                     options.TraceEvents = true;
                     break;
 
+                case "--config-dir":
+                case "--plugin-config-dir":
+                    if (index + 1 < args.Count)
+                        options.ConfigDirectory = args[++index];
+                    break;
+
+                case "--state-dir":
+                    if (index + 1 < args.Count)
+                        options.StateDirectory = args[++index];
+                    break;
+
+                case "--profile":
+                    if (index + 1 < args.Count)
+                        options.ProfileOverride = args[++index];
+                    break;
+
                 default:
                     if (argument.StartsWith("--plugin-dir=", StringComparison.Ordinal))
                         options.PluginDirectories.Add(argument["--plugin-dir=".Length..]);
+                    else if (argument.StartsWith("--config-dir=", StringComparison.Ordinal))
+                        options.ConfigDirectory = argument["--config-dir=".Length..];
+                    else if (argument.StartsWith("--plugin-config-dir=", StringComparison.Ordinal))
+                        options.ConfigDirectory = argument["--plugin-config-dir=".Length..];
+                    else if (argument.StartsWith("--state-dir=", StringComparison.Ordinal))
+                        options.StateDirectory = argument["--state-dir=".Length..];
+                    else if (argument.StartsWith("--profile=", StringComparison.Ordinal))
+                        options.ProfileOverride = argument["--profile=".Length..];
                     else
                         remaining.Add(argument);
                     break;
@@ -71,6 +101,11 @@ public sealed class NatterCliOptions
     {
         if (!LoadPlugins)
             return this;
+
+        ConfigDirectory ??= Environment.GetEnvironmentVariable("NATTER_CONFIG_DIR");
+        StateDirectory ??= Environment.GetEnvironmentVariable("NATTER_STATE_DIR");
+        ProfileOverride ??= Environment.GetEnvironmentVariable("NATTER_PROFILE");
+        ConfigDirectory ??= Path.Combine(AppContext.BaseDirectory, "config");
 
         var fromEnvironment = Environment.GetEnvironmentVariable("NATTER_PLUGIN_DIR");
         if (!string.IsNullOrWhiteSpace(fromEnvironment))

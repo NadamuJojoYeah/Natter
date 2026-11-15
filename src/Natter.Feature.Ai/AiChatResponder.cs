@@ -95,7 +95,7 @@ public sealed class AiChatResponder : IChatResponder
             return null;
 
         var reply = generated.Text;
-        _history.AppendTurn(key, text, reply);
+        await _history.AppendTurnAsync(key, text, reply, chatEvent.Id, cancellationToken).ConfigureAwait(false);
         _log.Information(
             "ai replied conversation={ConversationId} replyChars={ReplyChars}",
             message.Conversation.Id,
@@ -137,7 +137,7 @@ public sealed class AiChatResponder : IChatResponder
             return null;
 
         var reply = generated.Text;
-        _history.AppendTurn(key, prompt, reply);
+        await _history.AppendTurnAsync(key, prompt, reply, chatEvent.Id, cancellationToken).ConfigureAwait(false);
         return _commands.Respond(
             chatEvent.Source,
             interaction,
@@ -159,13 +159,17 @@ public sealed class AiChatResponder : IChatResponder
             conversation,
             sender,
             userText,
-            _history.GetMessages(conversationKey),
+            await _history.GetMessagesAsync(conversationKey, cancellationToken).ConfigureAwait(false),
             cancellationToken).ConfigureAwait(false);
 
         try
         {
             using var lease = await _gate.AcquireAsync(conversationKey, cancellationToken).ConfigureAwait(false);
-            var response = await _chatClient.GetResponseAsync(messages, options: null, cancellationToken)
+            var profile = Natter.Application.Chat.ProfileContext.Current;
+            var options = string.IsNullOrWhiteSpace(profile?.Ai.Model)
+                ? null
+                : new ChatOptions { ModelId = profile.Ai.Model };
+            var response = await _chatClient.GetResponseAsync(messages, options, cancellationToken)
                 .ConfigureAwait(false);
 
             var text = response.Text?.Trim();

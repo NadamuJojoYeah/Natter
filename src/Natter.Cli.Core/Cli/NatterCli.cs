@@ -53,6 +53,18 @@ public static class NatterCli
                 builder.AddPluginDirectory(directory);
         }
 
+        if (!string.IsNullOrWhiteSpace(options.ConfigDirectory)
+            || !string.IsNullOrWhiteSpace(options.StateDirectory)
+            || !string.IsNullOrWhiteSpace(options.ProfileOverride))
+        {
+            builder.ConfigureOptions(composition =>
+            {
+                composition.PluginConfigDirectory = options.ConfigDirectory ?? composition.PluginConfigDirectory;
+                composition.StateDirectory = options.StateDirectory ?? composition.StateDirectory;
+                composition.ProfileOverride = options.ProfileOverride ?? composition.ProfileOverride;
+            });
+        }
+
         builder.ConfigureLogging(logging =>
         {
             logging.SetMinimumLevel(options.Verbose ? LogLevel.Debug : LogLevel.Warning);
@@ -62,7 +74,15 @@ public static class NatterCli
         configure?.Invoke(builder);
 
         await using var host = builder.Build();
-        await host.StartAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await host.StartAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            console.Error.WriteLine($"Host startup failed: {ex.Message}");
+            return CliExitCodes.Failure;
+        }
 
         if (options.OnHostStartedAsync is not null)
             await options.OnHostStartedAsync(host.Services).ConfigureAwait(false);
@@ -74,7 +94,17 @@ public static class NatterCli
         }
         finally
         {
-            await host.StopAsync(CancellationToken.None).ConfigureAwait(false);
+            try
+            {
+                await host.StopAsync(CancellationToken.None)
+                    .AsTask()
+                    .WaitAsync(TimeSpan.FromSeconds(10))
+                    .ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+                console.Error.WriteLine("Host shutdown exceeded 10 seconds.");
+            }
         }
     }
 }

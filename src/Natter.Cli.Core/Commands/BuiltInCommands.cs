@@ -218,6 +218,27 @@ internal static class BuiltInCommands
         },
         new CliCommandDescriptor
         {
+            Name = "serve",
+            Description = "Run the Natter host in long-lived mode until stopped.",
+            Options =
+            [
+                new CliOptionDescriptor("duration", "Stop after N seconds (0 = wait for cancellation).", TakesValue: true),
+                new CliOptionDescriptor("json", "Emit a machine-readable startup summary."),
+                new CliOptionDescriptor("health-port", "Optional loopback health HTTP port (reserved).", TakesValue: true),
+            ],
+            Origin = Origin,
+            HandlerFactory = services => services.GetRequiredService<ServeCommand>(),
+        },
+        new CliCommandDescriptor
+        {
+            Name = "health",
+            Description = "Print upstream, profile, provider and plugin health.",
+            Options = [new CliOptionDescriptor("json", "Emit machine-readable JSON.")],
+            Origin = Origin,
+            HandlerFactory = services => services.GetRequiredService<HealthCommand>(),
+        },
+        new CliCommandDescriptor
+        {
             Name = "plugins graph",
             Description = "Show the NPS dependency/order graph (nodes and edges).",
             Options = [JsonOption],

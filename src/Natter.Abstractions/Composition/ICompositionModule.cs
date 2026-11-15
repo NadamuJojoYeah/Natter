@@ -46,5 +46,10 @@ public sealed class CompositionOptions
     /// </summary>
     public string? PluginConfigDirectory { get; set; }
 
+    /// <summary>Host-owned state directory (SQLite conversation store, diagnostics).</summary>
+    public string? StateDirectory { get; set; }
+
+    public string? ProfileOverride { get; set; }
+
     public bool ValidateOnBuild { get; set; } = true;
 }

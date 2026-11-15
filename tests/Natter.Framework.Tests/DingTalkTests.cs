@@ -206,6 +206,14 @@ public sealed class DingTalkTests
         Assert.Single(spark.Calls);
         Assert.Equal("hello", spark.Calls[0][^1].Text);
 
+        var hostStore = host.Services.GetRequiredService<Natter.Application.Chat.IConversationStore>();
+        Assert.Equal(1, await hostStore.CountAsync());
+        var stored = await hostStore.GetRecentAsync(
+            new Natter.Application.Chat.ConversationKey("dingtalk:dingtalk:bot-dt", "cid-cross", "cid-cross", null),
+            20,
+            24000);
+        Assert.Contains(stored, message => message.Text == "hello");
+
         await host.StopAsync();
     }
 
@@ -329,7 +337,7 @@ public sealed class DingTalkTests
     }
 
     [Fact]
-    public void Shared_conversation_store_isolates_sources()
+    public async Task Shared_conversation_store_isolates_sources()
     {
         var options = new AiResponderOptions();
         var store = new AiConversationStore(options);
@@ -341,9 +349,9 @@ public sealed class DingTalkTests
         var dingTalkKey = store.GetKey(dingTalk, conversation, "user");
         Assert.NotEqual(discordKey, dingTalkKey);
 
-        store.AppendTurn(discordKey, "discord question", "discord answer");
-        Assert.Equal(2, store.GetMessages(discordKey).Count);
-        Assert.Empty(store.GetMessages(dingTalkKey));
+        await store.AppendTurnAsync(discordKey, "discord question", "discord answer");
+        Assert.Equal(2, (await store.GetMessagesAsync(discordKey)).Count);
+        Assert.Empty(await store.GetMessagesAsync(dingTalkKey));
     }
 
     private static async Task<T> WaitForAsync<T>(Func<T?> probe) where T : class

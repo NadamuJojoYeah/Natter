@@ -631,6 +631,9 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
         if (candidate.Permissions?.Granted.Contains(PluginPermissions.ChatRead) == true)
             services.AddSingleton(_hostProvider.GetRequiredService<IChatEventSource>());
 
+        if (candidate.Permissions?.Granted.Contains(PluginPermissions.Storage) == true)
+            services.AddSingleton(_hostProvider.GetRequiredService<Natter.Application.Chat.IConversationStore>());
+
         services.AddSingleton<IChatCommandDispatcher>(provider => new NpsPermissionedChatCommandDispatcher(
             _hostProvider.GetRequiredService<IChatCommandDispatcher>(),
             candidate.Permissions?.Granted ?? []));

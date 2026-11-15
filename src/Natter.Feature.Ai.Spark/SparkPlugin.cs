@@ -2,6 +2,7 @@ using System.Text.Json;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Natter.Cli.Abstractions;
+using Natter.Application.Chat;
 using Natter.Feature.Ai;
 using Natter.Plugin.Abstractions;
 
@@ -56,7 +57,10 @@ public sealed class SparkPlugin : INatterPlugin
         services.AddSingleton(responderOptions);
         services.AddSingleton<SparkMetrics>();
         services.AddSingleton<AiConversationStore>();
-        services.AddSingleton<IAiConversationStore>(provider => provider.GetRequiredService<AiConversationStore>());
+        services.AddSingleton<IAiConversationStore>(provider =>
+            provider.GetService<IConversationStore>() is { } host
+                ? new HostConversationStoreAdapter(host, responderOptions)
+                : provider.GetRequiredService<AiConversationStore>());
         services.AddSingleton<AiConversationGate>();
         services.AddSingleton<HttpClient>(_ => new HttpClient { Timeout = Timeout.InfiniteTimeSpan });
         services.AddSingleton<IChatClient>(provider => _chatClient ?? new SparkChatClient(
@@ -114,7 +118,7 @@ public sealed class SparkPlugin : INatterPlugin
     }
 }
 
-public sealed class SparkStatusCommandHandler(SparkOptions options, SparkMetrics metrics, AiConversationStore history)
+public sealed class SparkStatusCommandHandler(SparkOptions options, SparkMetrics metrics, IConversationStore history)
     : ICliCommandHandler
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -123,8 +127,9 @@ public sealed class SparkStatusCommandHandler(SparkOptions options, SparkMetrics
         WriteIndented = false,
     };
 
-    public ValueTask<int> ExecuteAsync(CliInvocation invocation, CancellationToken cancellationToken = default)
+    public async ValueTask<int> ExecuteAsync(CliInvocation invocation, CancellationToken cancellationToken = default)
     {
+        var historyCount = await history.CountAsync(cancellationToken).ConfigureAwait(false);
         var host = Uri.TryCreate(options.BaseUrl, UriKind.Absolute, out var uri) ? uri.Host : "invalid";
         var snapshot = new SparkStatusSnapshot(
             "iflytek-spark",
@@ -133,13 +138,13 @@ public sealed class SparkStatusCommandHandler(SparkOptions options, SparkMetrics
             host,
             options.Streaming,
             options.HistoryMaxMessages,
-            history.Count,
+            historyCount,
             metrics.Snapshot());
 
         if (invocation.HasFlag("json"))
         {
             invocation.Console.Out.WriteLine(JsonSerializer.Serialize(snapshot, JsonOptions));
-            return ValueTask.FromResult(CliExitCodes.Success);
+            return CliExitCodes.Success;
         }
 
         invocation.Console.Out.WriteLine("provider: iflytek-spark");
@@ -154,7 +159,7 @@ public sealed class SparkStatusCommandHandler(SparkOptions options, SparkMetrics
         invocation.Console.Out.WriteLine($"inputTokens: {snapshot.Metrics.InputTokens}");
         invocation.Console.Out.WriteLine($"outputTokens: {snapshot.Metrics.OutputTokens}");
         invocation.Console.Out.WriteLine($"lastError: {snapshot.Metrics.LastError ?? "-"}");
-        return ValueTask.FromResult(CliExitCodes.Success);
+        return CliExitCodes.Success;
     }
 }
 

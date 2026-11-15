@@ -34,6 +34,8 @@ public sealed class CliCoreCompositionModule : ICompositionModule
         services.AddTransient<PluginsPermissionsCommand>();
         services.AddTransient<PluginsConfigValidateCommand>();
         services.AddTransient<PluginsStoreListCommand>();
+        services.AddTransient<ServeCommand>();
+        services.AddTransient<HealthCommand>();
         services.AddTransient<PluginsStoreInstallCommand>();
         services.AddTransient<PluginsStoreRollbackCommand>();
         services.AddTransient<PluginsStoreUninstallCommand>();

@@ -19,17 +19,32 @@ public sealed class AiConversationStore(AiResponderOptions options) : IAiConvers
         return _options.IsConversationScoped ? key : $"{key}|{senderId}";
     }
 
-    public IReadOnlyList<ChatMessage> GetMessages(string key)
+    public ValueTask<IReadOnlyList<ChatMessage>> GetMessagesAsync(
+        string key,
+        CancellationToken cancellationToken = default)
     {
         lock (_gate)
         {
-            return _histories.TryGetValue(key, out var history)
-                ? history.Messages.ToArray()
-                : [];
+            return ValueTask.FromResult<IReadOnlyList<ChatMessage>>(
+                _histories.TryGetValue(key, out var history)
+                    ? history.Messages.ToArray()
+                    : []);
         }
     }
 
-    public void AppendTurn(string key, string userText, string assistantText)
+    public ValueTask AppendTurnAsync(
+        string key,
+        string userText,
+        string assistantText,
+        CancellationToken cancellationToken = default)
+        => AppendTurnAsync(key, userText, assistantText, null, cancellationToken);
+
+    public ValueTask AppendTurnAsync(
+        string key,
+        string userText,
+        string assistantText,
+        string? sourceEventId,
+        CancellationToken cancellationToken = default)
     {
         lock (_gate)
         {
@@ -43,6 +58,7 @@ public sealed class AiConversationStore(AiResponderOptions options) : IAiConvers
             history.Messages.Add(new ChatMessage(ChatRole.Assistant, assistantText));
             Trim(history);
         }
+        return ValueTask.CompletedTask;
     }
 
     public void Clear()

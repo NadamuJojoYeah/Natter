@@ -16,6 +16,8 @@ public interface IChatResponderRegistry
 
     bool Unregister(string owner, string id);
 
+    bool TryGet(string providerRef, out ChatResponderRegistration? registration);
+
     IReadOnlyList<ChatResponderRegistration> Registrations { get; }
 }
 
@@ -24,6 +26,25 @@ public sealed class ChatResponderRegistry : IChatResponderRegistry
 {
     private readonly List<ChatResponderRegistration> _registrations = [];
     private readonly Lock _gate = new();
+
+    public bool TryGet(string providerRef, out ChatResponderRegistration? registration)
+    {
+        registration = null;
+        if (string.IsNullOrWhiteSpace(providerRef))
+            return false;
+
+        var separator = providerRef.IndexOf('#');
+        var owner = separator < 0 ? null : providerRef[..separator];
+        var id = separator < 0 ? providerRef : providerRef[(separator + 1)..];
+
+        lock (_gate)
+        {
+            registration = _registrations.FirstOrDefault(item =>
+                string.Equals(item.Id, id, StringComparison.Ordinal)
+                && (owner is null || string.Equals(item.Owner, owner, StringComparison.Ordinal)));
+            return registration is not null;
+        }
+    }
 
     public IReadOnlyList<ChatResponderRegistration> Registrations
     {
