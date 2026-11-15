@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <RootNamespace>Natter.Live.Tests</RootNamespace>
+    <Description>Live integration tests that talk to the real DeepSeek and Discord APIs.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.AI" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/Natter.Abstractions/Natter.Abstractions.csproj" />
+    <ProjectReference Include="../../src/Natter.Application/Natter.Application.csproj" />
+    <ProjectReference Include="../../src/Natter.Chat/Natter.Chat.csproj" />
+    <ProjectReference Include="../../src/Natter.Chat.Discord/Natter.Chat.Discord.csproj" />
+    <ProjectReference Include="../../src/Natter.Feature.Ai.DeepSeek/Natter.Feature.Ai.DeepSeek.csproj" />
+    <ProjectReference Include="../../src/Natter.Infrastructure/Natter.Infrastructure.csproj" />
+    <ProjectReference Include="../../src/Natter.Cli.Core/Natter.Cli.Core.csproj" />
+    <ProjectReference Include="../../src/Natter.Plugin.Abstractions/Natter.Plugin.Abstractions.csproj" />
+    <ProjectReference Include="../../samples/Natter.Sample.Plugin.Discord/Natter.Sample.Plugin.Discord.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -105,7 +105,7 @@ public sealed class DeepSeekChatClientTests
         using var http = new HttpClient(handler);
         using var client = new DeepSeekChatClient(
             http,
-            new DeepSeekOptions { TimeoutSeconds = 5 },
+            new DeepSeekOptions { TimeoutSeconds = 5, MaxRetries = 0 },
             DeepSeekApiKey.From("do-not-leak"));
 
         var exception = await Assert.ThrowsAsync<DeepSeekException>(
@@ -122,7 +122,7 @@ public sealed class DeepSeekChatClientTests
         using var http = new HttpClient(new DelayedHandler(TimeSpan.FromSeconds(3)));
         using var client = new DeepSeekChatClient(
             http,
-            new DeepSeekOptions { TimeoutSeconds = 1 },
+            new DeepSeekOptions { TimeoutSeconds = 1, MaxRetries = 0 },
             DeepSeekApiKey.From("key"));
 
         var exception = await Assert.ThrowsAsync<DeepSeekException>(
@@ -141,6 +141,54 @@ public sealed class DeepSeekChatClientTests
             await Task.Delay(delay, cancellationToken);
             return DeepSeekTestData.Json("""{"choices":[{"message":{"content":"late"}}]}""");
         }
+    }
+
+    [Fact]
+    public async Task Transient_5xx_is_retried_with_a_bounded_attempt_count()
+    {
+        var attempts = 0;
+        var handler = new RecordingHttpMessageHandler((_, _) =>
+        {
+            attempts++;
+            return attempts < 3
+                ? DeepSeekTestData.Json("""{"error":{"message":"temporary","code":"server_error"}}""", HttpStatusCode.InternalServerError)
+                : DeepSeekTestData.Json("""{"choices":[{"message":{"content":"recovered"},"finish_reason":"stop"}]}""");
+        });
+
+        using var http = new HttpClient(handler);
+        using var client = new DeepSeekChatClient(
+            http,
+            new DeepSeekOptions { MaxRetries = 2, RetryBaseDelayMs = 1, RetryMaxDelayMs = 5, TimeoutSeconds = 5 },
+            DeepSeekApiKey.From("key"));
+
+        var response = await client.GetResponseAsync([new ChatMessage(ChatRole.User, "retry")]);
+
+        Assert.Equal("recovered", response.Text);
+        Assert.Equal(3, attempts);
+        Assert.Equal(3, handler.Requests.Count);
+    }
+
+    [Fact]
+    public async Task Authentication_errors_are_not_retried()
+    {
+        var attempts = 0;
+        var handler = new RecordingHttpMessageHandler((_, _) =>
+        {
+            attempts++;
+            return DeepSeekTestData.Json("""{"error":{"message":"invalid key"}}""", HttpStatusCode.Unauthorized);
+        });
+
+        using var http = new HttpClient(handler);
+        using var client = new DeepSeekChatClient(
+            http,
+            new DeepSeekOptions { MaxRetries = 3, RetryBaseDelayMs = 1, TimeoutSeconds = 5 },
+            DeepSeekApiKey.From("key"));
+
+        var exception = await Assert.ThrowsAsync<DeepSeekException>(
+            () => client.GetResponseAsync([new ChatMessage(ChatRole.User, "retry")]));
+
+        Assert.Equal(DeepSeekErrorKind.Authentication, exception.Kind);
+        Assert.Equal(1, attempts);
     }
 
     [Fact]

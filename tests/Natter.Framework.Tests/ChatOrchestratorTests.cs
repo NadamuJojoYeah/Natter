@@ -131,6 +131,38 @@ public sealed class ChatOrchestratorTests
     }
 
     [Fact]
+    public async Task Orchestrator_ignores_messages_from_the_bot_identity_by_default()
+    {
+        var clock = new TestClock();
+        var source = ChatTestData.Source();
+
+        await using var host = await TestHost.CreateAsync();
+        var upstream = new InMemoryChatUpstream(source, Capabilities.TextOnly, clock);
+        host.Get<IChatUpstreamRegistry>().Register(upstream);
+        await upstream.ConnectAsync();
+
+        var responder = new ReplyResponder(host.Get<ChatCommandFactory>(), source);
+        var orchestrator = new ChatOrchestrator(
+            host.Get<IChatEventSource>(),
+            host.Get<IChatCommandDispatcher>(),
+            responder,
+            new ChatOrchestrationOptions(),
+            logger: null);
+
+        var selfMessage = new Message(
+            "self-1",
+            ChatTestData.Conversation("dm", ConversationKind.Direct),
+            new User(source.SelfId, "Natter", UserKind.Human),
+            new Content("echo"),
+            clock.UtcNow);
+
+        await orchestrator.HandleAsync(ChatTestData.CreatedEvent(source, selfMessage, "evt:self"));
+
+        Assert.Empty(responder.Seen);
+        Assert.Empty(upstream.Messages);
+    }
+
+    [Fact]
     public async Task Process_bot_messages_can_be_enabled_explicitly()
     {
         var clock = new TestClock();

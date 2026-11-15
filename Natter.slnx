@@ -17,4 +17,5 @@
   <Project Path="samples/Natter.Sample.Plugin.Metrics/Natter.Sample.Plugin.Metrics.csproj" />
   <Project Path="samples/Natter.Sample.Plugin.Discord/Natter.Sample.Plugin.Discord.csproj" />
   <Project Path="tests/Natter.Framework.Tests/Natter.Framework.Tests.csproj" />
+  <Project Path="tests/Natter.Live.Tests/Natter.Live.Tests.csproj" />
 </Solution>

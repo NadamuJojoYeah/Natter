@@ -27,8 +27,14 @@
     "requireMention": { "type": "boolean" },
     "messageCommands": { "type": "boolean" },
     "slashCommands": { "type": "boolean" },
-    "ignoreBots": { "type": "boolean" },
-    "ignoreSelf": { "type": "boolean" },
+    "ignoreBots": {
+      "type": "boolean",
+      "description": "Default true. Disabling lets bot messages enter NLMP; keep true unless another layer filters them."
+    },
+    "ignoreSelf": {
+      "type": "boolean",
+      "description": "Default true. Disabling can make the bot answer its own messages; orchestrator also ignores self by default."
+    },
     "typing": { "type": "boolean" },
     "maxMessageLength": { "type": "integer", "minimum": 1, "maximum": 2000 },
     "maxAttachmentBytes": { "type": "integer", "minimum": 1 },
