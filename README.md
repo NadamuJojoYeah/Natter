@@ -21,7 +21,8 @@ Natter 只交付**框架能力**：端口契约、组合根、插件加载、DI 
 - **CLI 内核**：平台无关的命令注册表、解析器、帮助、JSON 输出、`exec` 同宿主命令链；Console 与 Android 宿主共用。
 - **多平台发布**：自包含单文件（win/linux/osx）+ Android APK；示例插件随发布目录部署或嵌入宿主。
 - **Runtime/Profile**：`profiles.json` 显式 provider 路由、SQLite 会话、`serve`/`health`、`--config-dir`/`--state-dir`、Tier 1/2 启动策略。
-- **测试**：214 个框架级测试覆盖聚合事件、Rx 总线、DI 管道、解析器、插件加载、CLI、NLMP 一致性与 NPS v1 插件内核；另有可选的 live 套件对真实 Discord 与 DeepSeek API 做分层联调（见 [真实 API 联调测试方案](docs/LIVE_TEST_PLAN.md)）。
+- **Context/Memory**：host prompt/context/memory pipeline、SQLite `summaries`/`memory_items`、确定性摘要、显式 `remember`/`forget`、scope 隔离。
+- **测试**：224 个框架级测试覆盖聚合事件、Rx 总线、DI 管道、解析器、插件加载、CLI、NLMP 一致性与 NPS v1 插件内核；另有可选的 live 套件对真实 Discord 与 DeepSeek API 做分层联调（见 [真实 API 联调测试方案](docs/LIVE_TEST_PLAN.md)）。
 
 ## 架构
 
@@ -165,6 +166,9 @@ natter <command> [arguments] [options]
 | `spark status [--json]` | 星火 model/请求/错误/延迟/token |
 | `serve [--duration <s>] [--json]` | 长驻 host；加载 profile/upstream，等待取消或到时退出 |
 | `health [--json]` | upstream/profile/provider/plugin/会话健康快照 |
+| `remember <text> [--scope]` | 显式、用户确认的长期记忆 | `remember "likes tea" --scope user --source ...` |
+| `forget <id|text>` | 删除显式记忆并失效 summary | `forget "likes tea"` |
+| `memory list [--limit]` | 查看当前 source/conversation/actor 可见记忆 | `memory list --json` |
 | `plugins list [--failed] [--json]` | 已加载/失败的插件 |
 | `plugins inspect <directory> [--json]` | 只探测插件目录，不注册 |
 | `demo [--name] [--amount] [--times] [--json]` | 聚合 → 仓储 → 领域事件 → Rx 全链路 |
@@ -229,6 +233,7 @@ Android 产物位于 `artifacts/android/`。示例构建使用默认调试签名
 - [Context & Memory 插件](docs/CONTEXT_MEMORY_PLUGIN.md)：Prompt/Context/Memory 契约、Profile、NPS contribution、数据所有权与测试。
 - [第二上游/消费者验证](docs/SECOND_ADAPTER_VALIDATION.md)：钉钉 + 星火的接入测试矩阵、边界与验收。
 - [P2 Runtime & Profile 开发文档](docs/P2_RUNTIME_PROFILE.md)：serve、profiles、provider 路由、SQLite 会话、health 与一等/二等公民策略。
+- [P3 Context & Memory 开发文档](docs/P3_CONTEXT_MEMORY.md)：Prompt/Context/Memory 契约、profile 扩展、SQLite 摘要/记忆、NPS contribution 与验收。
 - [插件开发](docs/PLUGINS.md)：清单、适配器覆盖、CLI 命令、生命周期、嵌入模式。
 - [插件规范（NPS v1）](docs/PLUGIN_SPEC.md)：manifest、contribution、依赖图、Host API、配置/秘密、权限与激活回滚。
 - [Android 插件宿主](docs/ANDROID_PLUGIN_HOST.md)：embedded/dynamic 双发行、AOT off 动态加载、签名安装与回滚。

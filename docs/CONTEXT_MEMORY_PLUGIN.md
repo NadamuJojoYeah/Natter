@@ -1,9 +1,9 @@
 # Natter Context & Memory Plugin Design
 
-> **状态**：Accepted direction · 初始边界已交付（`IAiContextAssembler` / `IAiConversationStore` + 共享 responder；完整 Prompt/Memory NPS contribution/profile 未交付）  
+> **状态**：P3.1–P3.4 初始实现已交付（host pipeline、SQLite summary/memory、显式 remember/forget、profile 字段；NPS prompt/context/memory contribution 激活与真实 Tier 1 记忆验收待后续）  
 > **日期**：2026-11-15  
 > **定位**：把 prompt / context / memory 做成可替换插件，但由 host 持有契约、数据、预算、安全与校验。  
-> **关联**：[Harness 架构](HARNESS_ARCHITECTURE.md)、[NLMP](NLMP.md)、[NPS v1](PLUGIN_SPEC.md)、[AI Provider 设计](AI_PROVIDER_DESIGN.md)
+> **关联**：[Harness 架构](HARNESS_ARCHITECTURE.md)、[P3 实现规格](P3_CONTEXT_MEMORY.md)、[NLMP](NLMP.md)、[NPS v1](PLUGIN_SPEC.md)、[AI Provider 设计](AI_PROVIDER_DESIGN.md)
 
 ---
 

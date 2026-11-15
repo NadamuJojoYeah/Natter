@@ -294,6 +294,7 @@ CI 不调用真实 DeepSeek。详细设计见 [AI Provider Design](AI_PROVIDER_D
 - `--config-dir` 指向 `profiles.json` 与插件 config；默认 `<app base>/config`；
 - `--state-dir` 指向 SQLite（`natter.db`）；不提交 state 目录；
 - `--profile` 覆盖默认 profile；`NATTER_CONFIG_DIR` / `NATTER_STATE_DIR` / `NATTER_PROFILE` 等价；
+- 显式记忆使用 `natter remember` / `forget` / `memory list`；只有配置 `--state-dir` 才跨重启持久化；
 - `natter serve` 长驻；`natter health --json` 输出 upstream/provider/plugin/会话快照；
 - Tier 1 profile provider 缺失时启动失败；Tier 2 缺失只禁用该 profile。
 
