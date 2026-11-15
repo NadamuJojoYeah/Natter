@@ -53,7 +53,14 @@ public sealed class DiscordOptions
     public long MaxAttachmentBytes { get; set; } = 25L * 1024 * 1024;
 
     /// <summary>Application command names that may be registered/handled.</summary>
-    public Dictionary<string, bool> Commands { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    public Dictionary<string, bool> Commands { get; set; } = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["ask"] = true,
+        ["remember"] = true,
+        ["forget"] = true,
+        ["memory"] = true,
+        ["reset"] = true,
+    };
 
     public int InteractionTtlSeconds { get; set; } = 900;
 

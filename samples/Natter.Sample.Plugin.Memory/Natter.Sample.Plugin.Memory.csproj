@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <NpsPlugin>true</NpsPlugin>
+    <Description>Sample NPS memory.store plugin.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/Natter.Abstractions/Natter.Abstractions.csproj" />
+    <ProjectReference Include="../../src/Natter.Application/Natter.Application.csproj" />
+    <ProjectReference Include="../../src/Natter.Chat/Natter.Chat.csproj" />
+    <ProjectReference Include="../../src/Natter.Plugin.Abstractions/Natter.Plugin.Abstractions.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="plugin.json" CopyToOutputDirectory="Never" CopyToPublishDirectory="Never" />
+    <EmbeddedResource Include="plugin.json" LogicalName="Natter.Sample.Plugin.Memory.plugin.json" />
+    <EmbeddedResource Include="config.schema.json" LogicalName="Natter.Sample.Plugin.Memory.config.schema.json" />
+  </ItemGroup>
+</Project>

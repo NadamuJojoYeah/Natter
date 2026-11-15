@@ -141,7 +141,7 @@ public static partial class PluginManifestReader
                 errors.Add(new PluginManifestIssue(
                     "/kind",
                     "invalid-kind",
-                    "Kind is required and must be transport, feature or tool."));
+                    "Kind is required and must be transport, feature, tool or memory."));
             }
 
             if (schemaVersion.ValueKind != JsonValueKind.Number
@@ -190,7 +190,8 @@ public static partial class PluginManifestReader
         => kind is not null
            && (string.Equals(kind, "transport", StringComparison.OrdinalIgnoreCase)
                || string.Equals(kind, "feature", StringComparison.OrdinalIgnoreCase)
-               || string.Equals(kind, "tool", StringComparison.OrdinalIgnoreCase));
+               || string.Equals(kind, "tool", StringComparison.OrdinalIgnoreCase)
+               || string.Equals(kind, "memory", StringComparison.OrdinalIgnoreCase));
 
     private static void Validate(
         PluginManifest manifest,

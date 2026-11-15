@@ -1,0 +1,30 @@
+[Unit]
+Description=Natter Tier 1 chat host
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=natter
+Group=natter
+WorkingDirectory=/opt/natter
+EnvironmentFile=/etc/natter/live.env
+Environment=NATTER_CONFIG_DIR=/etc/natter/config
+Environment=NATTER_STATE_DIR=/var/lib/natter
+ExecStart=/opt/natter/natter serve
+Restart=on-failure
+RestartSec=5
+
+# Keep state and credentials out of the process environment/logs.
+StateDirectory=natter
+ReadWritePaths=/var/lib/natter
+ProtectSystem=strict
+ProtectHome=yes
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "id": "natter.sample.memory",
+  "name": "Sample Memory Store",
+  "version": "0.1.0",
+  "kind": "memory",
+  "hostApi": ">=0.1.0 <1.0.0",
+  "entry": { "assembly": "Natter.Sample.Plugin.Memory.dll", "type": "Natter.Sample.Plugin.Memory.MemoryStorePlugin" },
+  "description": "Minimal NPS memory.store contribution used to validate profile selection.",
+  "author": "Natter",
+  "license": "MIT",
+  "permissions": ["storage"],
+  "contributions": [
+    { "type": "memory.store", "id": "file" }
+  ]
+}

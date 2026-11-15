@@ -12,7 +12,8 @@ public sealed class ProfileAwareChatResponder(
     IRuntimeProfileStore profiles,
     IProfileResolver resolver,
     CompositeChatResponder fallback,
-    ILogger<ProfileAwareChatResponder>? logger = null) : IChatResponder
+    ILogger<ProfileAwareChatResponder>? logger = null,
+    IChatCommandRouter? commandRouter = null) : IChatResponder
 {
     public async ValueTask<ChatCommand?> RespondAsync(
         ChatEvent chatEvent,
@@ -25,6 +26,16 @@ public sealed class ProfileAwareChatResponder(
 
         var set = profiles.Current;
         var profile = resolver.Resolve(source, conversation, sender);
+
+        if (chatEvent is InteractionCreatedEvent interactionEvent && commandRouter is not null
+            && profile is not null && profile.Policy.Enabled)
+        {
+            using var commandScope = ProfileContext.Push(profile);
+            var command = await commandRouter.TryHandleAsync(interactionEvent, cancellationToken).ConfigureAwait(false);
+            if (command is not null)
+                return command;
+        }
+
         if (profile is null || !profile.Policy.Enabled)
             return null;
 

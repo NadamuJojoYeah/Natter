@@ -36,6 +36,7 @@
     <ProjectReference Include="../../src/Natter.Domain/Natter.Domain.csproj" />
     <ProjectReference Include="../../samples/Natter.Sample.Plugin.Greetings/Natter.Sample.Plugin.Greetings.csproj" />
     <ProjectReference Include="../../samples/Natter.Sample.Plugin.Metrics/Natter.Sample.Plugin.Metrics.csproj" />
+    <ProjectReference Include="../../samples/Natter.Sample.Plugin.Memory/Natter.Sample.Plugin.Memory.csproj" />
     <ProjectReference Include="../../samples/Natter.Sample.Plugin.Discord/Natter.Sample.Plugin.Discord.csproj" />
     <ProjectReference Include="../../samples/Natter.Sample.Plugin.DingTalk/Natter.Sample.Plugin.DingTalk.csproj" />
   </ItemGroup>

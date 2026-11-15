@@ -18,6 +18,7 @@
   <Project Path="src/Natter.Hosting.Android/Natter.Hosting.Android.csproj" />
   <Project Path="samples/Natter.Sample.Plugin.Greetings/Natter.Sample.Plugin.Greetings.csproj" />
   <Project Path="samples/Natter.Sample.Plugin.Metrics/Natter.Sample.Plugin.Metrics.csproj" />
+  <Project Path="samples/Natter.Sample.Plugin.Memory/Natter.Sample.Plugin.Memory.csproj" />
   <Project Path="samples/Natter.Sample.Plugin.Discord/Natter.Sample.Plugin.Discord.csproj" />
   <Project Path="samples/Natter.Sample.Plugin.DingTalk/Natter.Sample.Plugin.DingTalk.csproj" />
   <Project Path="tests/Natter.Framework.Tests/Natter.Framework.Tests.csproj" />

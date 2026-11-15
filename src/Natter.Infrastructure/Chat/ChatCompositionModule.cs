@@ -96,7 +96,8 @@ public sealed class ChatCompositionModule : ICompositionModule
                 provider.GetRequiredService<Natter.Application.Chat.IRuntimeProfileStore>(),
                 provider.GetRequiredService<Natter.Application.Chat.IProfileResolver>(),
                 provider.GetRequiredService<Natter.Application.Chat.CompositeChatResponder>(),
-                provider.GetService<Microsoft.Extensions.Logging.ILogger<Natter.Application.Chat.ProfileAwareChatResponder>>()));
+                provider.GetService<Microsoft.Extensions.Logging.ILogger<Natter.Application.Chat.ProfileAwareChatResponder>>(),
+                provider.GetService<Natter.Application.Chat.IChatCommandRouter>()));
 
         services.AddSingleton<ChatIngressLifecycle>();
         services.AddSingleton<IPluginLifecycle>(provider => provider.GetRequiredService<ChatIngressLifecycle>());

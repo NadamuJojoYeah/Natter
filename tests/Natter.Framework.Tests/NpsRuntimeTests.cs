@@ -89,6 +89,32 @@ public sealed class NpsRuntimeTests
     }
 
     [Fact]
+    public async Task Sample_memory_store_contribution_is_selectable_and_unregisters()
+    {
+        var plugin = new Natter.Sample.Plugin.Memory.MemoryStorePlugin();
+        var manifest = Natter.Sample.Plugin.Memory.MemoryStorePlugin.Manifest;
+        var builder = NatterApplicationBuilder.Create()
+            .AddNatterFramework()
+            .AddEmbeddedNpsPlugin(manifest, plugin);
+
+        await using var host = builder.Build();
+        await host.StartAsync();
+        var catalog = host.Services.GetRequiredService<IContextComponentCatalog>();
+        Assert.True(catalog.TryGetMemory("natter.sample.memory#file", out var store));
+        Assert.NotNull(store);
+        var source = Source.Create("discord", "discord", "bot");
+        var conversation = new Conversation("c", ConversationKind.Direct);
+        var user = new User("u", "U");
+        var item = await store!.WriteAsync(new MemoryWriteRequest(
+            source, conversation, user, MemoryScopeType.User, "preference", "sample memory"));
+        Assert.Single(await store.SearchAsync(new MemoryQuery(source, conversation, user)));
+
+        await host.StopAsync();
+        Assert.False(catalog.TryGetMemory("natter.sample.memory#file", out _));
+        _ = item;
+    }
+
+    [Fact]
     public async Task Activation_failure_is_reported_and_rolls_back()
     {
         var plugin = new FailingPlugin();

@@ -1,0 +1,22 @@
+services:
+  natter:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ./live.env
+    environment:
+      NATTER_CONFIG_DIR: /config
+      NATTER_STATE_DIR: /state
+    volumes:
+      - ./config:/config:ro
+      - natter-state:/state
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  natter-state:

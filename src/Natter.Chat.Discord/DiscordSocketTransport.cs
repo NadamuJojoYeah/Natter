@@ -335,15 +335,37 @@ public sealed class DiscordSocketTransport : IDiscordTransport, IDisposable
                 if (!enabled || string.IsNullOrWhiteSpace(name))
                     continue;
 
-                var properties = new SlashCommandBuilder()
+                var builder = new SlashCommandBuilder()
                     .WithName(name)
-                    .WithDescription($"Natter {name} command")
-                    .AddOption(
-                        "prompt",
-                        ApplicationCommandOptionType.String,
-                        "Prompt text",
-                        isRequired: false)
-                    .Build();
+                    .WithDescription(CommandDescription(name));
+                switch (name.ToLowerInvariant())
+                {
+                    case "ask":
+                        builder.AddOption("prompt", ApplicationCommandOptionType.String, "Prompt text", isRequired: true);
+                        break;
+                    case "remember":
+                        builder.AddOption("text", ApplicationCommandOptionType.String, "Memory text", isRequired: true);
+                        builder.AddOption(new SlashCommandOptionBuilder()
+                            .WithName("scope")
+                            .WithDescription("Memory scope")
+                            .WithType(ApplicationCommandOptionType.String)
+                            .AddChoice("user", "user")
+                            .AddChoice("conversation", "conversation")
+                            .AddChoice("guild", "guild"));
+                        break;
+                    case "forget":
+                        builder.AddOption("target", ApplicationCommandOptionType.String, "Memory id or text", isRequired: true);
+                        break;
+                    case "memory":
+                        builder.AddOption("limit", ApplicationCommandOptionType.Integer, "Maximum items", isRequired: false);
+                        break;
+                    case "reset":
+                        break;
+                    default:
+                        builder.AddOption("prompt", ApplicationCommandOptionType.String, "Prompt text", isRequired: false);
+                        break;
+                }
+                var properties = builder.Build();
 
                 if (ulong.TryParse(_options.DevGuildId, out var guildId)
                     && _client.GetGuild(guildId) is { } guild)
@@ -368,6 +390,17 @@ public sealed class DiscordSocketTransport : IDiscordTransport, IDisposable
             });
         }
     }
+
+    private static string CommandDescription(string name)
+        => name.ToLowerInvariant() switch
+        {
+            "ask" => "Ask Natter",
+            "remember" => "Remember an explicit user preference",
+            "forget" => "Forget a memory",
+            "memory" => "List your visible memories",
+            "reset" => "Reset the current conversation",
+            _ => $"Natter {name} command",
+        };
 
     private Task OnMessageReceivedAsync(SocketMessage message)
     {
