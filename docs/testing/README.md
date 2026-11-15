@@ -57,7 +57,9 @@
 | 日期 | 记录 | 范围 | 结果 |
 | --- | --- | --- | --- |
 | 2026-11-15 | [真实 API 联调：Discord + DeepSeek](2026-11-15-live-deepseek-discord.md) | `natter.transport.discord`、`natter.feature.ai.deepseek` 的分层真实测试（L1–L5） | 26/26 live 通过，172/172 框架回归通过；2 个缺陷、2 个观测、2 个环境限制 |
-| 2026-11-15 | [开发侧处置记录](2026-11-15-live-deepseek-discord-response.md) | BUG/OBS 处置、临时改动、发布闸门与归档规则 | BUG-001/002 已修复；26/26 live 复测通过；L5 人工闸门待执行 |
+| 2026-11-15 | [开发侧处置记录](2026-11-15-live-deepseek-discord-response.md) | BUG/OBS 处置、临时改动、发布闸门与归档规则 | BUG-001/002 已修复；26/26 live 复测通过；L5 待复测 |
+| 2026-11-15 | [人工闸门（真人 @bot）](2026-11-15-live-manual-gate.md) | 真实频道内人工 @bot → AI 回复（L5） | 基线未通过：`BUG-003`；修复提交 `687f27f` |
+| 2026-11-15 | [人工闸门处置记录](2026-11-15-live-manual-gate-response.md) | BUG-003 根因、修复决策、回归闸门与归档规则 | BUG-003 已修复；177/177 回归、ingress 2/2；L5 待真人复测 |
 
 ## 5. 相关文档
 

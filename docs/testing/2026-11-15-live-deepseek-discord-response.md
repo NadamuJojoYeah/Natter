@@ -1,6 +1,6 @@
 # 开发侧处置记录：2026-11-15 真实 API 联调（Discord + DeepSeek）
 
-> **状态**：Temporary / Active（BUG-001/002 已修复；26/26 live 已从正式修复复测通过；L5 人工闸门待执行）  
+> **状态**：Temporary / Active（BUG-001/002 已修复；26/26 live 已从正式修复复测通过；L5 人工闸门未通过，BUG-003 开放）
 > **类型**：测试配对处置记录，不是长期设计文档  
 > **对应测试**：[真实 API 联调：Discord + DeepSeek](2026-11-15-live-deepseek-discord.md)  
 > **基线**：`HEAD=201e4ff` + 测试侧未提交临时改动  
@@ -13,7 +13,7 @@
 本次真实联调的结论应定为：
 
 > **Live Integration: Pass（26/26，正式修复后）**  
-> **Product Acceptance: Pending L5 manual gate（BUG-001/002 已关闭）**
+> **Product Acceptance: Blocked by BUG-003（L5 人工闸门未通过）**
 
 测试本身有效：真实 DeepSeek、真实 Discord、真实插件加载、真实 CLI 部署都被覆盖了。  
 但 `26/26` 是在**测试侧临时修改产品代码**后得到的，不等于干净 HEAD 通过，也不等于产品验收通过。
@@ -23,7 +23,7 @@
 1. 测试报告可以作为真实环境基线保留；
 2. BUG-001 / BUG-002 是产品缺陷，不是测试环境问题；
 3. 测试侧临时补丁只作为定位证据，不直接视为最终修复；
-4. 正式修复后 26/26 live 已复测通过，BUG-001/002 关闭；L5 人工闸门单独留待执行；
+4. 正式修复后 26/26 live 已复测通过，BUG-001/002 关闭；L5 人工闸门随后执行，未通过（BUG-003）；
 5. OBS-001 / OBS-002 已落地策略与守护测试。
 
 当前复核状态：
@@ -51,7 +51,7 @@ L4 deployment live:     5/5 passed
 L3/L3b E2E live:        2/2 passed
 ```
 
-正式修复后全量 live 已复测：L1 8/8、L2 9/9、L2b 2/2、L3/L3b 2/2、L4 5/5，共 **26/26**。剩余验收仅为 L5 人工闸门（真人在测试频道 @bot）；未通过前保持 `Product Acceptance: Pending L5`。
+正式修复后全量 live 已复测：L1 8/8、L2 9/9、L2b 2/2、L3/L3b 2/2、L4 5/5，共 **26/26**。L5 人工闸门随后执行，真实频道 @bot 未通过（BUG-003），因此保持 `Product Acceptance: Blocked by BUG-003`；详见 [人工闸门处置记录](2026-11-15-live-manual-gate-response.md)。
 
 ---
 

@@ -377,7 +377,7 @@ public interface IDiscordTransport
 - `Content.Text` = 清洗后的 message content；
 - `Content.Format = Markdown`（Discord 支持 Markdown）；
 - `Content.Attachments` = Discord 附件 URL/文件名/MIME/大小；
-- `Content.Mentions` = 结构化 mention；
+- `Content.Mentions` = 结构化 mention；入站保留 self mention（它是 orchestrator 判断"是否被 @"的唯一可移植信号），正文中的 `<@bot>` 仍会被清洗；出站时由 upstream 过滤 self mention。
 - `Message.ReplyTo` = `MessageReference.MessageId`。
 
 ### 8.4 Slash command
