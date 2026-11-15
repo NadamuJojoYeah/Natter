@@ -262,6 +262,44 @@ public sealed class NpsRuntimeTests
     }
 
     [Fact]
+    public async Task Plugin_package_with_secret_files_is_rejected()
+    {
+        var directory = CreateTempPluginDirectoryFromSample("""
+            {
+              "schemaVersion": 1,
+              "id": "natter.test.secretfile",
+              "name": "Secret File",
+              "version": "0.1.0",
+              "kind": "feature",
+              "hostApi": ">=0.1.0 <1.0.0",
+              "entry": { "assembly": "Natter.Sample.Plugin.Greetings.dll", "type": "Natter.Sample.Plugin.Greetings.GreetingsNpsPlugin" },
+              "permissions": [],
+              "contributions": []
+            }
+            """);
+        File.WriteAllText(Path.Combine(directory, "token"), "should-not-ship");
+
+        try
+        {
+            var builder = NatterApplicationBuilder.Create()
+                .AddNatterFramework()
+                .AddPluginDirectory(directory);
+
+            await using var host = builder.Build();
+            await host.StartAsync();
+
+            var descriptor = Assert.Single(host.Services.GetRequiredService<IPluginCatalog>().Plugins);
+            Assert.Equal(PluginState.Failed, descriptor.State);
+            Assert.Equal("sensitive-file", descriptor.ErrorDetail!.Code);
+            Assert.Contains("token", descriptor.Error!);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Missing_entry_type_is_reported_as_a_load_error()
     {
         var directory = CreateTempPluginDirectoryFromSample("""

@@ -156,6 +156,7 @@ internal sealed class NpsPluginCandidate
     {
         Error = error;
         State = PluginState.Failed;
+        SetContributionStatus("unavailable");
         Descriptor = Descriptor with
         {
             State = PluginState.Failed,
@@ -168,6 +169,7 @@ internal sealed class NpsPluginCandidate
     {
         Error = error;
         State = PluginState.Blocked;
+        SetContributionStatus("unavailable");
         Descriptor = Descriptor with
         {
             State = PluginState.Blocked,

@@ -565,6 +565,10 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
             _catalog.UpdateDescriptor(candidate.Id, _ => candidate.Descriptor);
             _startedOrder.Add(candidate);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
             await FailDuringActivationAsync(

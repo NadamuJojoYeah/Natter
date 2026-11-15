@@ -70,7 +70,16 @@ public sealed class NatterHost : IAsyncDisposable
         // Activate NPS plugins and connect their upstreams after host lifecycles have
         // subscribed (ChatIngressLifecycle attaches to upstreams at registration).
         if (_npsRuntime is not null)
-            await _npsRuntime.StartAsync(cancellationToken).ConfigureAwait(false);
+        {
+            try
+            {
+                await _npsRuntime.StartAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "The NPS plugin runtime failed to start.");
+            }
+        }
 
         _logger.LogInformation(
             "Natter host started with {PluginCount} plugin(s) and {LifecycleCount} lifecycle hook(s).",
@@ -83,7 +92,16 @@ public sealed class NatterHost : IAsyncDisposable
         if (!_started) return;
 
         if (_npsRuntime is not null)
-            await _npsRuntime.StopAsync(cancellationToken).ConfigureAwait(false);
+        {
+            try
+            {
+                await _npsRuntime.StopAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "The NPS plugin runtime failed to stop.");
+            }
+        }
 
         for (var index = _startedLifecycles.Count - 1; index >= 0; index--)
         {
