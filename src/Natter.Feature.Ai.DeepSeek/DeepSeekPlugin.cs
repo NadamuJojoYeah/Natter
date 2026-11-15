@@ -111,6 +111,12 @@ public sealed class DeepSeekPlugin : INatterPlugin
         if (options.TimeoutSeconds is < 1 or > 600)
             throw new InvalidOperationException("DeepSeek config 'timeoutSeconds' must be between 1 and 600.");
 
+        if (options.MaxRetries is < 0 or > 5)
+            throw new InvalidOperationException("DeepSeek config 'maxRetries' must be between 0 and 5.");
+
+        if (options.RetryBaseDelayMs is < 0 or > 60000 || options.RetryMaxDelayMs < options.RetryBaseDelayMs)
+            throw new InvalidOperationException("DeepSeek retry delays are invalid.");
+
         if (options.MaxConcurrentRequests is < 1 or > 16)
             throw new InvalidOperationException("DeepSeek config 'maxConcurrentRequests' must be between 1 and 16.");
 

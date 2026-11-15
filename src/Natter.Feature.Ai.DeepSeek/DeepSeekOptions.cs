@@ -27,6 +27,13 @@ public sealed class DeepSeekOptions
 
     public int TimeoutSeconds { get; set; } = 60;
 
+    /// <summary>Maximum retries after the initial attempt for retryable provider failures.</summary>
+    public int MaxRetries { get; set; } = 2;
+
+    public int RetryBaseDelayMs { get; set; } = 250;
+
+    public int RetryMaxDelayMs { get; set; } = 2000;
+
     public bool Streaming { get; set; }
 
     public List<string> Tools { get; set; } = [];

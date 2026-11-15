@@ -66,13 +66,42 @@ public sealed class DeepSeekChatClient : IChatClient
         var model = string.IsNullOrWhiteSpace(options?.ModelId) ? _options.Model : options.ModelId!;
         var request = BuildRequest(messages, options, model);
         var json = JsonSerializer.Serialize(request, JsonOptions);
-        var stopwatch = Stopwatch.StartNew();
+        var maxRetries = Math.Clamp(_options.MaxRetries, 0, 5);
+
+        for (var attempt = 0; ; attempt++)
+        {
+            var stopwatch = Stopwatch.StartNew();
+
+            try
+            {
+                var parsed = await SendOnceAsync(json, model, cancellationToken).ConfigureAwait(false);
+                stopwatch.Stop();
+                _metrics.RecordSuccess(parsed.Usage, (int)stopwatch.ElapsedMilliseconds);
+                return parsed.Response;
+            }
+            catch (DeepSeekException ex)
+            {
+                stopwatch.Stop();
+                _metrics.RecordError(ex.Kind, ex.Message);
+
+                if (attempt >= maxRetries || !ex.Retryable)
+                    throw;
+
+                await Task.Delay(GetRetryDelay(attempt, ex), cancellationToken).ConfigureAwait(false);
+            }
+        }
+    }
+
+    private async Task<(ChatResponse Response, DeepSeekUsage Usage)> SendOnceAsync(
+        string json,
+        string model,
+        CancellationToken cancellationToken)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(Math.Max(1, _options.TimeoutSeconds)));
 
         try
         {
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeout.CancelAfter(TimeSpan.FromSeconds(Math.Max(1, _options.TimeoutSeconds)));
-
             using var httpRequest = new HttpRequestMessage(HttpMethod.Post, _endpoint)
             {
                 Content = new StringContent(json, Encoding.UTF8, "application/json"),
@@ -91,29 +120,37 @@ public sealed class DeepSeekChatClient : IChatClient
                 throw DeepSeekException.FromHttp((int)response.StatusCode, body, retryAfter);
             }
 
-            var parsed = ParseResponse(body, model);
-            stopwatch.Stop();
-            _metrics.RecordSuccess(parsed.Usage, (int)stopwatch.ElapsedMilliseconds);
-            return parsed.Response;
+            return ParseResponse(body, model);
         }
         catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
         {
-            stopwatch.Stop();
-            _metrics.RecordError(DeepSeekErrorKind.Timeout, "request timed out");
             throw DeepSeekException.Timeout("DeepSeek request timed out.", ex);
-        }
-        catch (DeepSeekException ex)
-        {
-            stopwatch.Stop();
-            _metrics.RecordError(ex.Kind, ex.Message);
-            throw;
         }
         catch (HttpRequestException ex)
         {
-            stopwatch.Stop();
-            _metrics.RecordError(DeepSeekErrorKind.Unavailable, ex.Message);
-            throw new DeepSeekException(DeepSeekErrorKind.Unavailable, "DeepSeek is temporarily unavailable.", innerException: ex);
+            throw new DeepSeekException(
+                DeepSeekErrorKind.Unavailable,
+                "DeepSeek is temporarily unavailable.",
+                innerException: ex);
         }
+        catch (JsonException ex)
+        {
+            throw new DeepSeekException(
+                DeepSeekErrorKind.Unknown,
+                "DeepSeek returned an invalid response.",
+                innerException: ex);
+        }
+    }
+
+    private TimeSpan GetRetryDelay(int attempt, DeepSeekException exception)
+    {
+        if (exception.RetryAfterMs is { } retryAfter && retryAfter > 0)
+            return TimeSpan.FromMilliseconds(Math.Min(retryAfter, Math.Max(0, _options.RetryMaxDelayMs)));
+
+        var exponential = Math.Max(0, _options.RetryBaseDelayMs) * Math.Pow(2, Math.Min(attempt, 10));
+        var capped = Math.Min(exponential, Math.Max(0, _options.RetryMaxDelayMs));
+        var jitter = Random.Shared.Next(0, 101);
+        return TimeSpan.FromMilliseconds(capped + jitter);
     }
 
     public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
