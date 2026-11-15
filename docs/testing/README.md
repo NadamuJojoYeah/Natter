@@ -65,9 +65,12 @@
 | 2026-11-15 | [测试资产收口](2026-11-15-asset-closure.md) | 凭据移出工作区、明文扫描、临时/正式目录分离、资产清单 | 完成：仓库无明文、历史 0 命中、测试改从仓库外读取；平台轮换待人工 |
 | 2026-11-15 | [P2 验收测试（归档）](archive/2026-11-15-p2-acceptance.md) | serve、profiles、SQLite、Tier 1/2、并发与安全 | **Closed · Go**：4 个 High 复测通过；真实 DM/频道/钉钉往返；214/214 |
 | 2026-11-15 | [P2 验收处置记录（归档）](archive/2026-11-15-p2-acceptance-response.md) | 4 个 High 的根因、修复方向、复测闸门与归档规则 | **Closed · Go**（Archived） |
+| 2026-11-15 | [P3 Context & Memory 验收](2026-11-15-p3-acceptance.md) | prompt/context/memory、SQLite memory、remember/forget、真实召回 | **No-Go**：真实链路全部通过；1 High（共享 scope 删除）+ 2 Medium（contribution/export） |
+| 2026-11-15 | [P3 验收处置记录](2026-11-15-p3-acceptance-response.md) | 共享删除、host contribution、export CLI、DM private、prompt injection、summary 更新 | 待修复：1 High + 2 Medium + 3 未测项 |
 
 ## 5. 相关文档
 
+- [P3 Context & Memory 验收测试计划](P3_ACCEPTANCE.md)：prompt/context/memory、SQLite 迁移、remember/forget、真实召回与隔离
 - [P2 Runtime & Profile 验收测试计划](P2_ACCEPTANCE.md)：serve、profiles、SQLite 会话、health、Tier 1/Tier 2 与并发验收
 - [测试资产清单与归档规则](ASSETS.md)：代码/脚本/文档/凭据的位置，正式与临时目录边界，清理与轮换清单
 - [真实 API 联调测试方案](../LIVE_TEST_PLAN.md)：分层矩阵、判据与执行入口

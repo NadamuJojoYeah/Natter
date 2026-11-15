@@ -1,10 +1,12 @@
 # P3 Context & Memory Implementation Spec
 
-> **状态**：P3.1–P3.5 foundation implemented（host prompt/context/memory pipeline + SQLite summary/memory + explicit remember/forget + NPS contribution 激活/回滚；真实 Tier 1 记忆验收待后续）  
-> **日期**：2026-11-15  
-> **前置**：P2 已 Go（serve / profiles / SQLite 会话 / provider 路由 / health）  
-> **目标**：在不破坏 P2 的前提下，把 Prompt、Context、Memory 做成可替换插件，并先交付一套可用的默认实现。  
+> **状态**：P3.1–P3.5 foundation implemented（host prompt/context/memory pipeline + SQLite summary/memory + explicit remember/forget + NPS contribution 激活/回滚；真实 Tier 1 记忆验收待后续）
+> **日期**：2026-11-15
+> **前置**：P2 已 Go（serve / profiles / SQLite 会话 / provider 路由 / health）
+> **目标**：在不破坏 P2 的前提下，把 Prompt、Context、Memory 做成可替换插件，并先交付一套可用的默认实现。
 > **关联**：[P2 开发文档](P2_RUNTIME_PROFILE.md)、[Context & Memory 插件设计](CONTEXT_MEMORY_PLUGIN.md)、[Harness 架构](HARNESS_ARCHITECTURE.md)、[AI Provider 设计](AI_PROVIDER_DESIGN.md)
+> **验收计划**：[P3 Acceptance Test Plan](testing/P3_ACCEPTANCE.md)
+> **当前结论**：No-Go；共享 scope 删除、host contribution、export CLI、DM private、prompt injection/summary 待收敛，见 [P3 验收处置](testing/2026-11-15-p3-acceptance-response.md)。
 
 ---
 
@@ -734,7 +736,7 @@ model
 | Tier 1 真实记忆召回 | 未执行（缺人工/真实测试脚本） | — |
 | Tier 2 smoke | 共享 pipeline fake/契约测试通过，真实未重跑 | — |
 
-测试：`Natter.Framework.Tests` **227/227**；P2 的 214 基线未回归。
+测试：`Natter.Framework.Tests` **232/232**；P2 的 214 基线未回归。
 
 ## 14. 验收标准
 
