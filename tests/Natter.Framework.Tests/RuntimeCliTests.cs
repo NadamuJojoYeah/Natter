@@ -96,6 +96,43 @@ public sealed class RuntimeCliTests
     }
 
     [Fact]
+    public async Task Remember_and_forget_persist_explicit_memory()
+    {
+        using var temp = new TempDirectory();
+        var state = Path.Combine(temp.Path, "state");
+        var options = new NatterCliOptions { LoadPlugins = false, StateDirectory = state };
+        var console = new StringConsole();
+        var remember = await NatterCli.RunAsync(
+            ["remember", "likes", "tea", "--source", "discord:discord:bot", "--actor", "u1", "--conversation", "c1", "--json"],
+            console,
+            options);
+        Assert.Equal(CliExitCodes.Success, remember);
+        Assert.Contains("mem_", console.Output);
+
+        var list = new StringConsole();
+        var listed = await NatterCli.RunAsync(
+            ["memory", "list", "--source", "discord:discord:bot", "--actor", "u1", "--conversation", "c1", "--json"],
+            list,
+            options);
+        Assert.Equal(CliExitCodes.Success, listed);
+        Assert.Contains("likes tea", list.Output);
+
+        var forget = new StringConsole();
+        var deleted = await NatterCli.RunAsync(
+            ["forget", "likes tea", "--source", "discord:discord:bot", "--actor", "u1", "--conversation", "c1"],
+            forget,
+            options);
+        Assert.Equal(CliExitCodes.Success, deleted);
+
+        var after = new StringConsole();
+        await NatterCli.RunAsync(
+            ["memory", "list", "--source", "discord:discord:bot", "--actor", "u1", "--conversation", "c1", "--json"],
+            after,
+            options);
+        Assert.DoesNotContain("likes tea", after.Output);
+    }
+
+    [Fact]
     public async Task Serve_health_port_answers_loopback_health()
     {
         var port = FindFreePort();

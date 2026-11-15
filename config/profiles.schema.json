@@ -37,6 +37,36 @@
               "model": { "type": "string" }
             }
           },
+          "prompt": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "provider": { "type": "string", "pattern": "^[^#]+#[^#]+$" },
+              "version": { "type": "string" },
+              "systemPrompt": { "type": "string" }
+            }
+          },
+          "context": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "assembler": { "type": "string", "pattern": "^[^#]+#[^#]+$" },
+              "maxInputCharacters": { "type": "integer", "minimum": 1 },
+              "maxMemoryItems": { "type": "integer", "minimum": 0 },
+              "maxSummaryCharacters": { "type": "integer", "minimum": 0 },
+              "maxRecentMessages": { "type": "integer", "minimum": 0 },
+              "maxRecentCharacters": { "type": "integer", "minimum": 0 }
+            }
+          },
+          "memory": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "store": { "type": "string", "pattern": "^[^#]+#[^#]+$" },
+              "retriever": { "type": "string" },
+              "extractor": { "type": "string" }
+            }
+          },
           "history": {
             "type": "object",
             "additionalProperties": false,

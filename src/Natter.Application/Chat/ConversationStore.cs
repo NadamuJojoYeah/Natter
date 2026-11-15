@@ -8,7 +8,12 @@ public readonly record struct ConversationKey(
     string? GuildId,
     string? ActorId);
 
-public sealed record StoredMessage(string Role, string Text, string? SourceEventId, DateTimeOffset CreatedAt);
+public sealed record StoredMessage(
+    string Role,
+    string Text,
+    string? SourceEventId,
+    DateTimeOffset CreatedAt,
+    long MessageId = 0);
 
 public sealed record ConversationState(string SessionId, ConversationKey Key, int Version);
 
@@ -31,6 +36,12 @@ public interface IConversationStore
 
     ValueTask ClearAsync(ConversationKey key, CancellationToken cancellationToken = default);
 
+    ValueTask<IReadOnlyList<StoredMessage>> GetAfterAsync(
+        ConversationKey key,
+        long afterMessageId,
+        int limit,
+        CancellationToken cancellationToken = default);
+
     ValueTask<int> CountAsync(CancellationToken cancellationToken = default);
 }
 
@@ -39,6 +50,7 @@ public sealed class InMemoryConversationStore : IConversationStore
 {
     private readonly Dictionary<ConversationKey, List<StoredMessage>> _sessions = [];
     private readonly Lock _gate = new();
+    private long _nextMessageId;
 
     public ValueTask<ConversationState> GetOrCreateAsync(ConversationKey key, CancellationToken cancellationToken = default)
     {
@@ -92,8 +104,8 @@ public sealed class InMemoryConversationStore : IConversationStore
                 messages = [];
                 _sessions[key] = messages;
             }
-            messages.Add(userMessage);
-            messages.Add(assistantMessage);
+            messages.Add(WithId(userMessage));
+            messages.Add(WithId(assistantMessage));
             while (messages.Count > 1000)
                 messages.RemoveRange(0, 2);
         }
@@ -107,11 +119,32 @@ public sealed class InMemoryConversationStore : IConversationStore
         return ValueTask.CompletedTask;
     }
 
+    public ValueTask<IReadOnlyList<StoredMessage>> GetAfterAsync(
+        ConversationKey key,
+        long afterMessageId,
+        int limit,
+        CancellationToken cancellationToken = default)
+    {
+        lock (_gate)
+        {
+            if (!_sessions.TryGetValue(key, out var messages))
+                return ValueTask.FromResult<IReadOnlyList<StoredMessage>>([]);
+            var result = messages
+                .Where(message => message.MessageId > afterMessageId)
+                .Take(Math.Max(0, limit))
+                .ToArray();
+            return ValueTask.FromResult<IReadOnlyList<StoredMessage>>(result);
+        }
+    }
+
     public ValueTask<int> CountAsync(CancellationToken cancellationToken = default)
     {
         lock (_gate)
             return ValueTask.FromResult(_sessions.Count);
     }
+
+    private StoredMessage WithId(StoredMessage message)
+        => message.MessageId > 0 ? message : message with { MessageId = ++_nextMessageId };
 
     public static string SessionId(ConversationKey key)
         => Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(

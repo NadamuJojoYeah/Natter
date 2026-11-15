@@ -218,6 +218,55 @@ internal static class BuiltInCommands
         },
         new CliCommandDescriptor
         {
+            Name = "remember",
+            Description = "Store an explicit, user-confirmed memory.",
+            Options =
+            [
+                new CliOptionDescriptor("source", "Source key protocol:platform:self.", TakesValue: true),
+                new CliOptionDescriptor("conversation", "Conversation id.", TakesValue: true),
+                new CliOptionDescriptor("actor", "Actor/user id.", TakesValue: true),
+                new CliOptionDescriptor("guild", "Guild id for guild scope.", TakesValue: true),
+                new CliOptionDescriptor("scope", "user|conversation|guild|global.", TakesValue: true),
+                new CliOptionDescriptor("kind", "Memory kind.", TakesValue: true),
+                new CliOptionDescriptor("sensitivity", "normal|private|sensitive.", TakesValue: true),
+                new CliOptionDescriptor("json", "Emit JSON."),
+            ],
+            Origin = Origin,
+            HandlerFactory = services => services.GetRequiredService<RememberCommand>(),
+        },
+        new CliCommandDescriptor
+        {
+            Name = "forget",
+            Description = "Delete an explicit memory by id or text.",
+            Options =
+            [
+                new CliOptionDescriptor("source", "Source key protocol:platform:self.", TakesValue: true),
+                new CliOptionDescriptor("conversation", "Conversation id.", TakesValue: true),
+                new CliOptionDescriptor("actor", "Actor/user id.", TakesValue: true),
+                new CliOptionDescriptor("guild", "Guild id.", TakesValue: true),
+                new CliOptionDescriptor("json", "Emit JSON."),
+            ],
+            Origin = Origin,
+            HandlerFactory = services => services.GetRequiredService<ForgetCommand>(),
+        },
+        new CliCommandDescriptor
+        {
+            Name = "memory list",
+            Description = "List visible explicit memories.",
+            Options =
+            [
+                new CliOptionDescriptor("source", "Source key protocol:platform:self.", TakesValue: true),
+                new CliOptionDescriptor("conversation", "Conversation id.", TakesValue: true),
+                new CliOptionDescriptor("actor", "Actor/user id.", TakesValue: true),
+                new CliOptionDescriptor("guild", "Guild id.", TakesValue: true),
+                new CliOptionDescriptor("limit", "Maximum items.", TakesValue: true),
+                new CliOptionDescriptor("json", "Emit JSON."),
+            ],
+            Origin = Origin,
+            HandlerFactory = services => services.GetRequiredService<MemoryListCommand>(),
+        },
+        new CliCommandDescriptor
+        {
             Name = "serve",
             Description = "Run the Natter host in long-lived mode until stopped.",
             Options =

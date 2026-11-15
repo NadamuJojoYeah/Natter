@@ -199,12 +199,25 @@ public sealed class DingTalkTests
         var upstream = Assert.Single(host.Services.GetRequiredService<IChatUpstreamRegistry>().Upstreams);
         Assert.Equal("dingtalk:dingtalk:bot-dt", upstream.Source.Key);
 
+        var hostMemory = host.Services.GetRequiredService<Natter.Application.Chat.IMemoryStore>();
+        await hostMemory.WriteAsync(new Natter.Application.Chat.MemoryWriteRequest(
+            Source.Create("dingtalk", "dingtalk", "bot-dt"),
+            new Conversation("cid-cross", ConversationKind.Group, GuildId: "cid-cross"),
+            new User("user-1", "User"),
+            Natter.Application.Chat.MemoryScopeType.Conversation,
+            "preference",
+            "prefers oolong tea"));
+
         dingTalk.Emit(Message("m-cross", "cid-cross", "hello", isAtList: false, atUsers: []));
         var reply = await WaitForAsync(() => dingTalk.Replies.Count > 0 ? dingTalk.Replies : null);
 
         Assert.Equal("spark answer", Assert.Single(reply).Content);
         Assert.Single(spark.Calls);
         Assert.Equal("hello", spark.Calls[0][^1].Text);
+        Assert.Contains(
+            spark.Calls[0],
+            message => message.Role == ChatRole.System
+                       && message.Text!.Contains("oolong tea", StringComparison.Ordinal));
 
         var hostStore = host.Services.GetRequiredService<Natter.Application.Chat.IConversationStore>();
         Assert.Equal(1, await hostStore.CountAsync());

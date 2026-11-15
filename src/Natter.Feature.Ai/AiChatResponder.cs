@@ -17,6 +17,7 @@ public sealed class AiChatResponder : IChatResponder
     private readonly AiResponderOptions _options;
     private readonly IAiConversationStore _history;
     private readonly IAiContextAssembler _contextAssembler;
+    private readonly Natter.Application.Chat.IContextPipeline? _contextPipeline;
     private readonly AiConversationGate _gate;
     private readonly ChatCommandFactory _commands;
     private readonly IPluginLog _log;
@@ -30,7 +31,8 @@ public sealed class AiChatResponder : IChatResponder
         AiConversationGate gate,
         ChatCommandFactory commands,
         IPluginLog log,
-        IAiContextAssembler? contextAssembler = null)
+        IAiContextAssembler? contextAssembler = null,
+        Natter.Application.Chat.IContextPipeline? contextPipeline = null)
     {
         _chatClient = chatClient ?? throw new ArgumentNullException(nameof(chatClient));
         _options = options ?? throw new ArgumentNullException(nameof(options));
@@ -39,6 +41,7 @@ public sealed class AiChatResponder : IChatResponder
         _commands = commands ?? throw new ArgumentNullException(nameof(commands));
         _log = log ?? throw new ArgumentNullException(nameof(log));
         _contextAssembler = contextAssembler ?? new RecentWindowContextAssembler(options);
+        _contextPipeline = contextPipeline;
     }
 
     public async ValueTask<ChatCommand?> RespondAsync(
@@ -154,13 +157,46 @@ public sealed class AiChatResponder : IChatResponder
         string userText,
         CancellationToken cancellationToken)
     {
-        var messages = await _contextAssembler.AssembleAsync(
-            source,
-            conversation,
-            sender,
-            userText,
-            await _history.GetMessagesAsync(conversationKey, cancellationToken).ConfigureAwait(false),
-            cancellationToken).ConfigureAwait(false);
+        IReadOnlyList<Microsoft.Extensions.AI.ChatMessage> messages;
+        if (_contextPipeline is not null)
+        {
+            try
+            {
+                var variables = new Dictionary<string, string>
+                {
+                    ["systemPrompt"] = _options.SystemPrompt,
+                };
+                var bundle = await _contextPipeline.AssembleAsync(
+                    source,
+                    conversation,
+                    sender,
+                    userText,
+                    variables,
+                    cancellationToken).ConfigureAwait(false);
+                messages = bundle.Messages;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _log.Warning("context pipeline failed: {Type}; falling back to recent window", ex.GetType().Name);
+                messages = await _contextAssembler.AssembleAsync(
+                    source,
+                    conversation,
+                    sender,
+                    userText,
+                    await _history.GetMessagesAsync(conversationKey, cancellationToken).ConfigureAwait(false),
+                    cancellationToken).ConfigureAwait(false);
+            }
+        }
+        else
+        {
+            messages = await _contextAssembler.AssembleAsync(
+                source,
+                conversation,
+                sender,
+                userText,
+                await _history.GetMessagesAsync(conversationKey, cancellationToken).ConfigureAwait(false),
+                cancellationToken).ConfigureAwait(false);
+        }
 
         try
         {

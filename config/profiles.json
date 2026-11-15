@@ -17,6 +17,22 @@
         "provider": "natter.feature.ai.deepseek#deepseek",
         "model": "deepseek-flash"
       },
+      "prompt": {
+        "provider": "host#static",
+        "version": "default",
+        "systemPrompt": "You are Natter, a concise assistant."
+      },
+      "context": {
+        "assembler": "host#recent-window",
+        "maxInputCharacters": 12000,
+        "maxMemoryItems": 8,
+        "maxSummaryCharacters": 1200
+      },
+      "memory": {
+        "store": "host#sqlite",
+        "retriever": "host#recent",
+        "extractor": "host#explicit"
+      },
       "history": {
         "scope": "conversation",
         "maxMessages": 20,
@@ -39,6 +55,22 @@
       "ai": {
         "provider": "natter.feature.ai.spark#spark",
         "model": "spark-x2.5-1.7b"
+      },
+      "prompt": {
+        "provider": "host#static",
+        "version": "default",
+        "systemPrompt": "You are Natter, a concise assistant."
+      },
+      "context": {
+        "assembler": "host#recent-window",
+        "maxInputCharacters": 12000,
+        "maxMemoryItems": 8,
+        "maxSummaryCharacters": 1200
+      },
+      "memory": {
+        "store": "host#sqlite",
+        "retriever": "host#recent",
+        "extractor": "host#explicit"
       },
       "history": {
         "scope": "conversation",

@@ -84,7 +84,9 @@ public sealed class NatterHost : IAsyncDisposable
         if (_rootProvider.GetService(typeof(Natter.Application.Chat.IRuntimeProfileStore)) is Natter.Application.Chat.IRuntimeProfileStore profileStore
             && _rootProvider.GetService(typeof(Natter.Application.Chat.IChatResponderRegistry)) is Natter.Application.Chat.IChatResponderRegistry responderRegistry)
         {
-            Natter.Application.Chat.RuntimeProfileValidator.Validate(profileStore, responderRegistry);
+            var components = _rootProvider.GetService(typeof(Natter.Application.Chat.IContextComponentCatalog))
+                as Natter.Application.Chat.IContextComponentCatalog;
+            Natter.Application.Chat.RuntimeProfileValidator.Validate(profileStore, responderRegistry, components);
         }
 
         _logger.LogInformation(

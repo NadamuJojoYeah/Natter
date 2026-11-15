@@ -44,6 +44,41 @@ public sealed class ChatCompositionModule : ICompositionModule
                 : new SqliteConversationStore(Path.Combine(
                     Path.GetFullPath(context.Options.StateDirectory),
                     "natter.db")));
+        services.AddSingleton<Natter.Application.Chat.IPromptProvider, Natter.Application.Chat.HostStaticPromptProvider>();
+        services.AddSingleton<Natter.Application.Chat.IContextAssembler, Natter.Application.Chat.HostRecentWindowContextAssembler>();
+        services.AddSingleton<Natter.Application.Chat.IMemoryStore>(_ =>
+            string.IsNullOrWhiteSpace(context.Options.StateDirectory)
+                ? new Natter.Application.Chat.InMemoryMemoryStore()
+                : new SqliteMemoryStore(Path.Combine(Path.GetFullPath(context.Options.StateDirectory), "natter.db")));
+        services.AddSingleton<Natter.Application.Chat.ISummaryStore>(_ =>
+            string.IsNullOrWhiteSpace(context.Options.StateDirectory)
+                ? new Natter.Application.Chat.InMemorySummaryStore()
+                : new SqliteSummaryStore(Path.Combine(Path.GetFullPath(context.Options.StateDirectory), "natter.db")));
+        services.AddSingleton<Natter.Application.Chat.ContextComponentCatalog>(provider =>
+        {
+            var catalog = new Natter.Application.Chat.ContextComponentCatalog();
+            catalog.RegisterPrompt("host#static", provider.GetRequiredService<Natter.Application.Chat.IPromptProvider>());
+            catalog.RegisterAssembler("host#recent-window", provider.GetRequiredService<Natter.Application.Chat.IContextAssembler>());
+            var memory = provider.GetRequiredService<Natter.Application.Chat.IMemoryStore>();
+            catalog.RegisterMemory("host#inline", memory);
+            // Without --state-dir the SQLite name resolves to the in-memory fallback; this keeps
+            // the sample profiles runnable while making persistence explicit.
+            catalog.RegisterMemory("host#sqlite", memory);
+            return catalog;
+        });
+        services.AddSingleton<Natter.Application.Chat.IContextComponentCatalog>(provider =>
+            provider.GetRequiredService<Natter.Application.Chat.ContextComponentCatalog>());
+        services.AddSingleton<Natter.Application.Chat.IContextPipeline>(provider =>
+        {
+            var catalog = provider.GetRequiredService<Natter.Application.Chat.ContextComponentCatalog>();
+            return new Natter.Application.Chat.HostContextPipeline(
+                provider.GetRequiredService<Natter.Application.Chat.IConversationStore>(),
+                provider.GetRequiredService<Natter.Application.Chat.IMemoryStore>(),
+                provider.GetRequiredService<Natter.Application.Chat.ISummaryStore>(),
+                provider.GetRequiredService<Natter.Application.Chat.IPromptProvider>(),
+                provider.GetRequiredService<Natter.Application.Chat.IContextAssembler>(),
+                catalog);
+        });
         services.AddSingleton<Natter.Application.Chat.ChatResponderRegistry>();
         services.AddSingleton<Natter.Application.Chat.IChatResponderRegistry>(provider =>
             provider.GetRequiredService<Natter.Application.Chat.ChatResponderRegistry>());

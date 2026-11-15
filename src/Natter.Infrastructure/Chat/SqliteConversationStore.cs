@@ -42,7 +42,7 @@ public sealed class SqliteConversationStore : IConversationStore
         var session = await GetOrCreateCoreAsync(connection, null, key, cancellationToken).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT role, text, source_event_id, created_at
+            SELECT role, text, source_event_id, created_at, message_id
             FROM messages WHERE session_id = $session
             ORDER BY message_id DESC
             LIMIT $limit;
@@ -58,7 +58,8 @@ public sealed class SqliteConversationStore : IConversationStore
                 reader.GetString(0),
                 reader.GetString(1),
                 reader.IsDBNull(2) ? null : reader.GetString(2),
-                DateTimeOffset.Parse(reader.GetString(3), System.Globalization.CultureInfo.InvariantCulture)));
+                DateTimeOffset.Parse(reader.GetString(3), System.Globalization.CultureInfo.InvariantCulture),
+                reader.GetInt64(4)));
         }
 
         var result = new List<StoredMessage>();
@@ -122,6 +123,37 @@ public sealed class SqliteConversationStore : IConversationStore
         command.Parameters.AddWithValue("$guild", (object?)key.GuildId ?? DBNull.Value);
         command.Parameters.AddWithValue("$actor", (object?)key.ActorId ?? DBNull.Value);
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    public async ValueTask<IReadOnlyList<StoredMessage>> GetAfterAsync(
+        ConversationKey key,
+        long afterMessageId,
+        int limit,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+        var session = await GetOrCreateCoreAsync(connection, null, key, cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT role, text, source_event_id, created_at, message_id
+            FROM messages WHERE session_id = $session AND message_id > $after
+            ORDER BY message_id ASC LIMIT $limit;
+            """;
+        command.Parameters.AddWithValue("$session", session.SessionId);
+        command.Parameters.AddWithValue("$after", afterMessageId);
+        command.Parameters.AddWithValue("$limit", Math.Max(0, limit));
+        var result = new List<StoredMessage>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            result.Add(new StoredMessage(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.IsDBNull(2) ? null : reader.GetString(2),
+                DateTimeOffset.Parse(reader.GetString(3), System.Globalization.CultureInfo.InvariantCulture),
+                reader.GetInt64(4)));
+        }
+        return result;
     }
 
     public async ValueTask<int> CountAsync(CancellationToken cancellationToken = default)

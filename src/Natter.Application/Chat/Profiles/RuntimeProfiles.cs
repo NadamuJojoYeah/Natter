@@ -31,6 +31,12 @@ public sealed class RuntimeProfile
 
     public ProfileHistory History { get; init; } = new();
 
+    public ProfilePrompt Prompt { get; init; } = new();
+
+    public ProfileContextSettings Context { get; init; } = new();
+
+    public ProfileMemory Memory { get; init; } = new();
+
     public ProfilePolicy Policy { get; init; } = new();
 }
 
@@ -52,6 +58,39 @@ public sealed class ProfileAi
     public string Provider { get; init; } = string.Empty;
 
     public string? Model { get; init; }
+}
+
+public sealed class ProfilePrompt
+{
+    public string Provider { get; init; } = "host#static";
+
+    public string Version { get; init; } = "default";
+
+    public string? SystemPrompt { get; init; }
+}
+
+public sealed class ProfileContextSettings
+{
+    public string Assembler { get; init; } = "host#recent-window";
+
+    public int MaxInputCharacters { get; init; } = 12000;
+
+    public int MaxMemoryItems { get; init; } = 8;
+
+    public int MaxSummaryCharacters { get; init; } = 1200;
+
+    public int MaxRecentMessages { get; init; } = 20;
+
+    public int MaxRecentCharacters { get; init; } = 24000;
+}
+
+public sealed class ProfileMemory
+{
+    public string Store { get; init; } = "host#inline";
+
+    public string Retriever { get; init; } = "host#recent";
+
+    public string Extractor { get; init; } = "host#explicit";
 }
 
 public sealed class ProfileHistory
@@ -186,11 +225,26 @@ public sealed class RuntimeProfileStore : IRuntimeProfileStore
             if (string.IsNullOrWhiteSpace(profile.Ai.Provider)
                 || profile.Ai.Provider.IndexOf('#', StringComparison.Ordinal) <= 0)
                 throw new InvalidOperationException($"Profile '{profile.Id}' ai.provider must be 'pluginId#responderId'.");
+            if (!IsRef(profile.Prompt.Provider) || !IsRef(profile.Context.Assembler) || !IsRef(profile.Memory.Store))
+                throw new InvalidOperationException($"Profile '{profile.Id}' prompt/context/memory refs must use 'owner#id'.");
+            if (profile.Context.MaxInputCharacters <= 0
+                || profile.Context.MaxMemoryItems < 0
+                || profile.Context.MaxSummaryCharacters < 0
+                || profile.Context.MaxRecentMessages < 0
+                || profile.Context.MaxRecentCharacters < 0)
+                throw new InvalidOperationException($"Profile '{profile.Id}' context budgets are invalid.");
+            if (profile.History.Scope is not ("conversation" or "user"))
+                throw new InvalidOperationException($"Profile '{profile.Id}' history.scope must be conversation or user.");
             if (profile.Match.Protocols is null || profile.Match.Platforms is null
                 || profile.Match.Guilds is null || profile.Match.Conversations is null || profile.Match.Actors is null)
                 throw new InvalidOperationException($"Profile '{profile.Id}' match lists must not be null.");
         }
     }
+
+    private static bool IsRef(string value)
+        => !string.IsNullOrWhiteSpace(value)
+           && value.IndexOf('#', StringComparison.Ordinal) > 0
+           && value.IndexOf('#', StringComparison.Ordinal) < value.Length - 1;
 
     private static RuntimeProfileSet Defaults() => new()
     {

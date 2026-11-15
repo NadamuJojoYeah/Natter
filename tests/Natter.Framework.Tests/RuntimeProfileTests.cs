@@ -16,6 +16,21 @@ public sealed class RuntimeProfileTests
     }
 
     [Fact]
+    public void P3_profile_fields_load_and_old_profiles_remain_compatible()
+    {
+        var directory = new DirectoryInfo(Directory.GetCurrentDirectory());
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "config", "profiles.json")))
+            directory = directory.Parent;
+        Assert.NotNull(directory);
+        var store = new RuntimeProfileStore(Path.Combine(directory!.FullName, "config"));
+        var tier1 = store.Current.Profiles.First(profile => profile.Id == "tier1-default");
+        Assert.Equal("host#static", tier1.Prompt.Provider);
+        Assert.Equal("host#recent-window", tier1.Context.Assembler);
+        Assert.Equal("host#sqlite", tier1.Memory.Store);
+        Assert.Equal(12000, tier1.Context.MaxInputCharacters);
+    }
+
+    [Fact]
     public void Resolver_prefers_conversation_and_guild_over_protocol()
     {
         using var temp = new TempDirectory();

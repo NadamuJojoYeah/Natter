@@ -626,13 +626,18 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
         services.AddSingleton(_hostProvider.GetRequiredService<IClock>());
         services.AddSingleton(_hostProvider.GetRequiredService<ChatCommandFactory>());
         services.AddSingleton(_hostProvider.GetRequiredService<IDomainEventStream>());
+        services.AddSingleton(_hostProvider.GetRequiredService<Natter.Application.Chat.IContextPipeline>());
         services.AddSingleton(_hostProvider.GetRequiredService<ILoggerFactory>());
 
         if (candidate.Permissions?.Granted.Contains(PluginPermissions.ChatRead) == true)
             services.AddSingleton(_hostProvider.GetRequiredService<IChatEventSource>());
 
         if (candidate.Permissions?.Granted.Contains(PluginPermissions.Storage) == true)
+        {
             services.AddSingleton(_hostProvider.GetRequiredService<Natter.Application.Chat.IConversationStore>());
+            services.AddSingleton(_hostProvider.GetRequiredService<Natter.Application.Chat.IMemoryStore>());
+            services.AddSingleton(_hostProvider.GetRequiredService<Natter.Application.Chat.ISummaryStore>());
+        }
 
         services.AddSingleton<IChatCommandDispatcher>(provider => new NpsPermissionedChatCommandDispatcher(
             _hostProvider.GetRequiredService<IChatCommandDispatcher>(),

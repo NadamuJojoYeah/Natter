@@ -29,6 +29,8 @@ public static class PluginContractAssemblies
         "Natter.Cli.Abstractions",
         "Natter.Domain",
         "Natter.Plugin.Abstractions",
+        "Microsoft.Extensions.AI",
+        "Microsoft.Extensions.AI.Abstractions",
         "Microsoft.Extensions.DependencyInjection.Abstractions",
         "Microsoft.Extensions.Logging.Abstractions",
         "Microsoft.Extensions.Primitives",

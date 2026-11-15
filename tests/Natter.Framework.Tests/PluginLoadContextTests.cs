@@ -49,7 +49,7 @@ public sealed class PluginLoadContextTests
     }
 
     [Fact]
-    public void Microsoft_extensions_ai_is_loaded_privately_because_the_host_does_not_reference_it()
+    public void Microsoft_extensions_ai_is_a_shared_contract_for_host_context_types()
     {
         using var temp = CopyTestBinaries();
 
@@ -61,7 +61,8 @@ public sealed class PluginLoadContextTests
         Assert.Contains(types, type => type.FullName == typeof(Natter.Feature.Ai.DeepSeek.DeepSeekChatClient).FullName);
 
         var ai = context.LoadFromAssemblyName(new AssemblyName("Microsoft.Extensions.AI.Abstractions"));
-        Assert.Contains(context.Assemblies, item => item == ai);
+        Assert.Same(AssemblyLoadContext.Default, AssemblyLoadContext.GetLoadContext(ai));
+        Assert.DoesNotContain(context.Assemblies, item => item == ai);
 
         var di = context.LoadFromAssemblyName(new AssemblyName("Microsoft.Extensions.DependencyInjection.Abstractions"));
         Assert.Same(AssemblyLoadContext.Default, AssemblyLoadContext.GetLoadContext(di));
