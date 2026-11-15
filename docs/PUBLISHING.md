@@ -270,18 +270,20 @@ CI 不调用真实 DeepSeek。详细设计见 [AI Provider Design](AI_PROVIDER_D
 
 ### 3.7 钉钉 / 星火验证插件
 
-**钉钉 transport**（`natter.transport.dingtalk`）
+**钉钉 transport**（`natter.transport.dingtalk`，Stream 模式）
 
-- 配置 `appSecret` 为 `${secret:DINGTALK_APP_SECRET}`，`botId`、`listenPrefix`；
-- 对外提供 HTTPS callback URL（反向代理终止 TLS），并配置钉钉机器人 HTTP 回调；
-- 回调必须校验 `timestamp` + `sign`：`Base64(HMAC-SHA256(timestamp + "\n" + appSecret))`，时间漂移默认限制 1 小时；
-- 回复使用 callback 返回的 `sessionWebhook`，有有效期；过期后等待下一条入站消息；
-- 当前只支持 text 入站/出站，不支持 edit/delete/typing/slash/附件。
+- 配置 `clientId`、`clientSecret` 为 `${secret:DINGTALK_CLIENT_SECRET}`、`botId`、`robotCode`；
+- Stream 模式由客户端主动建立 WebSocket，不需要公网 callback URL；
+- `DingTalkStreamTransport` 调 gateway open 接口获取 endpoint/ticket，订阅 `/v1.0/im/bot/messages/get`，收到消息后 ack，断线退避重连；
+- 回复使用消息中的 `sessionWebhook`，有有效期；过期后等待下一条入站消息；
+- 当前只支持 text 入站/出站，不支持 edit/delete/typing/slash/附件；
+- HTTP callback transport 保留为 legacy，不作为默认插件 transport。
 
 **星火 provider**（`natter.feature.ai.spark`）
 
-- 配置 `apiKey` 为 `${secret:SPARK_API_KEY}`，默认 endpoint `https://spark-api-open.xf-yun.com/v1/chat/completions`；
-- 模型名按控制台/文档选择（`4.0Ultra`、`generalv3.5` 等），不硬编码旧模型；
+- 配置 `apiKey` 为 `${secret:SPARK_API_KEY}`，默认 MaaS endpoint `https://maas-api.cn-huabei-1.xf-yun.com/v2/chat/completions`；
+- 默认模型 `spark-x2.5-1.7b`；模型名按控制台/文档选择，不硬编码旧模型；
+- 请求使用 `max_completion_tokens` 和 `thinking.type`，v1 默认 `thinking=disabled`；不发送 `temperature`；
 - v1 非流式、无 tools；Spark 错误码与 HTTP 错误经 `SparkException` 分类，不泄漏 APIPassword；
 - 与 DeepSeek 共用 `Natter.Feature.Ai` 的 `AiChatResponder`、context assembler 与 conversation store。
 
@@ -301,6 +303,6 @@ CI 不调用真实 DeepSeek。详细设计见 [AI Provider Design](AI_PROVIDER_D
 - [ ] Discord `selfId` 与 token 对应的 bot 一致，intents 已在 Developer Portal 开启；
 - [ ] DeepSeek `apiKey` 只含 secret reference，thinking 默认关闭，reasoning_content 不进入回复/日志；
 - [ ] AI 插件使用 fake 测试通过，真实 API 验证不在 CI；
-- [ ] 钉钉 callback 签名/时间戳校验开启，sessionWebhook 不写入日志；
-- [ ] 星火 APIPassword 只从 secret provider 读取，模型名/endpoint 已验证；
+- [ ] 钉钉 Stream clientSecret 只从 secret provider 读取，WebSocket 重连/ack 已验证；
+- [ ] 星火 APIPassword 只从 secret provider 读取，MaaS model/endpoint/thinking 已验证；
 - [ ] 生产环境替换内存适配器（仓储、UoW、事件日志）并评估事件可靠性。

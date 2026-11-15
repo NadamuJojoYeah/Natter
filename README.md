@@ -20,7 +20,7 @@ Natter 只交付**框架能力**：端口契约、组合根、插件加载、DI 
 - **插件机制**：目录扫描、`plugin.json` 清单、可回收 `AssemblyLoadContext`、端口适配器覆盖、CLI 命令贡献、生命周期订阅。
 - **CLI 内核**：平台无关的命令注册表、解析器、帮助、JSON 输出、`exec` 同宿主命令链；Console 与 Android 宿主共用。
 - **多平台发布**：自包含单文件（win/linux/osx）+ Android APK；示例插件随发布目录部署或嵌入宿主。
-- **测试**：188 个框架级测试覆盖聚合事件、Rx 总线、DI 管道、解析器、插件加载、CLI、NLMP 一致性与 NPS v1 插件内核；另有可选的 live 套件对真实 Discord 与 DeepSeek API 做分层联调（见 [真实 API 联调测试方案](docs/LIVE_TEST_PLAN.md)）。
+- **测试**：190 个框架级测试覆盖聚合事件、Rx 总线、DI 管道、解析器、插件加载、CLI、NLMP 一致性与 NPS v1 插件内核；另有可选的 live 套件对真实 Discord 与 DeepSeek API 做分层联调（见 [真实 API 联调测试方案](docs/LIVE_TEST_PLAN.md)）。
 
 ## 架构
 
@@ -83,7 +83,7 @@ Natter 只交付**框架能力**：端口契约、组合根、插件加载、DI 
 | `src/Natter.Chat.Discord` | Discord 适配 | Discord.Net transport、DTO 映射、NLMP upstream、能力与错误映射 |
 | `src/Natter.Feature.Ai.DeepSeek` | AI responder | M.E.AI `IChatClient`、DeepSeek HTTP adapter、历史/并发/幂等与 `ai status` |
 | `src/Natter.Feature.Ai` | 共享 AI 边界 | `AiChatResponder`、`IAiContextAssembler`、`IAiConversationStore`、会话 gate |
-| `src/Natter.Chat.DingTalk` | 钉钉 transport | callback 签名/解析、sessionWebhook 回复、NLMP upstream |
+| `src/Natter.Chat.DingTalk` | 钉钉 transport | Stream WebSocket（gateway/ticket/ack/重连）+ callback parser + sessionWebhook 回复 |
 | `samples/Natter.Sample.Plugin.DingTalk` | 钉钉 NPS 插件 | `natter.transport.dingtalk` manifest/config/status |
 | `src/Natter.Feature.Ai.Spark` | 星火 provider | OpenAI-compatible `IChatClient` + shared responder |
 | `src/Natter.Cli.Abstractions` | CLI 契约 | `IConsole`、命令/选项描述符、处理器 |
@@ -160,7 +160,7 @@ natter <command> [arguments] [options]
 | `plugins store cleanup` | 清理 staging/trash |
 | `discord status [--json]` | Discord 连接、Source、延迟、allowlist 与 capabilities |
 | `ai status [--json]` | DeepSeek model/thinking、请求/错误、延迟、token 与缓存命中 |
-| `dingtalk status [--json]` | 钉钉 callback/source/allowlist 状态 |
+| `dingtalk status [--json]` | 钉钉 Stream source/allowlist/连接状态 |
 | `spark status [--json]` | 星火 model/请求/错误/延迟/token |
 | `plugins list [--failed] [--json]` | 已加载/失败的插件 |
 | `plugins inspect <directory> [--json]` | 只探测插件目录，不注册 |
@@ -242,7 +242,7 @@ Android 产物位于 `artifacts/android/`。示例构建使用默认调试签名
 - Android 无法扫描 APK 内的插件目录，因此示例以 embedded plugin 方式注册。
 - NLMP 默认是进程内模型：不包含远程 transport、握手或服务发现；`Natter.Chat.Satori` 只做映射，不包含 WebSocket/HTTP 客户端。
 - Satori message elements 是有损映射（v0.1 只保留文本、附件和 mentions）；富文本/按钮/复杂布局需要后续能力扩展。
-- NPS v1 Phase 1 已交付内核；Android 动态 store/签名包/host 骨架已交付；Discord transport Phase 1/2 已交付；DeepSeek AI responder 核心已交付；第二上游/消费者（钉钉 + 星火）已完成代码与 fake/HTTP 交叉验证，真实平台凭据未接入。management UI、真机矩阵、真实钉钉/星火 live、插件市场/热禁用与 out-of-process 宿主仍待补，见 [插件规范 §16](docs/PLUGIN_SPEC.md)、[Android 插件宿主](docs/ANDROID_PLUGIN_HOST.md)、[Discord 设计](docs/DISCORD_PLUGIN_DESIGN.md)、[AI Provider 设计](docs/AI_PROVIDER_DESIGN.md) 与 [第二上游验证](docs/SECOND_ADAPTER_VALIDATION.md)。
+- NPS v1 Phase 1 已交付内核；Android 动态 store/签名包/host 骨架已交付；Discord transport Phase 1/2 已交付；DeepSeek AI responder 核心已交付；第二上游/消费者（钉钉 Stream + 星火 MaaS）已完成代码、本机 WebSocket 与 fake HTTP 交叉验证，真实平台凭据未接入。management UI、真机矩阵、真实钉钉/星火 live、插件市场/热禁用与 out-of-process 宿主仍待补，见 [插件规范 §16](docs/PLUGIN_SPEC.md)、[Android 插件宿主](docs/ANDROID_PLUGIN_HOST.md)、[Discord 设计](docs/DISCORD_PLUGIN_DESIGN.md)、[AI Provider 设计](docs/AI_PROVIDER_DESIGN.md) 与 [第二上游验证](docs/SECOND_ADAPTER_VALIDATION.md)。
 
 ## 许可
 

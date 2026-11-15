@@ -23,7 +23,7 @@
 | Discord transport | `Natter.Chat.Discord` 的 Discord.Net transport、DTO 映射与 `DiscordChatUpstream`；示例 NPS 插件 `natter.transport.discord` |
 | AI responder | `Natter.Feature.Ai.DeepSeek` 的 M.E.AI `IChatClient`、DeepSeek adapter、history/gate 与 `chat.responder` |
 | 共享 AI 边界 | `Natter.Feature.Ai` 的 `AiChatResponder`、`IAiContextAssembler`、`IAiConversationStore` |
-| 第二 transport/provider | `Natter.Chat.DingTalk` + `Natter.Feature.Ai.Spark`，均只通过 NPS/host contract 接入 |
+| 第二 transport/provider | `Natter.Chat.DingTalk` 的 Stream WebSocket transport + `Natter.Feature.Ai.Spark` MaaS `IChatClient` |
 
 依赖规则：
 
@@ -312,7 +312,7 @@ Discord/Satori adapter ───────────────────
 
 - 钉钉与星火均作为 NPS 插件加载；第二个 transport/provider 没有在 `ChatOrchestrator` 中加入平台特判。
 - DeepSeek 与 Spark 共用 `AiChatResponder`、`IAiContextAssembler`、`IAiConversationStore`；会话 key 包含 `Source`，两个平台同 id 不共享记忆。
-- 钉钉回调实现 HMAC-SHA256 签名、timestamp 漂移校验、`sessionWebhook` 回复、文本分片；`Capabilities` 明确关闭 edit/delete/typing/slash。
+- 钉钉 Stream transport 实现 gateway open → ticket → WebSocket → topic 订阅 → callback parse → ack → 退避重连；HTTP callback 保留为 legacy；`Capabilities` 明确关闭 edit/delete/typing/slash。
 - 真实钉钉/星火凭据尚未接入；当前以 fake transport、fake `IChatClient`、HTTP callback 契约和 NPS 交叉链路验证。
 
 ### 6.7 加载上下文

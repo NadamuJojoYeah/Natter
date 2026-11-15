@@ -69,7 +69,7 @@ dotnet test tests/Natter.Framework.Tests/Natter.Framework.Tests.csproj
 | [samples/Natter.Sample.Plugin.Discord](../samples/Natter.Sample.Plugin.Discord) | `natter.transport.discord` NPS 示例插件 | Chat.Discord + Plugin.Abstractions + Cli.Abstractions |
 | [src/Natter.Feature.Ai.DeepSeek](../src/Natter.Feature.Ai.DeepSeek) | DeepSeek `IChatClient` + responder 插件 | Chat + Application + Plugin.Abstractions + M.E.AI |
 | [src/Natter.Feature.Ai](../src/Natter.Feature.Ai) | 共享 responder/context/memory 边界 | Chat + Application + Plugin.Abstractions + M.E.AI |
-| [src/Natter.Chat.DingTalk](../src/Natter.Chat.DingTalk) | 钉钉 callback transport | Chat + System.Reactive |
+| [src/Natter.Chat.DingTalk](../src/Natter.Chat.DingTalk) | 钉钉 Stream transport（+ legacy callback） | Chat + System.Reactive |
 | [samples/Natter.Sample.Plugin.DingTalk](../samples/Natter.Sample.Plugin.DingTalk) | 钉钉 NPS 插件 | Chat.DingTalk + Plugin.Abstractions |
 | [src/Natter.Feature.Ai.Spark](../src/Natter.Feature.Ai.Spark) | 星火 `IChatClient` + shared responder | Chat + Application + M.E.AI |
 | [src/Natter.Cli.Abstractions](../src/Natter.Cli.Abstractions) | CLI 契约（`IConsole`、命令描述符） | 无 |

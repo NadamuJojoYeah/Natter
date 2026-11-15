@@ -12,7 +12,7 @@
 
 > 第二上游/消费者（钉钉 + 星火）的验证见 [第二上游/消费者验证](SECOND_ADAPTER_VALIDATION.md)；当前为 fake/HTTP 契约与 NPS 交叉验证，真实平台凭据未接入。
 
-两个插件在 **真实 Discord 网关 + 真实 DeepSeek Chat Completions** 上完成了「入站 → NLMP → responder → 出站」的完整链路。开发修复后已从正式修复构建重跑全部自动 live：**27/27 通过**（L1 8、L2 9、L2b 2、L3/L3b/L3c 3、L4 5），**188/188 框架回归通过**；L5 人工闸门修复后复测通过（见下方链接）。过程中记录并修复了 2 个会直接导致 CLI 无法加载插件的真实缺陷（见 §7）。
+两个插件在 **真实 Discord 网关 + 真实 DeepSeek Chat Completions** 上完成了「入站 → NLMP → responder → 出站」的完整链路。开发修复后已从正式修复构建重跑全部自动 live：**27/27 通过**（L1 8、L2 9、L2b 2、L3/L3b/L3c 3、L4 5），**190/190 框架回归通过**；L5 人工闸门修复后复测通过（见下方链接）。过程中记录并修复了 2 个会直接导致 CLI 无法加载插件的真实缺陷（见 §7）。
 
 > **L5 人工闸门**：2026-11-15 13:24 首次执行**未通过**（guild 真实 @bot 被编排器静默丢弃，`BUG-003`）；修复 `687f27f` 后 13:50 复测**通过**（约 3s 回复、reply 引用正确），详见[首测记录](testing/2026-11-15-live-manual-gate.md)、[处置记录](testing/2026-11-15-live-manual-gate-response.md)与[复测记录](testing/2026-11-15-live-manual-gate-rerun.md)。
 
