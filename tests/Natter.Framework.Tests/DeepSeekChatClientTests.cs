@@ -30,7 +30,7 @@ public sealed class DeepSeekChatClientTests
                     "total_tokens": 15,
                     "prompt_cache_hit_tokens": 4,
                     "prompt_cache_miss_tokens": 6,
-                    "completion_token_details": { "reasoning_tokens": 2 }
+                    "completion_tokens_details": { "reasoning_tokens": 2 }
                   }
                 }
                 """);
@@ -47,6 +47,7 @@ public sealed class DeepSeekChatClientTests
         Assert.Equal(10, response.Usage?.InputTokenCount);
         Assert.Equal(5, response.Usage?.OutputTokenCount);
         Assert.Equal(4, response.Usage?.CachedInputTokenCount);
+        Assert.Equal(2, response.Usage?.ReasoningTokenCount);
         Assert.NotNull(response.AdditionalProperties);
         Assert.True(response.AdditionalProperties!.ContainsKey("deepseek.usage"));
         Assert.DoesNotContain("super-secret", capturedBody!, StringComparison.Ordinal);
