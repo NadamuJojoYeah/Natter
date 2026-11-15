@@ -1,3 +1,4 @@
+using System.Net;
 using Microsoft.Extensions.AI;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
@@ -154,16 +155,17 @@ public sealed class DingTalkTests
             ReadEmbedded(typeof(SparkPlugin).Assembly, "Natter.Feature.Ai.Spark.config.schema.json"));
         File.WriteAllText(Path.Combine(configDir, "natter.transport.dingtalk.json"), """
             {
-              "appSecret": "${secret:DINGTALK_APP_SECRET}",
+              "clientId": "dingtalk-client",
+              "clientSecret": "${secret:DINGTALK_CLIENT_SECRET}",
               "botId": "bot-dt",
-              "listenPrefix": "http://127.0.0.1:5088/dingtalk/",
+              "streamGatewayUrl": "https://api.dingtalk.com/v1.0/gateway/connections/open",
               "requireMention": false
             }
             """);
         File.WriteAllText(Path.Combine(configDir, "natter.feature.ai.spark.json"), """
             {
               "apiKey": "${secret:SPARK_API_KEY}",
-              "model": "generalv3.5",
+              "model": "spark-x2.5-1.7b",
               "maxOutputTokens": 128,
               "tools": []
             }
@@ -176,7 +178,7 @@ public sealed class DingTalkTests
         };
         var secrets = new TestSecrets(new Dictionary<string, string>
         {
-            ["DINGTALK_APP_SECRET"] = "dingtalk-secret",
+            ["DINGTALK_CLIENT_SECRET"] = "dingtalk-secret",
             ["SPARK_API_KEY"] = "spark-key",
         });
 
@@ -255,6 +257,78 @@ public sealed class DingTalkTests
     }
 
     [Fact]
+    public void Stream_protocol_builds_open_request_ack_and_parses_callback_frames()
+    {
+        var request = JsonDocument.Parse(DingTalkStreamProtocol.BuildOpenConnectionRequest(
+            "client-id", "client-secret", DingTalkStreamProtocol.BotTopic));
+        Assert.Equal("client-id", request.RootElement.GetProperty("clientId").GetString());
+        Assert.Equal("client-secret", request.RootElement.GetProperty("clientSecret").GetString());
+        Assert.Equal(
+            DingTalkStreamProtocol.BotTopic,
+            request.RootElement.GetProperty("subscriptions")[0].GetProperty("topic").GetString());
+
+        var connection = DingTalkStreamProtocol.ParseOpenConnection(
+            """{"endpoint":"wss://stream.example/connect","ticket":"a b+c"}""");
+        Assert.Equal("wss://stream.example/connect", connection.Endpoint);
+        Assert.Contains("ticket=a%20b%2Bc", DingTalkStreamProtocol.BuildWebSocketUri(connection.Endpoint, connection.Ticket));
+
+        var frame = DingTalkStreamProtocol.ParseFrame("""
+            {
+              "type": "CALLBACK",
+              "headers": { "messageId": "msg-1", "topic": "/v1.0/im/bot/messages/get" },
+              "data": "{\"msgId\":\"m1\",\"conversationId\":\"cid\"}"
+            }
+            """);
+        Assert.Equal("CALLBACK", frame.Type);
+        Assert.Equal("msg-1", frame.MessageId);
+        Assert.Equal(DingTalkStreamProtocol.BotTopic, frame.Topic);
+        Assert.Contains("m1", frame.Data);
+
+        var ack = JsonDocument.Parse(DingTalkStreamProtocol.BuildAck("msg-1"));
+        Assert.Equal(200, ack.RootElement.GetProperty("code").GetInt32());
+        Assert.Equal("msg-1", ack.RootElement.GetProperty("headers").GetProperty("messageId").GetString());
+    }
+
+    [Fact]
+    public async Task Stream_transport_connects_acks_and_publishes_callback()
+    {
+        var port = FindFreePort();
+        using var server = new StreamGatewayServer(port);
+        server.Start();
+
+        var options = new DingTalkOptions
+        {
+            ClientId = "client-id",
+            BotId = "bot-dt",
+            StreamGatewayUrl = $"http://127.0.0.1:{port}/open",
+            ReconnectBaseDelayMs = 10,
+            ReconnectMaxDelayMs = 20,
+        };
+        using var transport = new DingTalkStreamTransport(options, "client-secret");
+        var events = new List<DingTalkTransportEvent>();
+        using var subscription = transport.Events.Subscribe(events.Add);
+
+        await transport.ConnectAsync();
+        var eventTask = WaitForAsync(() => events.FirstOrDefault(item => item.Kind == DingTalkTransportEventKind.Message));
+        DingTalkTransportEvent inbound;
+        try
+        {
+            inbound = await eventTask.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        catch (TimeoutException)
+        {
+            if (server.AckCode.IsFaulted)
+                throw server.AckCode.Exception!;
+            throw new TimeoutException(
+                "Stream events: " + string.Join(" | ", events.Select(item =>
+                    $"{item.Kind}:{item.ErrorCode}:{item.ErrorMessage}:{item.Message?.MsgId}")));
+        }
+        Assert.Equal("stream-1", inbound.Message!.MsgId);
+        Assert.Equal(200, await server.AckCode.WaitAsync(TimeSpan.FromSeconds(5)));
+        await transport.DisconnectAsync();
+    }
+
+    [Fact]
     public void Shared_conversation_store_isolates_sources()
     {
         var options = new AiResponderOptions();
@@ -307,6 +381,122 @@ public sealed class DingTalkTests
             "https://oapi.dingtalk.com/robot/sendBySession?session=test",
             DateTimeOffset.UtcNow.AddMinutes(30),
             DateTimeOffset.UtcNow);
+
+    private sealed class StreamGatewayServer : IDisposable
+    {
+        private readonly HttpListener _listener = new();
+        private readonly TaskCompletionSource<int> _ackCode = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly CancellationTokenSource _cts = new();
+        private Task? _loop;
+
+        public StreamGatewayServer(int port)
+            => _listener.Prefixes.Add($"http://127.0.0.1:{port}/");
+
+        public Task<int> AckCode => _ackCode.Task;
+
+        public void Start()
+        {
+            _listener.Start();
+            _loop = Task.Run(AcceptLoopAsync);
+        }
+
+        public void Dispose()
+        {
+            _cts.Cancel();
+            _listener.Close();
+            try { _loop?.Wait(TimeSpan.FromSeconds(2)); } catch { }
+            _cts.Dispose();
+        }
+
+        private async Task AcceptLoopAsync()
+        {
+            while (!_cts.IsCancellationRequested)
+            {
+                HttpListenerContext context;
+                try
+                {
+                    context = await _listener.GetContextAsync().WaitAsync(_cts.Token);
+                }
+                catch (Exception ex) when (ex is OperationCanceledException or HttpListenerException or ObjectDisposedException)
+                {
+                    return;
+                }
+
+                _ = HandleAsync(context);
+            }
+        }
+
+        private async Task HandleAsync(HttpListenerContext context)
+        {
+            try
+            {
+                if (context.Request.Url?.AbsolutePath == "/open")
+                {
+                    var body = System.Text.Encoding.UTF8.GetBytes(
+                        """{"endpoint":"ws://127.0.0.1:%PORT%/stream","ticket":"ticket"}"""
+                            .Replace("%PORT%", context.Request.Url!.Port.ToString(), StringComparison.Ordinal));
+                    context.Response.ContentType = "application/json";
+                    context.Response.ContentLength64 = body.Length;
+                    await context.Response.OutputStream.WriteAsync(body, _cts.Token);
+                    context.Response.Close();
+                    return;
+                }
+
+                if (context.Request.Url?.AbsolutePath == "/stream")
+                {
+                    var websocket = await context.AcceptWebSocketAsync(null);
+                    var payload = Message(
+                        "stream-1",
+                        "cid-stream",
+                        "hello stream",
+                        isAtList: true,
+                        atUsers: ["bot-dt"]);
+                    var frame = System.Text.Json.JsonSerializer.Serialize(new
+                    {
+                        type = "CALLBACK",
+                        headers = new { messageId = "frame-1", topic = DingTalkStreamProtocol.BotTopic },
+                        data = System.Text.Json.JsonSerializer.Serialize(new
+                        {
+                            msgId = payload.MsgId,
+                            conversationId = payload.ConversationId,
+                            conversationType = payload.ConversationType,
+                            conversationTitle = payload.ConversationTitle,
+                            senderId = payload.SenderId,
+                            senderStaffId = payload.SenderStaffId,
+                            senderNick = payload.SenderNick,
+                            chatbotUserId = payload.ChatbotUserId,
+                            robotCode = payload.RobotCode,
+                            msgtype = "text",
+                            text = new { content = payload.Content },
+                            atUsers = payload.AtUserIds.Select(id => new { dingtalkId = id }).ToArray(),
+                            isInAtList = payload.IsInAtList,
+                            sessionWebhook = payload.SessionWebhook,
+                            sessionWebhookExpiredTime = payload.SessionWebhookExpiresAt?.ToUnixTimeMilliseconds(),
+                            createAt = payload.CreatedAt.ToUnixTimeMilliseconds(),
+                        }),
+                    });
+                    await websocket.WebSocket.SendAsync(
+                        System.Text.Encoding.UTF8.GetBytes(frame),
+                        System.Net.WebSockets.WebSocketMessageType.Text,
+                        true,
+                        _cts.Token);
+
+                    var buffer = new byte[8192];
+                    var result = await websocket.WebSocket.ReceiveAsync(buffer, _cts.Token);
+                    var ack = JsonDocument.Parse(System.Text.Encoding.UTF8.GetString(buffer, 0, result.Count));
+                    _ackCode.TrySetResult(ack.RootElement.GetProperty("code").GetInt32());
+                    await websocket.WebSocket.CloseAsync(
+                        System.Net.WebSockets.WebSocketCloseStatus.NormalClosure,
+                        "done",
+                        _cts.Token);
+                }
+            }
+            catch (Exception ex)
+            {
+                _ackCode.TrySetException(ex);
+            }
+        }
+    }
 
     private static int FindFreePort()
     {

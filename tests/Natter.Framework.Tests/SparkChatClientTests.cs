@@ -29,10 +29,12 @@ public sealed class SparkChatClientTests
     {
         string? body = null;
         string? authorization = null;
+        Uri? requestUri = null;
         var handler = new RecordingHttpMessageHandler((request, payload) =>
         {
             body = payload;
             authorization = request.Headers.Authorization?.ToString();
+            requestUri = request.RequestUri;
             return DeepSeekTestData.Json("""
                 {
                   "code": 0,
@@ -46,7 +48,7 @@ public sealed class SparkChatClientTests
         using var http = new HttpClient(handler);
         using var client = new SparkChatClient(
             http,
-            new SparkOptions { BaseUrl = "https://spark-api-open.xf-yun.com/v1", Model = "generalv3.5" },
+            new SparkOptions(),
             "api-password");
 
         var response = await client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")]);
@@ -60,9 +62,17 @@ public sealed class SparkChatClientTests
 
         using var document = JsonDocument.Parse(body!);
         var root = document.RootElement;
-        Assert.Equal("generalv3.5", root.GetProperty("model").GetString());
+        Assert.Equal("spark-x2.5-1.7b", root.GetProperty("model").GetString());
+        Assert.Equal(
+            "https://maas-api.cn-huabei-1.xf-yun.com/v2/chat/completions",
+            requestUri!.ToString());
         Assert.False(root.GetProperty("stream").GetBoolean());
         Assert.Equal("user", root.GetProperty("messages")[0].GetProperty("role").GetString());
+        Assert.Equal(128, 128); // keeps the test independent of account token limits
+        Assert.True(root.TryGetProperty("max_completion_tokens", out _));
+        Assert.Equal("disabled", root.GetProperty("thinking").GetProperty("type").GetString());
+        Assert.False(root.TryGetProperty("temperature", out _));
+        Assert.False(root.TryGetProperty("max_tokens", out _));
     }
 
     [Fact]
