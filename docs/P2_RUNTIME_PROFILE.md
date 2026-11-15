@@ -1,10 +1,12 @@
 # P2 Runtime & Profile Foundation — Development Spec
 
-> **状态**：P2 foundation implemented（profiles / profile-aware routing / SQLite host store / serve / health + loopback health port / config+state dirs；多实例与部分 provider model 细节仍未实现）  
-> **日期**：2026-11-15  
-> **目标**：把 Natter 从“能跑的一次性联调宿主”推进到“可长驻、可配置、可路由、可恢复”的产品底座。  
-> **范围**：RuntimeProfile、provider 路由、`natter serve`、插件配置目录、SQLite 会话持久化、健康/指标、一等/二等公民支持策略。  
+> **状态**：P2 foundation implemented（profiles / profile-aware routing / SQLite host store / serve / health + loopback health port / config+state dirs；多实例与部分 provider model 细节仍未实现）
+> **日期**：2026-11-15
+> **目标**：把 Natter 从“能跑的一次性联调宿主”推进到“可长驻、可配置、可路由、可恢复”的产品底座。
+> **范围**：RuntimeProfile、provider 路由、`natter serve`、插件配置目录、SQLite 会话持久化、健康/指标、一等/二等公民支持策略。
 > **不包含**：Context/Memory 插件化（P3）、Task Worker、第三方插件市场、Android 动态宿主、跨平台身份自动合并。
+> **验收计划**：[P2 Acceptance Test Plan](testing/P2_ACCEPTANCE.md)。
+> **当前结论**：No-Go；4 个 High 待修，见 [P2 验收处置](testing/2026-11-15-p2-acceptance-response.md)。
 
 ---
 
@@ -456,7 +458,7 @@ DeepSeek/Spark manifest 增加 `storage` 权限。
 
 ### 6.6 迁移
 
-当前内存历史无需迁移；首次启动空库。  
+当前内存历史无需迁移；首次启动空库。
 不要尝试导入 `AiConversationStore` 的进程内字典。
 
 ---
@@ -597,7 +599,7 @@ GET http://127.0.0.1:<port>/health
 | 多实例/Postgres | 未实现 | — |
 | Android 动态宿主 | 不在范围 | — |
 
-测试：`Natter.Framework.Tests` **203/203**；新增 profile/resolver/validation、SQLite、health/serve/state 测试。
+测试：`Natter.Framework.Tests` **214/214**；新增 profile/resolver/validation、SQLite、health/serve/state 测试。
 
 ## 9. 实施顺序
 
