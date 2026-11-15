@@ -38,6 +38,8 @@ public sealed class ContextStorageTests
         Assert.Equal(1, await other.ImportAsync(new MemoryImportRequest(source, conversation, user, export)));
         Assert.Single(await other.SearchAsync(new MemoryQuery(source, conversation, user)));
 
+        var bob = new User("bob", "Bob");
+        Assert.False(await reopenedMemory.DeleteAsync(new MemoryDeleteRequest(source, conversation, bob, MemoryId: item.MemoryId)));
         Assert.True(await reopenedMemory.DeleteAsync(new MemoryDeleteRequest(source, conversation, user, MemoryId: item.MemoryId)));
         Assert.Empty(await reopenedMemory.SearchAsync(new MemoryQuery(source, conversation, user)));
     }

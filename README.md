@@ -22,7 +22,7 @@ Natter 只交付**框架能力**：端口契约、组合根、插件加载、DI 
 - **多平台发布**：自包含单文件（win/linux/osx）+ Android APK；示例插件随发布目录部署或嵌入宿主。
 - **Runtime/Profile**：`profiles.json` 显式 provider 路由、SQLite 会话、`serve`/`health`、`--config-dir`/`--state-dir`、Tier 1/2 启动策略。
 - **Context/Memory**：host prompt/context/memory pipeline、SQLite `summaries`/`memory_items`、确定性摘要、显式 `remember`/`forget`、scope 隔离。
-- **测试**：227 个框架级测试覆盖聚合事件、Rx 总线、DI 管道、解析器、插件加载、CLI、NLMP 一致性与 NPS v1 插件内核；另有可选的 live 套件对真实 Discord 与 DeepSeek API 做分层联调（见 [真实 API 联调测试方案](docs/LIVE_TEST_PLAN.md)）。
+- **测试**：232 个框架级测试覆盖聚合事件、Rx 总线、DI 管道、解析器、插件加载、CLI、NLMP 一致性与 NPS v1 插件内核；另有可选的 live 套件对真实 Discord 与 DeepSeek API 做分层联调（见 [真实 API 联调测试方案](docs/LIVE_TEST_PLAN.md)）。
 
 ## 架构
 

@@ -38,6 +38,8 @@ public sealed class CliCoreCompositionModule : ICompositionModule
         services.AddTransient<RememberCommand>();
         services.AddTransient<ForgetCommand>();
         services.AddTransient<MemoryListCommand>();
+        services.AddTransient<MemoryExportCommand>();
+        services.AddTransient<MemoryImportCommand>();
         services.AddTransient<HealthCommand>();
         services.AddTransient<PluginsStoreInstallCommand>();
         services.AddTransient<PluginsStoreRollbackCommand>();

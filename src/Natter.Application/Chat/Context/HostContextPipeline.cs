@@ -19,7 +19,8 @@ public sealed class HostContextPipeline(
     private static ConversationSummary BuildDeterministicSummary(
         ConversationKey key,
         IReadOnlyList<StoredMessage> older,
-        string promptVersion)
+        string promptVersion,
+        ConversationSummary? previous)
     {
         var first = older.FirstOrDefault();
         var last = older.LastOrDefault();
@@ -28,13 +29,14 @@ public sealed class HostContextPipeline(
             .Select(message => $"{message.Role}: {Truncate(message.Text, 180)}")
             .Distinct(StringComparer.Ordinal)
             .ToArray();
+        var previousText = previous is null ? string.Empty : Truncate(previous.Text, 1200) + "\n";
         return new ConversationSummary(
             "sum_" + Guid.NewGuid().ToString("N")[..12],
             key,
             first?.MessageId ?? 0,
             last?.MessageId ?? 0,
-            "Earlier conversation:\n" + string.Join("\n", samples),
-            1,
+            Truncate(previousText + "Earlier conversation:\n" + string.Join("\n", samples), 2000),
+            (previous?.Version ?? 0) + 1,
             promptVersion,
             DateTimeOffset.UtcNow);
     }
@@ -115,11 +117,19 @@ public sealed class HostContextPipeline(
         try
         {
             summary = await summaries.GetLatestAsync(key, cancellationToken).ConfigureAwait(false);
-            if (summary is null && allMessages.Count > windowSize)
+            if (allMessages.Count > windowSize)
             {
                 var older = allMessages.Take(allMessages.Count - windowSize).ToArray();
-                summary = BuildDeterministicSummary(key, older, profile.Prompt.Version);
-                await summaries.SaveAsync(summary, cancellationToken).ConfigureAwait(false);
+                var lastCovered = older.LastOrDefault()?.MessageId ?? 0;
+                if (summary is null || summary.ToMessageId < lastCovered)
+                {
+                    summary = BuildDeterministicSummary(
+                        key,
+                        older,
+                        profile.Prompt.Version,
+                        summary);
+                    await summaries.SaveAsync(summary, cancellationToken).ConfigureAwait(false);
+                }
             }
         }
         catch (Exception ex)

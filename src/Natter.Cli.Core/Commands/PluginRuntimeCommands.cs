@@ -157,22 +157,49 @@ public sealed class PluginsContributionsCommand : ICliCommandHandler
             return ValueTask.FromResult(CliExitCodes.Failure);
         }
 
+        var components = _services.GetService<Natter.Application.Chat.IContextComponentCatalog>()?.Components
+                         ?? [];
+        var hostRows = components.Select(component => new
+            {
+                owner = component.Owner,
+                source = component.Source,
+                type = component.Type,
+                id = component.Id,
+                pluginId = component.Owner,
+                priority = 0,
+                status = "active",
+            })
+            .ToArray();
+        var pluginRows = runtime.Contributions.Select(contribution => new
+            {
+                owner = contribution.PluginId,
+                source = "plugin",
+                type = contribution.Type,
+                id = contribution.Id,
+                pluginId = contribution.PluginId,
+                priority = contribution.Priority,
+                status = contribution.Status,
+            })
+            .ToArray();
+        var rows = pluginRows.Concat(hostRows).ToArray();
+
         if (invocation.HasFlag("json"))
         {
-            invocation.Console.Out.WriteLine(JsonOutput.Serialize(runtime.Contributions));
+            invocation.Console.Out.WriteLine(JsonOutput.Serialize(rows));
             return ValueTask.FromResult(CliExitCodes.Success);
         }
 
         ConsoleTable.Write(
             invocation.Console.Out,
-            ["TYPE", "ID", "PLUGIN", "PRIORITY", "STATUS"],
-            runtime.Contributions.Select(contribution => (IReadOnlyList<string>)
+            ["TYPE", "ID", "OWNER", "SOURCE", "PRIORITY", "STATUS"],
+            rows.Select(contribution => (IReadOnlyList<string>)
             [
-                contribution.Type,
-                contribution.Id,
-                contribution.PluginId,
-                contribution.Priority.ToString(),
-                contribution.Status,
+                contribution.type,
+                contribution.id,
+                contribution.owner,
+                contribution.source,
+                contribution.priority.ToString(),
+                contribution.status,
             ]).ToList());
 
         return ValueTask.FromResult(CliExitCodes.Success);

@@ -71,9 +71,18 @@ public sealed class ForgetCommand(IMemoryStore store, ISummaryStore summaries) :
         await summaries.InvalidateAsync(userKey, "forget", cancellationToken).ConfigureAwait(false);
 
         if (invocation.HasFlag("json"))
-            invocation.Console.Out.WriteLine(JsonSerializer.Serialize(new { deleted }));
+        {
+            invocation.Console.Out.WriteLine(JsonSerializer.Serialize(new
+            {
+                deleted,
+                reason = deleted ? null : "not found or caller is not the creator",
+            }));
+        }
         else
-            invocation.Console.Out.WriteLine(deleted ? "deleted" : "not_found");
+        {
+            invocation.Console.Out.WriteLine(
+                deleted ? "deleted" : "deleted:false (not found or caller is not the creator)");
+        }
         return deleted ? CliExitCodes.Success : CliExitCodes.Failure;
     }
 }
@@ -90,7 +99,12 @@ public sealed class MemoryListCommand(IMemoryStore store) : ICliCommandHandler
     {
         var context = MemoryCommandContext.Parse(invocation);
         var items = await store.SearchAsync(
-            new MemoryQuery(context.Source, context.Conversation, context.User, invocation.GetIntOption("limit", 50)),
+            new MemoryQuery(
+                context.Source,
+                context.Conversation,
+                context.User,
+                invocation.GetIntOption("limit", 50),
+                IncludePrivate: context.Conversation.Kind is ConversationKind.Direct or ConversationKind.Group),
             cancellationToken).ConfigureAwait(false);
 
         if (invocation.HasFlag("json"))
@@ -129,5 +143,108 @@ internal sealed record MemoryCommandContext(Source Source, Conversation Conversa
             _ => MemoryScopeType.User,
         };
         return new MemoryCommandContext(source, conversation, user, scope);
+    }
+}
+
+/// <summary>Exports visible memory as a versioned envelope (memory only, no summary text).</summary>
+public sealed class MemoryExportCommand(IMemoryStore store) : ICliCommandHandler
+{
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        WriteIndented = true,
+        Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() },
+    };
+
+    public async ValueTask<int> ExecuteAsync(CliInvocation invocation, CancellationToken cancellationToken = default)
+    {
+        var context = MemoryCommandContext.Parse(invocation);
+        var export = await store.ExportAsync(
+            new MemoryExportRequest(context.Source, context.Conversation, context.User),
+            cancellationToken).ConfigureAwait(false);
+        var json = JsonSerializer.Serialize(export, JsonOptions);
+        var output = invocation.GetOption("output");
+        if (!string.IsNullOrWhiteSpace(output))
+        {
+            var path = Path.GetFullPath(output);
+            var directory = Path.GetDirectoryName(path);
+            if (!string.IsNullOrEmpty(directory))
+                Directory.CreateDirectory(directory);
+            await File.WriteAllTextAsync(path, json, cancellationToken).ConfigureAwait(false);
+            if (!OperatingSystem.IsWindows())
+                File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            invocation.Console.Out.WriteLine($"exported {export.Items.Count} memory item(s) to {path}");
+        }
+        else
+        {
+            invocation.Console.Out.WriteLine(json);
+        }
+        return CliExitCodes.Success;
+    }
+}
+
+/// <summary>Imports a memory envelope; only current scope/source/actor-visible items are accepted.</summary>
+public sealed class MemoryImportCommand(IMemoryStore store) : ICliCommandHandler
+{
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        PropertyNameCaseInsensitive = true,
+        Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() },
+    };
+
+    public async ValueTask<int> ExecuteAsync(CliInvocation invocation, CancellationToken cancellationToken = default)
+    {
+        var file = invocation.GetOption("file");
+        if (string.IsNullOrWhiteSpace(file) || !File.Exists(file))
+        {
+            invocation.Console.Error.WriteLine("usage: memory import --file <json> --source ... --actor ...");
+            return CliExitCodes.Usage;
+        }
+
+        MemoryExport? export;
+        try
+        {
+            export = JsonSerializer.Deserialize<MemoryExport>(await File.ReadAllTextAsync(file, cancellationToken), JsonOptions);
+        }
+        catch (JsonException ex)
+        {
+            invocation.Console.Error.WriteLine($"invalid memory export: {ex.Message}");
+            return CliExitCodes.Failure;
+        }
+
+        if (export is null || export.SchemaVersion != 1)
+        {
+            invocation.Console.Error.WriteLine("unsupported memory export schemaVersion");
+            return CliExitCodes.Failure;
+        }
+
+        var context = MemoryCommandContext.Parse(invocation);
+        var mismatch = export.Items.Where(item =>
+            !Natter.Application.Chat.MemoryScope.IsVisible(
+                item,
+                context.Source,
+                context.Conversation,
+                context.User,
+                includePrivate: context.Conversation.Kind is ConversationKind.Direct or ConversationKind.Group)).ToArray();
+        if (mismatch.Length > 0)
+        {
+            invocation.Console.Error.WriteLine($"refusing import: {mismatch.Length} item(s) do not belong to the requested source/scope/actor");
+            return CliExitCodes.Failure;
+        }
+
+        var imported = await store.ImportAsync(
+            new MemoryImportRequest(
+                context.Source,
+                context.Conversation,
+                context.User,
+                export,
+                Overwrite: invocation.HasFlag("overwrite")),
+            cancellationToken).ConfigureAwait(false);
+        if (invocation.HasFlag("json"))
+            invocation.Console.Out.WriteLine(JsonSerializer.Serialize(new { imported, skipped = export.Items.Count - imported }));
+        else
+            invocation.Console.Out.WriteLine($"imported {imported} memory item(s)");
+        return CliExitCodes.Success;
     }
 }

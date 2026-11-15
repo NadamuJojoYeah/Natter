@@ -218,6 +218,39 @@ internal static class BuiltInCommands
         },
         new CliCommandDescriptor
         {
+            Name = "memory export",
+            Description = "Export visible memory to stdout or a 0600 JSON file.",
+            Options =
+            [
+                new CliOptionDescriptor("source", "Source key protocol:platform:self.", TakesValue: true),
+                new CliOptionDescriptor("conversation", "Conversation id.", TakesValue: true),
+                new CliOptionDescriptor("actor", "Actor/user id.", TakesValue: true),
+                new CliOptionDescriptor("guild", "Guild id.", TakesValue: true),
+                new CliOptionDescriptor("output", "Output file.", TakesValue: true),
+                new CliOptionDescriptor("json", "Emit JSON."),
+            ],
+            Origin = Origin,
+            HandlerFactory = services => services.GetRequiredService<MemoryExportCommand>(),
+        },
+        new CliCommandDescriptor
+        {
+            Name = "memory import",
+            Description = "Import a memory envelope for the current source/scope/actor.",
+            Options =
+            [
+                new CliOptionDescriptor("file", "Input memory JSON.", TakesValue: true),
+                new CliOptionDescriptor("source", "Source key protocol:platform:self.", TakesValue: true),
+                new CliOptionDescriptor("conversation", "Conversation id.", TakesValue: true),
+                new CliOptionDescriptor("actor", "Actor/user id.", TakesValue: true),
+                new CliOptionDescriptor("guild", "Guild id.", TakesValue: true),
+                new CliOptionDescriptor("overwrite", "Overwrite existing ids."),
+                new CliOptionDescriptor("json", "Emit JSON."),
+            ],
+            Origin = Origin,
+            HandlerFactory = services => services.GetRequiredService<MemoryImportCommand>(),
+        },
+        new CliCommandDescriptor
+        {
             Name = "remember",
             Description = "Store an explicit, user-confirmed memory.",
             Options =

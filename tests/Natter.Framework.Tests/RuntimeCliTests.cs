@@ -133,6 +133,72 @@ public sealed class RuntimeCliTests
     }
 
     [Fact]
+    public async Task Memory_list_hides_private_items_in_guild_context()
+    {
+        using var temp = new TempDirectory();
+        var options = new NatterCliOptions { LoadPlugins = false, StateDirectory = Path.Combine(temp.Path, "state") };
+        var remember = new StringConsole();
+        Assert.Equal(CliExitCodes.Success, await NatterCli.RunAsync(
+            ["remember", "private note", "--sensitivity", "private", "--source", "discord:discord:bot",
+             "--actor", "u1", "--conversation", "c1"], remember, options));
+
+        var dm = new StringConsole();
+        await NatterCli.RunAsync(
+            ["memory", "list", "--json", "--source", "discord:discord:bot", "--actor", "u1", "--conversation", "c1"],
+            dm, options);
+        Assert.Contains("private note", dm.Output);
+
+        var guild = new StringConsole();
+        await NatterCli.RunAsync(
+            ["memory", "list", "--json", "--source", "discord:discord:bot", "--actor", "u1",
+             "--conversation", "c1", "--guild", "g1"], guild, options);
+        Assert.DoesNotContain("private note", guild.Output);
+    }
+
+    [Fact]
+    public async Task Memory_export_import_roundtrip_is_scoped_and_private_file()
+    {
+        using var temp = new TempDirectory();
+        var stateA = Path.Combine(temp.Path, "state-a");
+        var stateB = Path.Combine(temp.Path, "state-b");
+        var file = Path.Combine(temp.Path, "memory.json");
+        var optionsA = new NatterCliOptions { LoadPlugins = false, StateDirectory = stateA };
+        var optionsB = new NatterCliOptions { LoadPlugins = false, StateDirectory = stateB };
+        var common = new[]
+        {
+            "--source", "discord:discord:bot", "--actor", "u1", "--conversation", "c1", "--guild", "g1",
+        };
+
+        var remember = new StringConsole();
+        Assert.Equal(CliExitCodes.Success, await NatterCli.RunAsync(
+            ["remember", "likes oat milk", "--scope", "user", .. common], remember, optionsA));
+
+        var export = new StringConsole();
+        Assert.Equal(CliExitCodes.Success, await NatterCli.RunAsync(
+            ["memory", "export", "--output", file, .. common], export, optionsA));
+        Assert.True(File.Exists(file));
+        if (!OperatingSystem.IsWindows())
+            Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(file));
+
+        var import = new StringConsole();
+        Assert.Equal(CliExitCodes.Success, await NatterCli.RunAsync(
+            ["memory", "import", "--file", file, "--json", .. common], import, optionsB));
+        Assert.Contains("\"imported\":1", import.Output);
+
+        var list = new StringConsole();
+        Assert.Equal(CliExitCodes.Success, await NatterCli.RunAsync(
+            ["memory", "list", "--json", .. common], list, optionsB));
+        Assert.Contains("likes oat milk", list.Output);
+
+        var mismatch = new StringConsole();
+        Assert.Equal(CliExitCodes.Failure, await NatterCli.RunAsync(
+            ["memory", "import", "--file", file, "--source", "discord:discord:bot", "--actor", "other", "--conversation", "c1"],
+            mismatch,
+            optionsB));
+        Assert.Contains("do not belong", mismatch.ErrorText);
+    }
+
+    [Fact]
     public async Task Serve_health_port_answers_loopback_health()
     {
         var port = FindFreePort();

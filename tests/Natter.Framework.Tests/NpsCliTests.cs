@@ -54,10 +54,15 @@ public sealed class NpsCliTests
 
         using (var contributions = JsonDocument.Parse(console.Output))
         {
-            var contribution = Assert.Single(contributions.RootElement.EnumerateArray());
+            var items = contributions.RootElement.EnumerateArray().ToArray();
+            var contribution = Assert.Single(items, item => item.GetProperty("source").GetString() == "plugin");
             Assert.Equal("cli.command", contribution.GetProperty("type").GetString());
             Assert.Equal("nps.hello", contribution.GetProperty("id").GetString());
             Assert.Equal("active", contribution.GetProperty("status").GetString());
+            Assert.Contains(items, item => item.GetProperty("owner").GetString() == "host"
+                                           && item.GetProperty("type").GetString() == "prompt.provider");
+            Assert.Contains(items, item => item.GetProperty("owner").GetString() == "host"
+                                           && item.GetProperty("type").GetString() == "memory.store");
         }
 
         console = new StringConsole();

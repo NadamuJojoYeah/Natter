@@ -216,6 +216,9 @@ public sealed class DingTalkTests
         Assert.Equal("hello", spark.Calls[0][^1].Text);
         Assert.Contains(
             spark.Calls[0],
+            message => message.Text!.Contains("oolong tea", StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            spark.Calls[0],
             message => message.Role == ChatRole.System
                        && message.Text!.Contains("oolong tea", StringComparison.Ordinal));
 

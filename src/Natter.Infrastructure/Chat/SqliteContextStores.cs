@@ -232,9 +232,11 @@ public sealed class SqliteMemoryStore : IMemoryStore
         {
             command.CommandText = """
                 DELETE FROM memory_items WHERE memory_id = $id
-                  AND scope_id IN ($s0, $s1, $s2, $s3);
+                  AND scope_id IN ($s0, $s1, $s2, $s3)
+                  AND (scope_type = 'user' OR subject_id = $actor);
                 """;
             command.Parameters.AddWithValue("$id", request.MemoryId);
+            command.Parameters.AddWithValue("$actor", request.User.Id);
             command.Parameters.AddWithValue("$s0", MemoryScope.Id(request.Source, request.Conversation, request.User, MemoryScopeType.User));
             command.Parameters.AddWithValue("$s1", MemoryScope.Id(request.Source, request.Conversation, request.User, MemoryScopeType.Conversation));
             command.Parameters.AddWithValue("$s2", MemoryScope.Id(request.Source, request.Conversation, request.User, MemoryScopeType.Guild));
@@ -244,9 +246,11 @@ public sealed class SqliteMemoryStore : IMemoryStore
         {
             command.CommandText = """
                 DELETE FROM memory_items WHERE lower(text) = lower($text)
-                  AND scope_id IN ($s0, $s1, $s2, $s3);
+                  AND scope_id IN ($s0, $s1, $s2, $s3)
+                  AND (scope_type = 'user' OR subject_id = $actor);
                 """;
             command.Parameters.AddWithValue("$text", request.Text);
+            command.Parameters.AddWithValue("$actor", request.User.Id);
             command.Parameters.AddWithValue("$s0", MemoryScope.Id(request.Source, request.Conversation, request.User, MemoryScopeType.User));
             command.Parameters.AddWithValue("$s1", MemoryScope.Id(request.Source, request.Conversation, request.User, MemoryScopeType.Conversation));
             command.Parameters.AddWithValue("$s2", MemoryScope.Id(request.Source, request.Conversation, request.User, MemoryScopeType.Guild));
@@ -261,7 +265,14 @@ public sealed class SqliteMemoryStore : IMemoryStore
 
     public async ValueTask<MemoryExport> ExportAsync(MemoryExportRequest request, CancellationToken cancellationToken = default)
     {
-        var items = await SearchAsync(new MemoryQuery(request.Source, request.Conversation, request.User, 10_000), cancellationToken)
+        var items = await SearchAsync(
+            new MemoryQuery(
+                request.Source,
+                request.Conversation,
+                request.User,
+                10_000,
+                IncludePrivate: request.Conversation.Kind is ConversationKind.Direct or ConversationKind.Group),
+            cancellationToken)
             .ConfigureAwait(false);
         return new MemoryExport(1, DateTimeOffset.UtcNow, items);
     }
