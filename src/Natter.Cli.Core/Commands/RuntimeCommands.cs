@@ -13,6 +13,7 @@ public sealed class ServeCommand(
     IChatUpstreamRegistry upstreams,
     IRuntimeProfileStore profiles,
     IChatResponderRegistry responders,
+    IConversationStore conversations,
     IPluginCatalog plugins) : ICliCommandHandler
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -56,28 +57,67 @@ public sealed class ServeCommand(
                 invocation.Console.Out.WriteLine($"upstream {upstream.source} connected={upstream.connected}");
         }
 
-        if (duration <= 0)
-        {
-            try
-            {
-                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-            }
-        }
-        else
-        {
-            try
-            {
-                await Task.Delay(TimeSpan.FromSeconds(duration), cancellationToken).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-            }
-        }
+        using var healthServer = CreateHealthServer(invocation);
+        healthServer?.Start();
 
+        if (duration <= 0)
+            {
+                try
+                {
+                    await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                }
+            }
+            else
+            {
+                try
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(duration), cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                }
+            }
         return CliExitCodes.Success;
+    }
+
+    private HealthHttpServer? CreateHealthServer(CliInvocation invocation)
+    {
+        var port = invocation.GetIntOption("health-port", 0);
+        if (port <= 0)
+            return null;
+
+        return new HealthHttpServer(port, async () =>
+        {
+            var conversationCount = await conversations.CountAsync().ConfigureAwait(false);
+            return new
+            {
+                status = upstreams.Upstreams.All(upstream => upstream.IsConnected) ? "healthy" : "degraded",
+                profiles = profiles.Current.Profiles.Count,
+                conversations = conversationCount,
+                providers = profiles.Current.Profiles
+                    .Select(profile => profile.Ai.Provider)
+                    .Distinct(StringComparer.Ordinal)
+                    .Select(provider => new
+                    {
+                        id = provider,
+                        available = responders.TryGet(provider, out _),
+                    })
+                    .ToArray(),
+                upstreams = upstreams.Upstreams.Select(upstream => new
+                {
+                    source = upstream.Source.Key,
+                    connected = upstream.IsConnected,
+                }).ToArray(),
+                plugins = new
+                {
+                    activated = plugins.Plugins.Count(plugin => plugin.State == PluginState.Activated),
+                    failed = plugins.Plugins.Count(plugin => plugin.State == PluginState.Failed),
+                },
+            };
+        });
     }
 }
 

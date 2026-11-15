@@ -224,7 +224,7 @@ internal static class BuiltInCommands
             [
                 new CliOptionDescriptor("duration", "Stop after N seconds (0 = wait for cancellation).", TakesValue: true),
                 new CliOptionDescriptor("json", "Emit a machine-readable startup summary."),
-                new CliOptionDescriptor("health-port", "Optional loopback health HTTP port (reserved).", TakesValue: true),
+                new CliOptionDescriptor("health-port", "Optional loopback health HTTP port (/health).", TakesValue: true),
             ],
             Origin = Origin,
             HandlerFactory = services => services.GetRequiredService<ServeCommand>(),

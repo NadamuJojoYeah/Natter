@@ -95,6 +95,46 @@ public sealed class RuntimeCliTests
         Assert.Equal(2, document.RootElement.GetProperty("profiles").GetInt32());
     }
 
+    [Fact]
+    public async Task Serve_health_port_answers_loopback_health()
+    {
+        var port = FindFreePort();
+        var console = new StringConsole();
+        var run = NatterCli.RunAsync(
+            ["serve", "--duration", "3", "--health-port", port.ToString(), "--json"],
+            console,
+            new NatterCliOptions { LoadPlugins = false });
+
+        using var http = new HttpClient();
+        string? body = null;
+        for (var attempt = 0; attempt < 40 && body is null; attempt++)
+        {
+            try
+            {
+                body = await http.GetStringAsync($"http://127.0.0.1:{port}/health");
+            }
+            catch (HttpRequestException)
+            {
+                await Task.Delay(50);
+            }
+        }
+
+        Assert.NotNull(body);
+        using var document = JsonDocument.Parse(body!);
+        Assert.Equal("healthy", document.RootElement.GetProperty("status").GetString());
+        var exitCode = await run;
+        Assert.True(exitCode == CliExitCodes.Success, console.ErrorText + console.Output);
+    }
+
+    private static int FindFreePort()
+    {
+        var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
+        listener.Stop();
+        return port;
+    }
+
     private sealed class StringConsole : IConsole
     {
         public StringWriter OutWriter { get; } = new();
