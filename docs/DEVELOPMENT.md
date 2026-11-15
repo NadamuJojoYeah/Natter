@@ -31,6 +31,12 @@ dotnet build src/Natter.Hosting.Android/Natter.Hosting.Android.csproj
 
 没有 Android 环境时，不要直接 `dotnet build Natter.slnx`（解决方案包含 Android 工程）。使用 [scripts/build.sh](../scripts/build.sh) 只构建桌面宿主与测试，或单独构建 `Natter.Cli`。
 
+Android 动态插件构建使用独立配置（AOT/Trim off，不引用 embedded 示例插件）：
+
+```bash
+dotnet build src/Natter.Hosting.Android/Natter.Hosting.Android.csproj -c DynamicPlugins
+```
+
 ### 1.3 第一次跑通
 
 ```bash
@@ -58,6 +64,7 @@ dotnet test tests/Natter.Framework.Tests/Natter.Framework.Tests.csproj
 | [src/Natter.Chat](../src/Natter.Chat) | NLMP 0.1 模型、键、事件/命令、能力降级、幂等/去重、JSON | Abstractions |
 | [src/Natter.Chat.Satori](../src/Natter.Chat.Satori) | Satori 事件/元素/feature/API 映射与会话序号 | Chat + Abstractions |
 | [src/Natter.Plugin.Abstractions](../src/Natter.Plugin.Abstractions) | NPS v1 Host API：manifest、插件契约、配置 schema、秘密、权限、诊断 | Abstractions + Chat + Application + Cli.Abstractions |
+| [src/Natter.Plugin.Store](../src/Natter.Plugin.Store) | 插件包校验/签名/app 私有 store | Plugin.Abstractions |
 | [src/Natter.Cli.Abstractions](../src/Natter.Cli.Abstractions) | CLI 契约（`IConsole`、命令描述符） | 无 |
 | [src/Natter.Cli.Core](../src/Natter.Cli.Core) | CLI 内核、内建命令、输出渲染 | Infrastructure 及以下 |
 | [src/Natter.Cli](../src/Natter.Cli) | 桌面宿主 | Cli.Core |
@@ -646,6 +653,7 @@ CLI 全局选项：`--plugin-dir`（可重复）、`--no-plugins`、`--verbose/-
 | CLI | 解析、帮助、退出码、输出 | `StringConsole` + `NatterCli.RunAsync` |
 | Chat/NLMP | 键作用域、降级、分片、幂等、去重、Satori 映射 | 纯单元测试 + 真实 `TestHost` 组合 |
 | NPS v1 | manifest/semver、依赖图、config schema、秘密/权限、激活回滚、contribution、legacy 适配、CLI 诊断 | 单元测试 + 临时插件目录 + 嵌入式 NPS 插件 |
+| Plugin Store | zip 安全、哈希/签名、安装/更新/回退/卸载、依赖与配置校验、宿主加载 | 真实 zip 包 fixture + 临时 store 目录 + NPS host |
 | Plugin | 清单探测、适配器覆盖、命令贡献 | 构建宿主并解析真实插件输出 |
 
 ### 6.2 假 Console
@@ -748,6 +756,7 @@ docs: 补充支付模块开发说明
 - [ ] 没有新增对 Infrastructure/宿主的反向依赖。
 - [ ] NLMP 变更同步了 `Natter.Chat` 契约、一致性测试与 [NLMP](NLMP.md) 实现映射。
 - [ ] 插件变更同步了 NPS manifest、依赖/权限声明、示例与 [插件规范](PLUGIN_SPEC.md) 实现映射。
+- [ ] Android dynamic 变更验证 `-c DynamicPlugins` 构建，并同步 [Android 插件宿主](ANDROID_PLUGIN_HOST.md)。
 
 ## 10. 常用命令速查
 
@@ -764,6 +773,7 @@ dotnet run --project src/Natter.Cli -- exec "demo --times 3" "metrics"
 dotnet run --project src/Natter.Cli -- --verbose plugins list --failed
 dotnet run --project src/Natter.Cli -- plugins graph --json
 dotnet run --project src/Natter.Cli -- plugins doctor natter.sample.greetings
+dotnet run --project src/Natter.Cli -- plugins store list --root /tmp/natter-store
 dotnet run --project src/Natter.Cli -- upstreams --json
 dotnet run --project src/Natter.Cli -- satori status --features message.update
 

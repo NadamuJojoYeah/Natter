@@ -173,22 +173,49 @@ keytool -genkeypair -v \
 
 ### 3.4 Android 插件模式
 
-APK 是打包产物，不能扫描外置 DLL 目录。Android 宿主使用**嵌入插件**：
+APK 是打包产物，默认不能扫描外部 DLL 目录。Android 有两种发行形态：
+
+**embedded / play（默认）**
 
 ```csharp
 builder => builder
-    .AddEmbeddedPlugin<GreetingsPlugin>()
-    .AddEmbeddedPlugin<MetricsPlugin>()
+    .AddEmbeddedNpsPlugin(GreetingsNpsPlugin.Manifest, new GreetingsNpsPlugin())
+    .AddEmbeddedNpsPlugin(MetricsNpsPlugin.Manifest, new MetricsNpsPlugin())
 ```
 
-因此 Android 与桌面共享同一套 `IPluginModule` 契约，但加载方式不同。若需要 Android 动态下发插件，需要自行实现从应用私有目录加载并配合 ALC/裁剪策略。
+- `Natter.Hosting.Android.csproj` 默认引用示例插件并编译进 APK；
+- 插件通过 NPS manifest + `INatterPlugin` 注册；
+- 可开启 AOT/Trim（需真机验证）。
+
+**dynamic / extended**
+
+```bash
+dotnet build src/Natter.Hosting.Android/Natter.Hosting.Android.csproj -c DynamicPlugins
+```
+
+- `DynamicPlugins` Configuration 关闭 AOT/Trim，并排除 embedded 示例插件 ProjectReference；
+- 宿主扫描 app 私有 `FilesDir/plugins`，通过 `Natter.Plugin.Store` 安装/回退签名包；
+- 调试/侧载安装入口：`FilesDir/plugin-inbox/*.natter-plugin.zip`；
+- 安装/更新后重启应用生效；v1 只支持托管 DLL。
+
+签名安装示例：
+
+```bash
+natter plugins store install ./plugin.natter-plugin.zip \
+  --root /data/user/0/dev.natter.hosting.android/files/plugins \
+  --trusted-key <base64-SubjectPublicKeyInfo>
+```
+
+动态形态的 app 私有 store、哈希/签名、AOT off、回滚与管理入口见 [Android 插件宿主设计](ANDROID_PLUGIN_HOST.md)。默认/Play 发行继续使用 embedded。
 
 ## 4. 发布检查清单
 
 - [ ] `dotnet test tests/Natter.Framework.Tests` 全绿；
 - [ ] 目标 RID 的可执行文件能运行 `version` / `doctor`；
 - [ ] `plugins/` 目录结构正确，NPS 插件 `plugins list --detail` 显示 `Activated`，legacy 插件显示 `Loaded`；
-- [ ] `ports` 显示插件覆盖（如 `plugin:greetings`）；
+- [ ] `ports` 显示插件覆盖（如 `plugin:natter.sample.greetings`）；
 - [ ] `exec "demo --times 2" "metrics"` 能看到事件被多个订阅者消费；
 - [ ] Android 使用正式签名并检查 `targetSdkVersion`；
+- [ ] Android dynamic 构建使用 `-c DynamicPlugins`，签名包校验通过，安装后重启能加载 active 版本；
+- [ ] plugin store 的 `installed.json` / `pending.json` 不含秘密；
 - [ ] 生产环境替换内存适配器（仓储、UoW、事件日志）并评估事件可靠性。

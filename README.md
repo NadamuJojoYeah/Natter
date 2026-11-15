@@ -13,10 +13,11 @@ Natter 只交付**框架能力**：端口契约、组合根、插件加载、DI 
 - **NLMP 聊天模型**：`Source / Conversation / Message / Event / Command / Capabilities`，能力降级、事件去重、幂等发送、长文本分片、可选 JSON 投影。
 - **Satori 适配映射**：`SatoriChatUpstream` + `ISatoriTransport`，message elements → 文本/附件/mentions、`login.features` → capabilities、`sn` 恢复与重放去重。
 - **NPS v1 插件内核**：manifest/schema、Host API、类型化 contribution、依赖图与 host API 校验、配置 schema、秘密、权限、插件本地 DI、激活回滚、legacy 兼容。
+- **Android 插件宿主**：平台无关的签名包校验/安装/回退 store；embedded 默认，`DynamicPlugins` 构建从 app 私有目录加载，AOT/Trim 关闭；Android Keystore 秘密提供者与 debug inbox。
 - **插件机制**：目录扫描、`plugin.json` 清单、可回收 `AssemblyLoadContext`、端口适配器覆盖、CLI 命令贡献、生命周期订阅。
 - **CLI 内核**：平台无关的命令注册表、解析器、帮助、JSON 输出、`exec` 同宿主命令链；Console 与 Android 宿主共用。
 - **多平台发布**：自包含单文件（win/linux/osx）+ Android APK；示例插件随发布目录部署或嵌入宿主。
-- **测试**：120 个框架级测试覆盖聚合事件、Rx 总线、DI 管道、解析器、插件加载、CLI、NLMP 一致性与 NPS v1 插件内核。
+- **测试**：135 个框架级测试覆盖聚合事件、Rx 总线、DI 管道、解析器、插件加载、CLI、NLMP 一致性与 NPS v1 插件内核。
 
 ## 架构
 
@@ -75,6 +76,7 @@ Natter 只交付**框架能力**：端口契约、组合根、插件加载、DI 
 | `src/Natter.Chat` | 聊天模型 | NLMP 0.1 模型、复合键、事件/命令、能力降级、幂等/去重、JSON 投影 |
 | `src/Natter.Chat.Satori` | 协议适配 | Satori 上游/传输边界、事件、message elements、features、API 与会话序号映射 |
 | `src/Natter.Plugin.Abstractions` | 插件 Host API | NPS v1 manifest、INatterPlugin/IPluginContext、contribution、配置 schema、秘密、权限与诊断模型 |
+| `src/Natter.Plugin.Store` | 插件包/存储 | `.natter-plugin.zip` 校验、哈希/ECDSA 签名、app 私有 store、安装/更新/回退/卸载 |
 | `src/Natter.Cli.Abstractions` | CLI 契约 | `IConsole`、命令/选项描述符、处理器 |
 | `src/Natter.Cli.Core` | CLI 内核 | 解析、注册表、内建命令、JSON/表格输出 |
 | `src/Natter.Cli` | 宿主 | Console 入口，发布为 `natter` / `natter.exe` |
@@ -138,6 +140,10 @@ natter <command> [arguments] [options]
 | `plugins contributions [--json]` | 声明/暂存/激活的 contribution |
 | `plugins permissions [--json]` | 请求/授予/拒绝的权限 |
 | `plugins config validate <id> [--json]` | 配置 schema 校验（JSON Pointer 错误） |
+| `plugins store list [--root <dir>] [--json]` | app 私有插件 store 记录 |
+| `plugins store install <package> [--root ...] [--trusted-key ...]` | 校验并安装/更新签名插件包 |
+| `plugins store enable\|disable\|rollback\|uninstall <id>` | 启用/禁用/回退/卸载（重启生效） |
+| `plugins store cleanup` | 清理 staging/trash |
 | `plugins list [--failed] [--json]` | 已加载/失败的插件 |
 | `plugins inspect <directory> [--json]` | 只探测插件目录，不注册 |
 | `demo [--name] [--amount] [--times] [--json]` | 聚合 → 仓储 → 领域事件 → Rx 全链路 |
@@ -198,6 +204,7 @@ Android 产物位于 `artifacts/android/`。示例构建使用默认调试签名
 - [架构设计](docs/ARCHITECTURE.md)：六边形映射、组合根顺序、Rx 语义、插件加载器。
 - [插件开发](docs/PLUGINS.md)：清单、适配器覆盖、CLI 命令、生命周期、嵌入模式。
 - [插件规范（NPS v1）](docs/PLUGIN_SPEC.md)：manifest、contribution、依赖图、Host API、配置/秘密、权限与激活回滚。
+- [Android 插件宿主](docs/ANDROID_PLUGIN_HOST.md)：embedded/dynamic 双发行、AOT off 动态加载、签名安装与回滚。
 - [插件 Manifest Schema](docs/plugin.schema.json)：NPS v1 `plugin.json` 的机器可读 JSON Schema。
 - [发布指南](docs/PUBLISHING.md)：RID 矩阵、单文件、Android 签名与裁剪。
 
@@ -210,7 +217,7 @@ Android 产物位于 `artifacts/android/`。示例构建使用默认调试签名
 - Android 无法扫描 APK 内的插件目录，因此示例以 embedded plugin 方式注册。
 - NLMP 默认是进程内模型：不包含远程 transport、握手或服务发现；`Natter.Chat.Satori` 只做映射，不包含 WebSocket/HTTP 客户端。
 - Satori message elements 是有损映射（v0.1 只保留文本、附件和 mentions）；富文本/按钮/复杂布局需要后续能力扩展。
-- NPS v1 Phase 1 已交付内核；Discord transport、AI feature、插件市场/热禁用与 out-of-process 宿主属于后续阶段，见 [插件规范 §16](docs/PLUGIN_SPEC.md)。
+- NPS v1 Phase 1 已交付内核；Android 动态 store/签名包/host 骨架已交付，management UI 与真机矩阵仍待补；Discord transport、AI feature、插件市场/热禁用与 out-of-process 宿主属于后续阶段，见 [插件规范 §16](docs/PLUGIN_SPEC.md) 与 [Android 插件宿主](docs/ANDROID_PLUGIN_HOST.md)。
 
 ## 许可
 

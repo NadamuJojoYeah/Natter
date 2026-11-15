@@ -992,7 +992,7 @@ v1 不做：
 - host API 版本豁免；
 - 插件签名与信任链；
 - out-of-process 插件协议；
-- Android 插件加载策略；
+- Android 插件加载策略：双发行形态基础实现已交付，见 [Android 插件宿主设计](ANDROID_PLUGIN_HOST.md)；dynamic 形态关闭 AOT/Trim，仅加载签名托管插件。
 - 插件市场与 bundle（组合包）模型。
 
 ---
@@ -1004,6 +1004,7 @@ v1 不做：
 | 路线阶段 | 状态 | 说明 |
 | --- | --- | --- |
 | Phase 1：规范与内核 | **已实现** | manifest v1、Host API、contribution、依赖图、配置 schema、秘密、权限、激活回滚、诊断 CLI、示例迁移 |
+| Android 插件宿主 | **基础实现已交付** | embedded 默认；dynamic extended store/校验/安装/回退与构建配置见 [Android 插件宿主](ANDROID_PLUGIN_HOST.md)；管理 UI 与真机矩阵待补 |
 | Phase 2：Discord transport | 未交付 | 需要 Discord Gateway/REST 客户端与真实凭据；当前只有传输边界与 NPS 内核 |
 | Phase 3：AI / feature | 未交付 | `chat.responder` contribution 已可用；AI SDK、会话存储与流式输出尚未实现 |
 | Phase 4：管理能力 | 未交付 | 热禁用/重载、市场、签名、out-of-process 宿主 |
@@ -1024,6 +1025,7 @@ v1 不做：
 | §10 诊断 CLI | `src/Natter.Cli.Core/Commands/PluginRuntimeCommands.cs`、`PluginsListCommand.cs`、`DoctorCommand.cs` |
 | §13 legacy 兼容 | `PluginLoader`（无 `schemaVersion`）、`LegacyPluginManifest`、NPS 入口指向 `IPluginModule` 的 adapter 路径 |
 | 示例迁移 | `samples/Natter.Sample.Plugin.Greetings`、`samples/Natter.Sample.Plugin.Metrics`（NPS 类 + legacy 类供 Android 嵌入） |
+| Android 动态宿主 | `src/Natter.Plugin.Store`、`AndroidPluginHost`、`AndroidKeystoreSecretProvider`、`DynamicPlugins` 构建；默认 embedded 已迁移 NPS |
 
 ### 18.3 一致性测试映射（对应 §14）
 
