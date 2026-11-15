@@ -687,6 +687,8 @@ providerRequestId
 
 ### Phase 2：上下文与摘要
 
+> P3 的实现规格见 [P3 Context & Memory](P3_CONTEXT_MEMORY.md)。
+
 - `ContextAssembler`；
 - token budget；
 - 增量摘要；
@@ -774,3 +776,11 @@ providerRequestId
 **控制面负责“要不要处理、交给谁、怎么回复”，执行面负责“生成或执行”；Session/Task 负责连续性，Context/Memory 负责“这次看到什么、长期记住什么”。**
 
 Super-agent 的 Router/Worker 可以作为长任务阶段的参考，但 Natter 的第一优先级是：**Session/Task 显式化、上下文可预算、记忆可持久化、平台可替换**。
+
+
+## 附：P3 后的共享契约
+
+P3 的 `ContextBundle` 在 host contract 中暴露 `Microsoft.Extensions.AI.ChatMessage`，因此
+`Microsoft.Extensions.AI` 与 `Microsoft.Extensions.AI.Abstractions` 已加入
+`PluginContractAssemblies`。插件与 host 必须共享同一 M.E.AI 类型身份；provider SDK 仍由
+插件私有加载。这个调整解决了文件插件加载时的 `ContextBundle.get_Messages` MissingMethod。

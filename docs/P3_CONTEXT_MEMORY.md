@@ -1,6 +1,6 @@
 # P3 Context & Memory Implementation Spec
 
-> **状态**：P3.1–P3.4 foundation implemented（default host prompt/context/memory + SQLite summary/memory + explicit remember/forget + pipeline；NPS contribution activation 与真实 Tier 1 记忆验收仍在后续）  
+> **状态**：P3.1–P3.5 foundation implemented（host prompt/context/memory pipeline + SQLite summary/memory + explicit remember/forget + NPS contribution 激活/回滚；真实 Tier 1 记忆验收待后续）  
 > **日期**：2026-11-15  
 > **前置**：P2 已 Go（serve / profiles / SQLite 会话 / provider 路由 / health）  
 > **目标**：在不破坏 P2 的前提下，把 Prompt、Context、Memory 做成可替换插件，并先交付一套可用的默认实现。  
@@ -40,7 +40,7 @@ P3 的重点不是“上向量库”，而是：
 - 没有 summary 持久化；
 - 没有 memory_items；
 - 没有 `remember` / `forget`；
-- 没有 prompt/context/memory 的 NPS contribution；
+- ~~没有 prompt/context/memory 的 NPS contribution~~（本轮已声明并支持激活/回滚）；
 - `profiles.json` 只有 provider/history；
 - P2 的 system prompt 仍在 provider 插件 config 里；
 - 上下文预算只有 `history.maxCharacters`，没有 memory/summary 预算。
@@ -727,14 +727,14 @@ model
 | user_version 0→1→2 migration | 已实现 | 同上 |
 | StoredMessage.MessageId / GetAfterAsync | 已实现 | `ConversationStore.cs` / `SqliteConversationStore.cs` |
 | profile prompt/context/memory 可选字段 | 已实现，旧 profile 兼容 | `RuntimeProfiles.cs` |
-| 组件 refs 选择 | host 组件 catalog；插件 contribution 激活未实现 | `ContextComponentCatalog.cs` |
+| 组件 refs 选择 | host 组件 catalog；NPS prompt/context/memory contribution 注册/激活/回滚 | `ContextComponentCatalog.cs` / `NpsContributionRegistry.cs` |
 | 确定性 summary | 已实现（旧消息窗口） | `HostContextPipeline.cs` |
 | 显式 remember / forget / memory list | 已实现（CLI） | `MemoryCommands.cs` |
-| NPS contribution 类型 | 已声明 `prompt.provider` / `context.assembler` / `memory.store`；插件激活/注入未完成 | `PluginContributionTypes.cs` |
+| NPS contribution 类型 | 已声明并支持注册/激活/回滚；测试覆盖 prompt contribution | `PluginContributionTypes.cs` |
 | Tier 1 真实记忆召回 | 未执行（缺人工/真实测试脚本） | — |
 | Tier 2 smoke | 共享 pipeline fake/契约测试通过，真实未重跑 | — |
 
-测试：`Natter.Framework.Tests` **225/225**；P2 的 214 基线未回归。
+测试：`Natter.Framework.Tests` **227/227**；P2 的 214 基线未回归。
 
 ## 14. 验收标准
 
