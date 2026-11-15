@@ -149,6 +149,23 @@ public sealed class DiscordTransportTests
     }
 
     [Fact]
+    public async Task Message_commands_can_be_disabled_for_slash_only_deployments()
+    {
+        var clock = new TestClock();
+        var source = Source.Create("discord", "discord", "bot");
+        var options = new DiscordOptions { SelfId = "bot", MessageCommands = false, RequireMention = false };
+        using var transport = new DiscordFakeTransport();
+        using var upstream = new DiscordChatUpstream(source, transport, options, clock);
+        var events = new List<ChatEvent>();
+        using var subscription = upstream.Events.Subscribe(events.Add);
+        await upstream.ConnectAsync();
+
+        transport.EmitMessage(Message("ignored", new DiscordChannel("channel", "guild"), "hello"));
+
+        Assert.Empty(events.OfType<MessageCreatedEvent>());
+    }
+
+    [Fact]
     public async Task Sends_chunked_messages_with_explicit_mentions_and_idempotency()
     {
         var clock = new TestClock();

@@ -36,6 +36,7 @@ public sealed class DiscordPlugin : INatterPlugin
         options.Guilds ??= [];
         options.Channels ??= [];
         options.Users ??= [];
+        options.Commands ??= new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
 
         if (!SecretReference.TryParse(options.Token, out var tokenReference)
             || !string.Equals(tokenReference.Name, TokenSecretName, StringComparison.Ordinal))

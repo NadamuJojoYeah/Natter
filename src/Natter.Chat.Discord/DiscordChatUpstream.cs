@@ -80,14 +80,11 @@ public sealed class DiscordChatUpstream : IChatUpstream, IDisposable
         {
             await _transport.ConnectAsync(cancellationToken).ConfigureAwait(false);
 
-            if (LastError is not null)
+            if (!IsConnected)
             {
                 await _transport.DisconnectAsync(cancellationToken).ConfigureAwait(false);
-                throw new InvalidOperationException($"Discord transport failed to become ready: {LastError}");
+                throw new InvalidOperationException($"Discord transport failed to become ready: {LastError ?? "no Ready event"}");
             }
-
-            lock (_gate)
-                _connected = true;
 
             PublishStatus(UpstreamState.Ready);
         }
@@ -320,10 +317,16 @@ public sealed class DiscordChatUpstream : IChatUpstream, IDisposable
                 OnReady(transportEvent);
                 break;
             case DiscordTransportEventKind.MessageCreated:
-                PublishMappedMessage(transportEvent, isEdit: false);
+                if (_options.MessageCommands)
+                {
+                    var message = PublishMappedMessage(transportEvent, isEdit: false);
+                    if (message is not null && _options.Typing)
+                        _ = TriggerTypingBestEffortAsync(message.Conversation);
+                }
                 break;
             case DiscordTransportEventKind.MessageUpdated:
-                PublishMappedMessage(transportEvent, isEdit: true);
+                if (_options.MessageCommands)
+                    PublishMappedMessage(transportEvent, isEdit: true);
                 break;
             case DiscordTransportEventKind.MessageDeleted:
                 PublishDeleted(transportEvent);
@@ -332,7 +335,12 @@ public sealed class DiscordChatUpstream : IChatUpstream, IDisposable
                 PublishInteraction(transportEvent);
                 break;
             case DiscordTransportEventKind.Error:
-                SetError(transportEvent.ErrorCode ?? "transport_error", transportEvent.ErrorMessage ?? "Discord transport error.");
+                LastError = $"{transportEvent.ErrorCode ?? "transport_error"}: {transportEvent.ErrorMessage ?? "Discord transport error."}";
+                if (transportEvent.Fatal)
+                {
+                    lock (_gate)
+                        _connected = false;
+                }
                 PublishStatus(UpstreamState.Error, LastError);
                 break;
             case DiscordTransportEventKind.Disconnected:
@@ -361,10 +369,10 @@ public sealed class DiscordChatUpstream : IChatUpstream, IDisposable
             _connected = true;
     }
 
-    private void PublishMappedMessage(DiscordTransportEvent transportEvent, bool isEdit)
+    private Message? PublishMappedMessage(DiscordTransportEvent transportEvent, bool isEdit)
     {
         if (transportEvent.Message is null)
-            return;
+            return null;
 
         Message? message;
         try
@@ -373,12 +381,12 @@ public sealed class DiscordChatUpstream : IChatUpstream, IDisposable
         }
         catch (NlmpValidationException ex)
         {
-            SetError("mapping_failed", ex.Message);
-            return;
+            SetError("mapping_failed", ex.Message, fatal: false);
+            return null;
         }
 
         if (message is null)
-            return;
+            return null;
 
         var occurredAt = isEdit
             ? message.EditedAt ?? message.CreatedAt
@@ -405,6 +413,20 @@ public sealed class DiscordChatUpstream : IChatUpstream, IDisposable
             };
 
         _events.OnNext(chatEvent);
+        return message;
+    }
+
+    private async Task TriggerTypingBestEffortAsync(Conversation conversation)
+    {
+        try
+        {
+            await _transport.TriggerTypingAsync(
+                new DiscordConversationRef(conversation.Id, conversation.GuildId)).ConfigureAwait(false);
+        }
+        catch
+        {
+            // Typing indicators are cosmetic.
+        }
     }
 
     private void PublishDeleted(DiscordTransportEvent transportEvent)
@@ -436,7 +458,7 @@ public sealed class DiscordChatUpstream : IChatUpstream, IDisposable
         }
         catch (NlmpValidationException ex)
         {
-            SetError("mapping_failed", ex.Message);
+            SetError("mapping_failed", ex.Message, fatal: false);
             return;
         }
 
@@ -467,11 +489,14 @@ public sealed class DiscordChatUpstream : IChatUpstream, IDisposable
         });
     }
 
-    private void SetError(string code, string message)
+    private void SetError(string code, string message, bool fatal = true)
     {
         LastError = $"{code}: {message}";
-        lock (_gate)
-            _connected = false;
+        if (fatal)
+        {
+            lock (_gate)
+                _connected = false;
+        }
     }
 
     private static ChatError ToError(DiscordSendResult result)

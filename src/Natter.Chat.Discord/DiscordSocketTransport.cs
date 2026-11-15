@@ -24,6 +24,7 @@ public sealed class DiscordSocketTransport : IDiscordTransport, IDisposable
     private TaskCompletionSource _ready = NewReadySource();
     private bool _started;
     private bool _disposed;
+    private int _commandsRegistered;
 
     public DiscordSocketTransport(DiscordOptions options, DiscordBotToken token)
     {
@@ -310,7 +311,57 @@ public sealed class DiscordSocketTransport : IDiscordTransport, IDisposable
         });
 
         _ready.TrySetResult();
+
+        if (Interlocked.Exchange(ref _commandsRegistered, 1) == 0)
+            _ = RegisterConfiguredCommandsAsync();
+
         return Task.CompletedTask;
+    }
+
+    private async Task RegisterConfiguredCommandsAsync()
+    {
+        if (!_options.SlashCommands || _options.Commands.Count == 0)
+            return;
+
+        try
+        {
+            foreach (var (name, enabled) in _options.Commands)
+            {
+                if (!enabled || string.IsNullOrWhiteSpace(name))
+                    continue;
+
+                var properties = new SlashCommandBuilder()
+                    .WithName(name)
+                    .WithDescription($"Natter {name} command")
+                    .AddOption(
+                        "prompt",
+                        ApplicationCommandOptionType.String,
+                        "Prompt text",
+                        isRequired: false)
+                    .Build();
+
+                if (ulong.TryParse(_options.DevGuildId, out var guildId)
+                    && _client.GetGuild(guildId) is { } guild)
+                {
+                    await guild.CreateApplicationCommandAsync(properties).ConfigureAwait(false);
+                }
+                else
+                {
+                    await _client.CreateGlobalApplicationCommandAsync(properties).ConfigureAwait(false);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Interlocked.Exchange(ref _commandsRegistered, 0);
+            Publish(new DiscordTransportEvent
+            {
+                Kind = DiscordTransportEventKind.Error,
+                ErrorCode = "command_registration_failed",
+                ErrorMessage = ex.Message,
+                Fatal = false,
+            });
+        }
     }
 
     private Task OnMessageReceivedAsync(SocketMessage message)
@@ -352,6 +403,7 @@ public sealed class DiscordSocketTransport : IDiscordTransport, IDisposable
                 Kind = DiscordTransportEventKind.Error,
                 ErrorCode = "unsupported_interaction",
                 ErrorMessage = $"Discord interaction '{interaction.Type}' is not supported by this transport.",
+                Fatal = false,
             });
             return;
         }
@@ -367,6 +419,7 @@ public sealed class DiscordSocketTransport : IDiscordTransport, IDisposable
                 Kind = DiscordTransportEventKind.Error,
                 ErrorCode = "interaction_defer_failed",
                 ErrorMessage = ex.Message,
+                Fatal = false,
             });
             return;
         }

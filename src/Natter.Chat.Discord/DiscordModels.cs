@@ -50,6 +50,11 @@ public sealed class DiscordOptions
 
     public int MaxMessageLength { get; set; } = 1900;
 
+    public long MaxAttachmentBytes { get; set; } = 25L * 1024 * 1024;
+
+    /// <summary>Application command names that may be registered/handled.</summary>
+    public Dictionary<string, bool> Commands { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
     public int InteractionTtlSeconds { get; set; } = 900;
 
     public int ReadyTimeoutSeconds { get; set; } = 30;
@@ -124,6 +129,9 @@ public sealed record DiscordTransportEvent
     public int? ChannelCount { get; init; }
 
     public int? LatencyMs { get; init; }
+
+    /// <summary>False for recoverable diagnostics such as command-registration failures.</summary>
+    public bool Fatal { get; init; } = true;
 }
 
 public sealed record DiscordUser(string Id, string Username, string? GlobalName = null, bool IsBot = false)

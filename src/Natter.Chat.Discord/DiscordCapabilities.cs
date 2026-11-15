@@ -24,6 +24,6 @@ public static class DiscordCapabilities
         SlashCommands = options.SlashCommands,
         Buttons = false,
         Modals = false,
-        MaxAttachmentBytes = 25L * 1024 * 1024,
+        MaxAttachmentBytes = options.MaxAttachmentBytes,
     };
 }
