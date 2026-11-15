@@ -7,7 +7,7 @@ public sealed record ChatOrchestrationOptions
 
     public bool ProcessSystemMessages { get; init; }
 
-    public bool ProcessEditedMessages { get; init; } = true;
+    public bool ProcessEditedMessages { get; init; } = false;
 
     /// <summary>Only direct chats or messages that mention the bot trigger a reply.</summary>
     public bool RequireMentionOrDirect { get; init; } = true;

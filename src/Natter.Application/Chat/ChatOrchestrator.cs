@@ -58,6 +58,30 @@ public sealed class ChatOrchestrator : IChatMessageHandler, IPluginLifecycle, ID
     {
         ArgumentNullException.ThrowIfNull(chatEvent);
 
+        if (chatEvent is InteractionCreatedEvent interactionEvent)
+        {
+            var interaction = interactionEvent.Payload.Interaction;
+            if (interaction.User.Kind == UserKind.Bot)
+                return;
+
+            var interactionCommand = await _responder.RespondAsync(chatEvent, cancellationToken).ConfigureAwait(false);
+            if (interactionCommand is not null)
+            {
+                var interactionAck = await _dispatcher.ExecuteAsync(interactionCommand, cancellationToken)
+                    .ConfigureAwait(false);
+                if (!interactionAck.Ok)
+                {
+                    _logger?.LogWarning(
+                        "NLMP interaction response for {Source} failed: {ErrorCode} {ErrorMessage}",
+                        chatEvent.Source.Key,
+                        interactionAck.Error?.Code,
+                        interactionAck.Error?.Message);
+                }
+            }
+
+            return;
+        }
+
         var message = chatEvent switch
         {
             MessageCreatedEvent created => created.Payload.Message,

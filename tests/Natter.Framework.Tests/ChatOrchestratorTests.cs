@@ -83,6 +83,54 @@ public sealed class ChatOrchestratorTests
     }
 
     [Fact]
+    public async Task Interaction_events_are_routed_to_the_responder_and_dispatcher()
+    {
+        var clock = new TestClock();
+        var source = ChatTestData.Source();
+
+        await using var host = await TestHost.CreateAsync();
+        var upstream = new InMemoryChatUpstream(
+            source,
+            Capabilities.TextOnly with { SlashCommands = true },
+            clock);
+        host.Get<IChatUpstreamRegistry>().Register(upstream);
+        await upstream.ConnectAsync();
+
+        var factory = host.Get<ChatCommandFactory>();
+        var responder = new InteractionResponder(factory, source);
+        var orchestrator = new ChatOrchestrator(
+            host.Get<IChatEventSource>(),
+            host.Get<IChatCommandDispatcher>(),
+            responder,
+            new ChatOrchestrationOptions(),
+            logger: null);
+
+        var interaction = new Interaction(
+            "interaction-1",
+            InteractionKind.Slash,
+            ChatTestData.Human(),
+            ChatTestData.Conversation("555", ConversationKind.Guild),
+            clock.UtcNow,
+            Command: "ask",
+            ReplyToken: "reply-token");
+
+        var chatEvent = new InteractionCreatedEvent
+        {
+            Id = "evt:interaction",
+            Source = source,
+            Sequence = 1,
+            OccurredAt = clock.UtcNow,
+            ReceivedAt = clock.UtcNow,
+            Payload = new InteractionPayload(interaction),
+        };
+
+        await orchestrator.HandleAsync(chatEvent);
+
+        Assert.Single(responder.Seen);
+        Assert.IsType<InteractionCreatedEvent>(responder.Seen[0]);
+    }
+
+    [Fact]
     public async Task Process_bot_messages_can_be_enabled_explicitly()
     {
         var clock = new TestClock();
@@ -113,6 +161,22 @@ public sealed class ChatOrchestratorTests
         await orchestrator.HandleAsync(ChatTestData.CreatedEvent(source, botMessage, "evt:m5"));
 
         Assert.Single(upstream.Messages);
+    }
+
+    private sealed class InteractionResponder(ChatCommandFactory factory, Source source) : IChatResponder
+    {
+        public List<ChatEvent> Seen { get; } = [];
+
+        public ValueTask<ChatCommand?> RespondAsync(ChatEvent chatEvent, CancellationToken cancellationToken = default)
+        {
+            Seen.Add(chatEvent);
+
+            if (chatEvent is not InteractionCreatedEvent interaction)
+                return ValueTask.FromResult<ChatCommand?>(null);
+
+            return ValueTask.FromResult<ChatCommand?>(
+                factory.Respond(source, interaction.Payload.Interaction, new Content("interaction reply")));
+        }
     }
 
     private sealed class ReplyResponder(ChatCommandFactory factory, Source source) : IChatResponder
