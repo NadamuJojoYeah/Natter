@@ -289,6 +289,14 @@ CI 不调用真实 DeepSeek。详细设计见 [AI Provider Design](AI_PROVIDER_D
 
 真实钉钉/星火凭据不进入仓库；当前契约测试使用 fake transport/IChatClient 和本机 HttpListener，真实平台 live 未执行。
 
+### 3.8 Runtime profile / 状态目录
+
+- `--config-dir` 指向 `profiles.json` 与插件 config；默认 `<app base>/config`；
+- `--state-dir` 指向 SQLite（`natter.db`）；不提交 state 目录；
+- `--profile` 覆盖默认 profile；`NATTER_CONFIG_DIR` / `NATTER_STATE_DIR` / `NATTER_PROFILE` 等价；
+- `natter serve` 长驻；`natter health --json` 输出 upstream/provider/plugin/会话快照；
+- Tier 1 profile provider 缺失时启动失败；Tier 2 缺失只禁用该 profile。
+
 ## 4. 发布检查清单
 
 - [ ] `dotnet test tests/Natter.Framework.Tests` 全绿；
@@ -305,4 +313,5 @@ CI 不调用真实 DeepSeek。详细设计见 [AI Provider Design](AI_PROVIDER_D
 - [ ] AI 插件使用 fake 测试通过，真实 API 验证不在 CI；
 - [ ] 钉钉 Stream clientSecret 只从 secret provider 读取，WebSocket 重连/ack 已验证；
 - [ ] 星火 APIPassword 只从 secret provider 读取，MaaS model/endpoint/thinking 已验证；
+- [ ] `profiles.json` 的 Tier 1 provider 已加载，state 目录可写且不入库；
 - [ ] 生产环境替换内存适配器（仓储、UoW、事件日志）并评估事件可靠性。

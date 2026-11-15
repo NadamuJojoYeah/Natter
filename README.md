@@ -15,12 +15,13 @@ Natter 只交付**框架能力**：端口契约、组合根、插件加载、DI 
 - **NPS v1 插件内核**：manifest/schema、Host API、类型化 contribution、依赖图与 host API 校验、配置 schema、秘密、权限、插件本地 DI、激活回滚、legacy 兼容。
 - **Android 插件宿主**：平台无关的签名包校验/安装/回退 store；embedded 默认，`DynamicPlugins` 构建从 app 私有目录加载，AOT/Trim 关闭；Android Keystore 秘密提供者与 debug inbox。
 - **Discord transport**：`natter.transport.discord` NPS 插件；Discord Gateway/REST 抽象、NLMP 双向映射、allowlist/bot/mention 过滤、分片、slash interaction、`AllowedMentions.None` 与 `discord status`。
-- **DeepSeek AI responder**：`natter.feature.ai.deepseek`；Microsoft.Extensions.AI `IChatClient`、自定义 DeepSeek Chat Completions client、thinking/reasoning 隔离、内存历史、按会话串行、幂等、错误降级与 `ai status`。
-- **第二上游/消费者验证**：`natter.transport.dingtalk`（HTTP callback + HMAC 签名 + sessionWebhook）与 `natter.feature.ai.spark`（OpenAI-compatible `IChatClient`）；两者复用 `Natter.Feature.Ai` 的共享 responder/context/memory 边界。
+- **DeepSeek AI responder**：`natter.feature.ai.deepseek`；Microsoft.Extensions.AI `IChatClient`、自定义 DeepSeek Chat Completions client、thinking/reasoning 隔离、host 会话历史、按会话串行、幂等、错误降级与 `ai status`。
+- **第二上游/消费者**：`natter.transport.dingtalk`（Stream WebSocket + 本机/真实 gateway）与 `natter.feature.ai.spark`（MaaS OpenAI-compatible `IChatClient`）；复用共享 responder/context 与 host conversation store。
 - **插件机制**：目录扫描、`plugin.json` 清单、可回收 `AssemblyLoadContext`、端口适配器覆盖、CLI 命令贡献、生命周期订阅。
 - **CLI 内核**：平台无关的命令注册表、解析器、帮助、JSON 输出、`exec` 同宿主命令链；Console 与 Android 宿主共用。
 - **多平台发布**：自包含单文件（win/linux/osx）+ Android APK；示例插件随发布目录部署或嵌入宿主。
-- **测试**：190 个框架级测试覆盖聚合事件、Rx 总线、DI 管道、解析器、插件加载、CLI、NLMP 一致性与 NPS v1 插件内核；另有可选的 live 套件对真实 Discord 与 DeepSeek API 做分层联调（见 [真实 API 联调测试方案](docs/LIVE_TEST_PLAN.md)）。
+- **Runtime/Profile**：`profiles.json` 显式 provider 路由、SQLite 会话、`serve`/`health`、`--config-dir`/`--state-dir`、Tier 1/2 启动策略。
+- **测试**：202 个框架级测试覆盖聚合事件、Rx 总线、DI 管道、解析器、插件加载、CLI、NLMP 一致性与 NPS v1 插件内核；另有可选的 live 套件对真实 Discord 与 DeepSeek API 做分层联调（见 [真实 API 联调测试方案](docs/LIVE_TEST_PLAN.md)）。
 
 ## 架构
 
@@ -162,6 +163,8 @@ natter <command> [arguments] [options]
 | `ai status [--json]` | DeepSeek model/thinking、请求/错误、延迟、token 与缓存命中 |
 | `dingtalk status [--json]` | 钉钉 Stream source/allowlist/连接状态 |
 | `spark status [--json]` | 星火 model/请求/错误/延迟/token |
+| `serve [--duration <s>] [--json]` | 长驻 host；加载 profile/upstream，等待取消或到时退出 |
+| `health [--json]` | upstream/profile/provider/plugin/会话健康快照 |
 | `plugins list [--failed] [--json]` | 已加载/失败的插件 |
 | `plugins inspect <directory> [--json]` | 只探测插件目录，不注册 |
 | `demo [--name] [--amount] [--times] [--json]` | 聚合 → 仓储 → 领域事件 → Rx 全链路 |
@@ -225,6 +228,7 @@ Android 产物位于 `artifacts/android/`。示例构建使用默认调试签名
 - [Harness 架构](docs/HARNESS_ARCHITECTURE.md)：控制面/执行面、Session/Task、上下文缓存、记忆持久化与多平台演进。
 - [Context & Memory 插件](docs/CONTEXT_MEMORY_PLUGIN.md)：Prompt/Context/Memory 契约、Profile、NPS contribution、数据所有权与测试。
 - [第二上游/消费者验证](docs/SECOND_ADAPTER_VALIDATION.md)：钉钉 + 星火的接入测试矩阵、边界与验收。
+- [P2 Runtime & Profile 开发文档](docs/P2_RUNTIME_PROFILE.md)：serve、profiles、provider 路由、SQLite 会话、health 与一等/二等公民策略。
 - [插件开发](docs/PLUGINS.md)：清单、适配器覆盖、CLI 命令、生命周期、嵌入模式。
 - [插件规范（NPS v1）](docs/PLUGIN_SPEC.md)：manifest、contribution、依赖图、Host API、配置/秘密、权限与激活回滚。
 - [Android 插件宿主](docs/ANDROID_PLUGIN_HOST.md)：embedded/dynamic 双发行、AOT off 动态加载、签名安装与回滚。

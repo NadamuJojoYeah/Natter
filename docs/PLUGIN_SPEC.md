@@ -1049,6 +1049,8 @@ v1 不做：
 | Discord transport | `src/Natter.Chat.Discord` + `samples/Natter.Sample.Plugin.Discord`；Discord.Net transport、NLMP 映射、slash interaction、fake transport 测试 |
 | AI responder | `src/Natter.Feature.Ai.DeepSeek`：M.E.AI `IChatClient`、DeepSeek HTTP adapter、responder、history/gate、`ai status` |
 | 共享 AI 边界 | `src/Natter.Feature.Ai`：`AiChatResponder`、`IAiContextAssembler`、`IAiConversationStore` |
+| Host 会话 | `IConversationStore` + SQLite；插件凭 `storage` 权限注入 |
+| Profile 路由 | `RuntimeProfile` / `ProfileAwareChatResponder`；provider 由 `pluginId#responderId` 决定 |
 | 第二上游/消费者 | `src/Natter.Chat.DingTalk`、`samples/Natter.Sample.Plugin.DingTalk`、`src/Natter.Feature.Ai.Spark` |
 
 ### 18.3 一致性测试映射（对应 §14）

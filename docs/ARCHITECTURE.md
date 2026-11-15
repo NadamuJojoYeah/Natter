@@ -315,7 +315,23 @@ Discord/Satori adapter ───────────────────
 - 钉钉 Stream transport 实现 gateway open → ticket → WebSocket → topic 订阅 → callback parse → ack → 退避重连；HTTP callback 保留为 legacy；`Capabilities` 明确关闭 edit/delete/typing/slash。
 - 真实钉钉/星火凭据尚未接入；当前以 fake transport、fake `IChatClient`、HTTP callback 契约和 NPS 交叉链路验证。
 
-### 6.7 加载上下文
+### 6.7 Runtime profile 与持久会话
+
+```text
+ChatEvent → ProfileAwareChatResponder
+  → ProfileResolver(source, conversation, actor)
+  → providerRef (pluginId#responderId)
+  → IChatResponder
+  → HostConversationStore (SQLite / in-memory)
+```
+
+- `profiles.json` 决定 provider，不决定 transport；Composite priority 仅作为无 profile host 的 fallback。
+- `IChatResponderRegistry.TryGet(providerRef)` 精确选择 `natter.feature.ai.deepseek#deepseek` / `natter.feature.ai.spark#spark`。
+- `IConversationStore` 由 host 拥有；插件仅在 `storage` 权限下注入，DeepSeek/Spark 共用同一份 history。
+- `--state-dir` 使用 SQLite（`<state-dir>/natter.db`）；无 state dir 的测试/嵌入式 host 使用内存实现。
+- Tier 1 provider 缺失时 host 启动失败；Tier 2 缺失时 profile 禁用。
+
+### 6.8 加载上下文
 
 - 每个文件插件一个 `PluginLoadContext`（`isCollectible: true`）：
   - `Natter.*`、`Microsoft.Extensions.*`、`System.*`、`System.Reactive*` 回落到默认上下文，保证**端口与契约类型身份共享**；

@@ -664,6 +664,7 @@ CLI 全局选项：`--plugin-dir`（可重复）、`--no-plugins`、`--verbose/-
 | Discord transport | DM/Group/Guild/Thread、bot/self/allowlist/mention、分片、错误映射、slash、NPS 生命周期 | fake `IDiscordTransport`，不连接真实网关 |
 | DeepSeek AI | 请求 body/thinking、usage、错误、responder、历史、gate、幂等、NPS 全链路 | fake `IChatClient` + fake HTTP，不调用真实 DeepSeek |
 | DingTalk + Spark | 回调签名/ACK、NLMP 映射、sessionWebhook 回复、分片、Spark HTTP、共享 responder/context/memory、source 隔离 | fake transport + fake IChatClient + 本机 HttpListener |
+| Runtime/P2 | profile 优先级/校验、provider 路由、SQLite 重启恢复、serve/health、config/state 目录 | 临时目录 + fake provider/upstream |
 | Plugin | 清单探测、适配器覆盖、命令贡献 | 构建宿主并解析真实插件输出 |
 
 ### 6.2 假 Console
