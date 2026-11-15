@@ -4,6 +4,7 @@ using Natter.Abstractions.Plugins;
 using Natter.Abstractions.Ports;
 using Natter.Chat;
 using Natter.Chat.Safety;
+using Natter.Application.Chat;
 using Natter.Infrastructure.Composition;
 
 namespace Natter.Infrastructure.Chat;
@@ -44,6 +45,10 @@ public sealed class ChatCompositionModule : ICompositionModule
 
         services.AddSingleton<ChatIngressLifecycle>();
         services.AddSingleton<IPluginLifecycle>(provider => provider.GetRequiredService<ChatIngressLifecycle>());
+
+        // The responder loop is part of the host runtime, not an optional CLI command:
+        // without it, chat.responder plugins would never be invoked.
+        services.AddChatOrchestrator();
 
         registry.Register(new PortAdapterDescriptor(
             nameof(IChatEventSource),
