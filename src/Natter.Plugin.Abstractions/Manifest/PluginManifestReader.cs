@@ -111,6 +111,16 @@ public static partial class PluginManifestReader
                 return new PluginManifestReadResult(manifestPath, IsNps: false, Manifest: null, Errors: [], Warnings: []);
             }
 
+            if (!root.TryGetProperty("kind", out var kindElement)
+                || kindElement.ValueKind != JsonValueKind.String
+                || !IsKnownKind(kindElement.GetString()))
+            {
+                errors.Add(new PluginManifestIssue(
+                    "/kind",
+                    "invalid-kind",
+                    "Kind is required and must be transport, feature or tool."));
+            }
+
             if (schemaVersion.ValueKind != JsonValueKind.Number
                 || !schemaVersion.TryGetInt32(out var version)
                 || version != SupportedSchemaVersion)
@@ -153,6 +163,12 @@ public static partial class PluginManifestReader
         return (errors, warnings);
     }
 
+    private static bool IsKnownKind(string? kind)
+        => kind is not null
+           && (string.Equals(kind, "transport", StringComparison.OrdinalIgnoreCase)
+               || string.Equals(kind, "feature", StringComparison.OrdinalIgnoreCase)
+               || string.Equals(kind, "tool", StringComparison.OrdinalIgnoreCase));
+
     private static void Validate(
         PluginManifest manifest,
         string? pluginDirectory,
@@ -185,6 +201,8 @@ public static partial class PluginManifestReader
         ValidateDependencies(manifest.DependsOn, "/dependsOn", required: true, errors);
         ValidateDependencies(manifest.OptionalDependsOn, "/optionalDependsOn", required: false, errors);
         ValidateConflicts(manifest.Conflicts, errors);
+        ValidateOrderIds(manifest.LoadAfter, "/loadAfter", errors);
+        ValidateOrderIds(manifest.LoadBefore, "/loadBefore", errors);
         ValidatePermissions(manifest, errors);
         ValidateSecrets(manifest, errors);
         ValidateSecretPermissions(manifest, errors);
@@ -276,6 +294,18 @@ public static partial class PluginManifestReader
 
             if (conflict.AdditionalProperties is { Count: > 0 } extra)
                 AddUnknownPropertyErrors(extra, itemPath, errors);
+        }
+    }
+
+    private static void ValidateOrderIds(List<string>? ids, string path, List<PluginManifestIssue> errors)
+    {
+        if (ids is null)
+            return;
+
+        for (var index = 0; index < ids.Count; index++)
+        {
+            if (!IdPattern().IsMatch(ids[index]))
+                errors.Add(new PluginManifestIssue($"{path}/{index}", "invalid-id", "Order target id is invalid."));
         }
     }
 

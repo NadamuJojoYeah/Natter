@@ -274,6 +274,26 @@ public sealed class NatterApplicationBuilder
                         continue;
                     }
 
+                    var sensitiveFiles = PluginPackageInspector.FindSensitiveFiles(fullPath);
+                    if (sensitiveFiles.Count > 0)
+                    {
+                        var message = $"Plugin package contains sensitive files: {string.Join(", ", sensitiveFiles)}.";
+                        result.Failures.Add(new PluginDescriptor(
+                            read.Manifest.Id,
+                            read.Manifest.Name,
+                            read.Manifest.Version,
+                            read.Manifest.Entry?.Assembly ?? string.Empty,
+                            fullPath,
+                            PluginState.Failed,
+                            message,
+                            read.Manifest.Capabilities,
+                            read.Manifest.Description,
+                            Kind: read.Manifest.Kind.ToString().ToLowerInvariant(),
+                            HostApi: read.Manifest.HostApi,
+                            ErrorDetail: new PluginErrorDescriptor("manifest", "sensitive-file", message)));
+                        continue;
+                    }
+
                     result.Candidates.Add(NpsPluginCandidate.FromManifest(
                         read.Manifest,
                         fullPath,

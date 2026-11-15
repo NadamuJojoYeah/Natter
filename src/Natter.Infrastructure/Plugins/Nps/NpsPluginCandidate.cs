@@ -176,6 +176,19 @@ internal sealed class NpsPluginCandidate
         };
     }
 
+    public void SetContributionStatus(string status)
+    {
+        if (Descriptor.Contributions is not { Count: > 0 } contributions)
+            return;
+
+        Descriptor = Descriptor with
+        {
+            Contributions = contributions
+                .Select(contribution => contribution with { Status = status })
+                .ToArray(),
+        };
+    }
+
     public void UpdateContributions(IReadOnlyList<NpsContributionRegistration> registrations)
     {
         var existing = Descriptor.Contributions ?? [];

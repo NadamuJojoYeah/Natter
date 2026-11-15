@@ -120,6 +120,7 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
         }
 
         DetectDuplicateContributions();
+        BlockDependents();
         RegisterHostBridges(services);
     }
 
@@ -151,15 +152,10 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
                 continue;
 
             await StartCandidateAsync(candidate, cancellationToken).ConfigureAwait(false);
-        }
 
-        // Host-driven upstream connection happens after activation, in dependency order.
-        foreach (var candidate in _startedOrder.ToArray())
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            await ConnectUpstreamsAsync(candidate, cancellationToken).ConfigureAwait(false);
+            if (candidate.State == PluginState.Activated)
+                await ConnectUpstreamsAsync(candidate, cancellationToken).ConfigureAwait(false);
         }
-
     }
 
     public async ValueTask StopAsync(CancellationToken cancellationToken = default)
@@ -269,6 +265,7 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
 
         candidate.Error = error;
         candidate.State = state;
+        candidate.SetContributionStatus("unavailable");
         candidate.Descriptor = candidate.Descriptor with
         {
             State = state,
@@ -564,6 +561,7 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
 
             await candidate.Plugin!.ActivateAsync(candidate.Context!, cancellationToken).ConfigureAwait(false);
             candidate.SetState(PluginState.Activated);
+            candidate.SetContributionStatus("active");
             _catalog.UpdateDescriptor(candidate.Id, _ => candidate.Descriptor);
             _startedOrder.Add(candidate);
         }
@@ -618,13 +616,16 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
         services.AddSingleton<IPluginDependencies>(context.Dependencies);
 
         services.AddSingleton(_hostProvider.GetRequiredService<IClock>());
-        services.AddSingleton(_hostProvider.GetRequiredService<IChatEventSource>());
-        services.AddSingleton(_hostProvider.GetRequiredService<IChatCommandDispatcher>());
-        services.AddSingleton(_hostProvider.GetRequiredService<IChatUpstreamRegistry>());
         services.AddSingleton(_hostProvider.GetRequiredService<ChatCommandFactory>());
         services.AddSingleton(_hostProvider.GetRequiredService<IDomainEventStream>());
-        services.AddSingleton(_hostProvider.GetRequiredService<IChatResponderRegistry>());
         services.AddSingleton(_hostProvider.GetRequiredService<ILoggerFactory>());
+
+        if (candidate.Permissions?.Granted.Contains(PluginPermissions.ChatRead) == true)
+            services.AddSingleton(_hostProvider.GetRequiredService<IChatEventSource>());
+
+        services.AddSingleton<IChatCommandDispatcher>(provider => new NpsPermissionedChatCommandDispatcher(
+            _hostProvider.GetRequiredService<IChatCommandDispatcher>(),
+            candidate.Permissions?.Granted ?? []));
         services.AddSingleton(typeof(ILogger<>), typeof(Logger<>));
 
         return services.BuildServiceProvider(new ServiceProviderOptions
@@ -684,7 +685,7 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
         candidate.SetError(error);
         _catalog.UpdateDescriptor(candidate.Id, _ => candidate.Descriptor);
         await RollbackCandidateAsync(candidate, cancellationToken).ConfigureAwait(false);
-        BlockDependents(candidate.Id);
+        BlockDependents();
     }
 
     private async ValueTask RollbackCandidateAsync(NpsPluginCandidate candidate, CancellationToken cancellationToken)
@@ -793,10 +794,11 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
 
         candidate.DisposeLoadContext();
         candidate.SetState(PluginState.Stopped);
+        candidate.SetContributionStatus("inactive");
         _catalog.UpdateDescriptor(candidate.Id, _ => candidate.Descriptor);
     }
 
-    private void BlockDependents(string failedPluginId)
+    private void BlockDependents()
     {
         var changed = true;
         while (changed)

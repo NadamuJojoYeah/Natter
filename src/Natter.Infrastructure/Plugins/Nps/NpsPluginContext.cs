@@ -56,13 +56,7 @@ internal sealed class NpsPluginLog : IPluginLog
                 _entries.RemoveAt(0);
         }
 
-        if (_logger is null)
-            return;
-
-        if (args.Length == 0)
-            _logger.Log(level, exception, "{PluginMessage}", rendered);
-        else
-            _logger.Log(level, exception, _pluginId + ": " + message, args);
+        _logger?.Log(level, exception, "{PluginId}: {PluginMessage}", _pluginId, rendered);
     }
 
     private static string Render(string message, object?[] args)
@@ -188,7 +182,7 @@ internal sealed class NpsPluginDependencies : IPluginDependencies
     }
 
     public bool IsLoaded(string pluginId)
-        => _state(pluginId) is PluginState.Activated or PluginState.Loaded or PluginState.Configured;
+        => _state(pluginId) is PluginState.Activated or PluginState.Loaded;
 
     public string? GetVersion(string pluginId) => _version(pluginId);
 }

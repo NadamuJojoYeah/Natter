@@ -219,6 +219,24 @@ public sealed class NpsRuntimeTests
     }
 
     [Fact]
+    public async Task Plugin_dispatcher_enforces_chat_permissions()
+    {
+        var plugin = new DispatcherPlugin();
+        var manifest = Manifest("natter.test.dispatcher", permissions: [], contributions: []);
+
+        var builder = NatterApplicationBuilder.Create()
+            .AddNatterFramework()
+            .AddEmbeddedNpsPlugin(manifest, plugin);
+
+        await using var host = builder.Build();
+        await host.StartAsync();
+
+        Assert.NotNull(plugin.Ack);
+        Assert.False(plugin.Ack!.Ok);
+        Assert.Equal(ChatErrorCodes.Forbidden, plugin.Ack.Error!.Code);
+    }
+
+    [Fact]
     public async Task Required_secret_is_resolved_only_with_permission()
     {
         var plugin = new SecretPlugin();
@@ -354,6 +372,48 @@ public sealed class NpsRuntimeTests
         Assert.Equal(
             ["activate:first", "activate:second", "deactivate:second", "deactivate:first"],
             OrderedPlugin.Events);
+    }
+
+    [Fact]
+    public async Task Configure_failure_blocks_required_dependents_before_activation()
+    {
+        var directory = CreateTempPluginDirectory(
+            """{ "type": "object", "required": ["name"], "properties": { "name": { "type": "string" } } }""",
+            """{ "name": 42 }""");
+
+        try
+        {
+            var failing = new ConfigPlugin();
+            var dependent = new HelloPlugin();
+
+            var failingManifest = Manifest(
+                "natter.test.cfg.first",
+                permissions: [],
+                contributions: [],
+                configSchema: "config.schema.json");
+            var dependentManifest = Manifest(
+                "natter.test.cfg.second",
+                permissions: [PluginPermissions.CliCommands],
+                contributions: [new PluginContribution { Type = PluginContributionTypes.CliCommand, Id = "nps.hello" }],
+                dependsOn: [new PluginDependency { Id = "natter.test.cfg.first", Version = ">=0.1.0 <1.0.0" }]);
+
+            var builder = NatterApplicationBuilder.Create()
+                .AddNatterFramework()
+                .AddEmbeddedNpsPlugin(failingManifest, failing, directory)
+                .AddEmbeddedNpsPlugin(dependentManifest, dependent);
+
+            await using var host = builder.Build();
+            await host.StartAsync();
+
+            var catalog = host.Services.GetRequiredService<IPluginCatalog>();
+            Assert.Equal(PluginState.Failed, catalog.Plugins.Single(plugin => plugin.Id == "natter.test.cfg.first").State);
+            Assert.Equal(PluginState.Blocked, catalog.Plugins.Single(plugin => plugin.Id == "natter.test.cfg.second").State);
+            Assert.False(dependent.Activated);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
     }
 
     [Fact]
@@ -668,6 +728,38 @@ public sealed class NpsRuntimeTests
         {
             invocation.Console.Out.WriteLine("hello from nps");
             return ValueTask.FromResult(CliExitCodes.Success);
+        }
+    }
+
+    public sealed class DispatcherPlugin : INatterPlugin
+    {
+        public ChatAck? Ack { get; private set; }
+
+        public ValueTask ConfigureAsync(IPluginContext context, CancellationToken cancellationToken = default)
+        {
+            context.Services.Collection.AddSingleton<DispatcherProbe>();
+            return ValueTask.CompletedTask;
+        }
+
+        public async ValueTask ActivateAsync(IPluginContext context, CancellationToken cancellationToken = default)
+        {
+            var provider = context.Services.Provider
+                           ?? throw new InvalidOperationException("plugin provider missing");
+            Ack = await provider.GetRequiredService<DispatcherProbe>().SendAsync(cancellationToken);
+        }
+
+        public ValueTask DeactivateAsync(IPluginContext context, CancellationToken cancellationToken = default)
+            => ValueTask.CompletedTask;
+    }
+
+    public sealed class DispatcherProbe(ChatCommandFactory factory, IChatCommandDispatcher dispatcher)
+    {
+        public ValueTask<ChatAck> SendAsync(CancellationToken cancellationToken)
+        {
+            var source = Source.Create("test", "test", "bot");
+            return dispatcher.ExecuteAsync(
+                factory.Send(source, new Conversation("c", ConversationKind.Direct), new Content("hi")),
+                cancellationToken);
         }
     }
 
