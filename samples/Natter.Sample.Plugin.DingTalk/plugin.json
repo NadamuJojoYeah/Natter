@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "id": "natter.transport.dingtalk",
+  "name": "DingTalk Transport",
+  "version": "0.1.0",
+  "kind": "transport",
+  "hostApi": ">=0.1.0 <1.0.0",
+  "entry": {
+    "assembly": "lib/Natter.Sample.Plugin.DingTalk.dll",
+    "type": "Natter.Sample.Plugin.DingTalk.DingTalkPlugin"
+  },
+  "permissions": [
+    "network",
+    "secrets:DINGTALK_APP_SECRET",
+    "chat.read",
+    "chat.send",
+    "cli.commands"
+  ],
+  "secrets": [
+    { "name": "DINGTALK_APP_SECRET", "required": true }
+  ],
+  "configSchema": "config.schema.json",
+  "contributions": [
+    { "type": "chat.upstream", "id": "dingtalk" },
+    { "type": "cli.command", "id": "dingtalk.status" }
+  ],
+  "platforms": ["linux", "windows", "macos"]
+}

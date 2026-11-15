@@ -5,32 +5,32 @@ using Natter.Application.Chat;
 using Natter.Chat;
 using Natter.Plugin.Abstractions;
 
-namespace Natter.Feature.Ai.DeepSeek;
+namespace Natter.Feature.Ai;
 
 /// <summary>
 /// NLMP responder backed by <see cref="IChatClient"/>. It owns conversation history,
 /// per-conversation serialization, idempotency and user-facing error fallbacks.
 /// </summary>
-public sealed class DeepSeekResponder : IChatResponder
+public sealed class AiChatResponder : IChatResponder
 {
     private readonly IChatClient _chatClient;
-    private readonly DeepSeekOptions _options;
-    private readonly DeepSeekConversationStore _history;
-    private readonly DeepSeekConversationGate _gate;
+    private readonly AiResponderOptions _options;
+    private readonly IAiConversationStore _history;
+    private readonly IAiContextAssembler _contextAssembler;
+    private readonly AiConversationGate _gate;
     private readonly ChatCommandFactory _commands;
     private readonly IPluginLog _log;
-    private readonly DeepSeekMetrics _metrics;
     private readonly ConcurrentDictionary<string, byte> _inflight = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, byte> _completed = new(StringComparer.Ordinal);
 
-    public DeepSeekResponder(
+    public AiChatResponder(
         IChatClient chatClient,
-        DeepSeekOptions options,
-        DeepSeekConversationStore history,
-        DeepSeekConversationGate gate,
+        AiResponderOptions options,
+        IAiConversationStore history,
+        AiConversationGate gate,
         ChatCommandFactory commands,
         IPluginLog log,
-        DeepSeekMetrics? metrics = null)
+        IAiContextAssembler? contextAssembler = null)
     {
         _chatClient = chatClient ?? throw new ArgumentNullException(nameof(chatClient));
         _options = options ?? throw new ArgumentNullException(nameof(options));
@@ -38,7 +38,7 @@ public sealed class DeepSeekResponder : IChatResponder
         _gate = gate ?? throw new ArgumentNullException(nameof(gate));
         _commands = commands ?? throw new ArgumentNullException(nameof(commands));
         _log = log ?? throw new ArgumentNullException(nameof(log));
-        _metrics = metrics ?? new DeepSeekMetrics();
+        _contextAssembler = contextAssembler ?? new RecentWindowContextAssembler(options);
     }
 
     public async ValueTask<ChatCommand?> RespondAsync(
@@ -84,14 +84,20 @@ public sealed class DeepSeekResponder : IChatResponder
             return null;
 
         var key = _history.GetKey(chatEvent.Source, message.Conversation, message.Sender.Id);
-        var generated = await GenerateAsync(key, text, cancellationToken).ConfigureAwait(false);
+        var generated = await GenerateAsync(
+            key,
+            chatEvent.Source,
+            message.Conversation,
+            message.Sender,
+            text,
+            cancellationToken).ConfigureAwait(false);
         if (generated.Text is null)
             return null;
 
         var reply = generated.Text;
         _history.AppendTurn(key, text, reply);
         _log.Information(
-            "deepseek replied conversation={ConversationId} replyChars={ReplyChars}",
+            "ai replied conversation={ConversationId} replyChars={ReplyChars}",
             message.Conversation.Id,
             reply.Length);
 
@@ -120,7 +126,13 @@ public sealed class DeepSeekResponder : IChatResponder
         }
 
         var key = _history.GetKey(chatEvent.Source, interaction.Conversation, interaction.User.Id);
-        var generated = await GenerateAsync(key, prompt, cancellationToken).ConfigureAwait(false);
+        var generated = await GenerateAsync(
+            key,
+            chatEvent.Source,
+            interaction.Conversation,
+            interaction.User,
+            prompt,
+            cancellationToken).ConfigureAwait(false);
         if (generated.Text is null)
             return null;
 
@@ -136,17 +148,19 @@ public sealed class DeepSeekResponder : IChatResponder
 
     private async ValueTask<GenerationResult> GenerateAsync(
         string conversationKey,
+        Source source,
+        Conversation conversation,
+        User sender,
         string userText,
         CancellationToken cancellationToken)
     {
-        var truncated = Truncate(userText, Math.Max(1, _options.MaxInputCharacters));
-
-        var messages = new List<ChatMessage>();
-        if (!string.IsNullOrWhiteSpace(_options.SystemPrompt))
-            messages.Add(new ChatMessage(ChatRole.System, _options.SystemPrompt));
-
-        messages.AddRange(_history.GetMessages(conversationKey));
-        messages.Add(new ChatMessage(ChatRole.User, truncated));
+        var messages = await _contextAssembler.AssembleAsync(
+            source,
+            conversation,
+            sender,
+            userText,
+            _history.GetMessages(conversationKey),
+            cancellationToken).ConfigureAwait(false);
 
         try
         {
@@ -161,13 +175,13 @@ public sealed class DeepSeekResponder : IChatResponder
 
             return new GenerationResult(text);
         }
-        catch (DeepSeekException ex)
+        catch (Exception ex) when (ex is IAiProviderException provider)
         {
-            _log.Warning("deepseek request failed: kind={Kind} status={Status} code={Code}", ex.Kind, ex.StatusCode, ex.ErrorCode);
-            return ex.Kind is DeepSeekErrorKind.Timeout
-                or DeepSeekErrorKind.Unavailable
-                or DeepSeekErrorKind.ContentFilter
-                or DeepSeekErrorKind.Unknown
+            _log.Warning("ai request failed: kind={Kind} status={Status} code={Code}", provider.Kind, provider.StatusCode, provider.ErrorCode);
+            return provider.Kind is AiErrorKind.Timeout
+                or AiErrorKind.Unavailable
+                or AiErrorKind.ContentFilter
+                or AiErrorKind.Unknown
                 ? new GenerationResult(FallbackText())
                 : new GenerationResult(null);
         }
@@ -177,7 +191,7 @@ public sealed class DeepSeekResponder : IChatResponder
         }
         catch (Exception ex)
         {
-            _log.Error(ex, "deepseek responder failed");
+            _log.Error(ex, "ai responder failed");
             return new GenerationResult(FallbackText());
         }
     }
@@ -198,9 +212,6 @@ public sealed class DeepSeekResponder : IChatResponder
         var value = interaction.Values?.FirstOrDefault(item => !string.IsNullOrWhiteSpace(item));
         return value?.Trim();
     }
-
-    private static string Truncate(string value, int max)
-        => value.Length <= max ? value : value[..max];
 
     private sealed record GenerationResult(string? Text);
 

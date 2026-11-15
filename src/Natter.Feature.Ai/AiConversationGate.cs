@@ -1,17 +1,17 @@
-namespace Natter.Feature.Ai.DeepSeek;
+namespace Natter.Feature.Ai;
 
 /// <summary>
 /// Serializes requests per conversation and caps global in-flight requests. This prevents
 /// overlapping AI calls from racing on history or producing out-of-order replies.
 /// </summary>
-public sealed class DeepSeekConversationGate : IDisposable
+public sealed class AiConversationGate : IDisposable
 {
     private readonly SemaphoreSlim _global;
     private readonly Dictionary<string, SemaphoreSlim> _conversations = new(StringComparer.Ordinal);
     private readonly Lock _gate = new();
     private bool _disposed;
 
-    public DeepSeekConversationGate(DeepSeekOptions options)
+    public AiConversationGate(AiResponderOptions options)
         => _global = new SemaphoreSlim(
             Math.Max(1, options?.MaxConcurrentRequests ?? 2),
             Math.Max(1, options?.MaxConcurrentRequests ?? 2));

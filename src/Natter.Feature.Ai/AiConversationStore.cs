@@ -1,12 +1,12 @@
 using Microsoft.Extensions.AI;
 using Natter.Chat;
 
-namespace Natter.Feature.Ai.DeepSeek;
+namespace Natter.Feature.Ai;
 
 /// <summary>In-memory, process-local conversation history. Restart is intentionally lossy in v1.</summary>
-public sealed class DeepSeekConversationStore(DeepSeekOptions options)
+public sealed class AiConversationStore(AiResponderOptions options) : IAiConversationStore
 {
-    private readonly DeepSeekOptions _options = options ?? throw new ArgumentNullException(nameof(options));
+    private readonly AiResponderOptions _options = options ?? throw new ArgumentNullException(nameof(options));
     private readonly Dictionary<string, ConversationHistory> _histories = new(StringComparer.Ordinal);
     private readonly Lock _gate = new();
 

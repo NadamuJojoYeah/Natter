@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["appSecret", "botId"],
+  "additionalProperties": false,
+  "properties": {
+    "appSecret": {
+      "type": "string",
+      "pattern": "^\\$\\{secret:DINGTALK_APP_SECRET\\}$",
+      "description": "Secret reference only; the callback signing secret comes from IPluginSecrets."
+    },
+    "botId": { "type": "string", "minLength": 1 },
+    "listenPrefix": { "type": "string", "pattern": "^https?://" },
+    "maxClockSkewMinutes": { "type": "integer", "minimum": 1, "maximum": 1440 },
+    "requireMention": { "type": "boolean" },
+    "conversations": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+    "users": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+    "maxMessageLength": { "type": "integer", "minimum": 1, "maximum": 20000 }
+  }
+}

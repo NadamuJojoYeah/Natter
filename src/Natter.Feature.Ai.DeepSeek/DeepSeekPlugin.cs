@@ -2,7 +2,7 @@ using System.Net.Http;
 using System.Text.Json;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
-using Natter.Application.Chat;
+using Natter.Feature.Ai;
 using Natter.Cli.Abstractions;
 using Natter.Plugin.Abstractions;
 
@@ -43,23 +43,38 @@ public sealed class DeepSeekPlugin : INatterPlugin
         }
 
         var apiKey = DeepSeekApiKey.From(context.Secrets.GetRequired(ApiKeySecretName));
+        var responderOptions = new AiResponderOptions
+        {
+            ProviderName = "deepseek",
+            SystemPrompt = options.SystemPrompt,
+            MaxInputCharacters = options.MaxInputCharacters,
+            HistoryMaxMessages = options.HistoryMaxMessages,
+            HistoryMaxCharacters = options.HistoryMaxCharacters,
+            HistoryScope = options.HistoryScope,
+            MaxConcurrentRequests = options.MaxConcurrentRequests,
+            FallbackText = options.FallbackText,
+            EmptyResponseText = options.EmptyResponseText,
+        };
         var services = context.Services.Collection;
 
         services.AddSingleton(options);
         services.AddSingleton(apiKey);
+        services.AddSingleton(responderOptions);
         services.AddSingleton<DeepSeekMetrics>();
-        services.AddSingleton<DeepSeekConversationStore>();
-        services.AddSingleton<DeepSeekConversationGate>();
+        services.AddSingleton<AiConversationStore>();
+        services.AddSingleton<IAiConversationStore>(provider => provider.GetRequiredService<AiConversationStore>());
+        services.AddSingleton<AiConversationGate>();
         services.AddSingleton<HttpClient>(_ => new HttpClient { Timeout = Timeout.InfiniteTimeSpan });
         services.AddSingleton<IChatClient>(provider => _chatClient ?? new DeepSeekChatClient(
             provider.GetRequiredService<HttpClient>(),
             options,
             apiKey,
             provider.GetRequiredService<DeepSeekMetrics>()));
-        services.AddSingleton<DeepSeekResponder>();
+        services.AddSingleton<IAiContextAssembler>(provider => new RecentWindowContextAssembler(responderOptions));
+        services.AddSingleton<AiChatResponder>();
         services.AddTransient<DeepSeekStatusCommandHandler>();
 
-        context.Contributions.AddChatResponder<DeepSeekResponder>("deepseek", priority: 10);
+        context.Contributions.AddChatResponder<AiChatResponder>("deepseek", priority: 10);
         context.Contributions.AddCliCommand(new CliCommandDescriptor
         {
             Name = "ai status",
@@ -129,7 +144,7 @@ public sealed class DeepSeekPlugin : INatterPlugin
 public sealed class DeepSeekStatusCommandHandler(
     DeepSeekOptions options,
     DeepSeekMetrics metrics,
-    DeepSeekConversationStore history) : ICliCommandHandler
+    AiConversationStore history) : ICliCommandHandler
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {

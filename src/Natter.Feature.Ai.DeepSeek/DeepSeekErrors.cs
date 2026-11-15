@@ -1,3 +1,5 @@
+using Natter.Feature.Ai;
+
 namespace Natter.Feature.Ai.DeepSeek;
 
 public enum DeepSeekErrorKind
@@ -13,7 +15,7 @@ public enum DeepSeekErrorKind
 }
 
 /// <summary>Structured DeepSeek failure. Never includes the API key or full prompt/response.</summary>
-public sealed class DeepSeekException : Exception
+public sealed class DeepSeekException : Exception, IAiProviderException
 {
     public DeepSeekException(
         DeepSeekErrorKind kind,
@@ -39,6 +41,22 @@ public sealed class DeepSeekException : Exception
     public int? RetryAfterMs { get; }
 
     public bool Retryable => Kind is DeepSeekErrorKind.RateLimited or DeepSeekErrorKind.Timeout or DeepSeekErrorKind.Unavailable;
+
+    AiErrorKind IAiProviderException.Kind => Kind switch
+    {
+        DeepSeekErrorKind.Authentication => AiErrorKind.Authentication,
+        DeepSeekErrorKind.InsufficientBalance => AiErrorKind.InsufficientBalance,
+        DeepSeekErrorKind.RateLimited => AiErrorKind.RateLimited,
+        DeepSeekErrorKind.Timeout => AiErrorKind.Timeout,
+        DeepSeekErrorKind.Unavailable => AiErrorKind.Unavailable,
+        DeepSeekErrorKind.InvalidRequest => AiErrorKind.InvalidRequest,
+        DeepSeekErrorKind.ContentFilter => AiErrorKind.ContentFilter,
+        _ => AiErrorKind.Unknown,
+    };
+
+    int? IAiProviderException.StatusCode => StatusCode;
+
+    string? IAiProviderException.ErrorCode => ErrorCode;
 
     public static DeepSeekException Timeout(string message, Exception? inner = null)
         => new(DeepSeekErrorKind.Timeout, message, innerException: inner);

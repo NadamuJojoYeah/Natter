@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Natter.Sample.Plugin.DingTalk</RootNamespace>
+    <AssemblyName>Natter.Sample.Plugin.DingTalk</AssemblyName>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <NpsPlugin>true</NpsPlugin>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/Natter.Chat.DingTalk/Natter.Chat.DingTalk.csproj" />
+    <ProjectReference Include="../../src/Natter.Plugin.Abstractions/Natter.Plugin.Abstractions.csproj" />
+    <ProjectReference Include="../../src/Natter.Cli.Abstractions/Natter.Cli.Abstractions.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="plugin.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="config.schema.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <EmbeddedResource Include="plugin.json" LogicalName="Natter.Sample.Plugin.DingTalk.plugin.json" />
+    <EmbeddedResource Include="config.schema.json" LogicalName="Natter.Sample.Plugin.DingTalk.config.schema.json" />
+  </ItemGroup>
+
+  <Import Project="$(MSBuildThisFileDirectory)../../build/Natter.Plugin.targets" />
+
+</Project>

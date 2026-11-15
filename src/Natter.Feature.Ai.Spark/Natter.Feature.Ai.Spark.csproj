@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Natter.Feature.Ai.Spark</RootNamespace>
+    <AssemblyName>Natter.Feature.Ai.Spark</AssemblyName>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <NpsPlugin>true</NpsPlugin>
+    <Description>iFlytek Spark OpenAI-compatible IChatClient and NPS responder.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.AI" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Natter.Plugin.Abstractions/Natter.Plugin.Abstractions.csproj" />
+    <ProjectReference Include="../Natter.Chat/Natter.Chat.csproj" />
+    <ProjectReference Include="../Natter.Application/Natter.Application.csproj" />
+    <ProjectReference Include="../Natter.Cli.Abstractions/Natter.Cli.Abstractions.csproj" />
+    <ProjectReference Include="../Natter.Feature.Ai/Natter.Feature.Ai.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="plugin.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="config.schema.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <EmbeddedResource Include="plugin.json" LogicalName="Natter.Feature.Ai.Spark.plugin.json" />
+    <EmbeddedResource Include="config.schema.json" LogicalName="Natter.Feature.Ai.Spark.config.schema.json" />
+  </ItemGroup>
+
+  <Import Project="$(MSBuildThisFileDirectory)../../build/Natter.Plugin.targets" />
+
+</Project>

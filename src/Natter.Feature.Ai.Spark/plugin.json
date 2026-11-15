@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "id": "natter.feature.ai.spark",
+  "name": "iFlytek Spark AI Responder",
+  "version": "0.1.0",
+  "kind": "feature",
+  "hostApi": ">=0.1.0 <1.0.0",
+  "entry": {
+    "assembly": "lib/Natter.Feature.Ai.Spark.dll",
+    "type": "Natter.Feature.Ai.Spark.SparkPlugin"
+  },
+  "description": "iFlytek Spark OpenAI-compatible chat responder for Natter.",
+  "author": "Natter",
+  "license": "MIT",
+  "permissions": [
+    "network",
+    "secrets:SPARK_API_KEY",
+    "chat.read",
+    "chat.send",
+    "chat.interactions",
+    "cli.commands"
+  ],
+  "secrets": [
+    { "name": "SPARK_API_KEY", "required": true }
+  ],
+  "configSchema": "config.schema.json",
+  "contributions": [
+    { "type": "chat.responder", "id": "spark", "priority": 20 },
+    { "type": "cli.command", "id": "spark.status" }
+  ],
+  "platforms": ["linux", "windows", "macos", "android"]
+}
