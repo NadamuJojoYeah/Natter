@@ -15,6 +15,16 @@ public sealed class DiscordPlugin : INatterPlugin
 {
     public const string TokenSecretName = "DISCORD_BOT_TOKEN";
 
+    private readonly IDiscordTransport? _transport;
+
+    public DiscordPlugin()
+    {
+    }
+
+    /// <summary>Test/composition seam; production uses the parameterless NPS entry point.</summary>
+    public DiscordPlugin(IDiscordTransport transport)
+        => _transport = transport ?? throw new ArgumentNullException(nameof(transport));
+
     public static PluginManifest Manifest { get; } = PluginManifestReader.ReadEmbedded(
         typeof(DiscordPlugin).Assembly,
         "Natter.Sample.Plugin.Discord.plugin.json");
@@ -47,7 +57,11 @@ public sealed class DiscordPlugin : INatterPlugin
         services.AddSingleton(options);
         services.AddSingleton(token);
         services.AddSingleton(source);
-        services.AddSingleton<IDiscordTransport, DiscordSocketTransport>();
+
+        if (_transport is null)
+            services.AddSingleton<IDiscordTransport, DiscordSocketTransport>();
+        else
+            services.AddSingleton(_transport);
         services.AddSingleton<DiscordChatUpstream>();
         services.AddSingleton<DiscordStatusCommandHandler>();
 
