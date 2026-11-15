@@ -65,6 +65,8 @@ dotnet test tests/Natter.Framework.Tests/Natter.Framework.Tests.csproj
 | [src/Natter.Chat.Satori](../src/Natter.Chat.Satori) | Satori 事件/元素/feature/API 映射与会话序号 | Chat + Abstractions |
 | [src/Natter.Plugin.Abstractions](../src/Natter.Plugin.Abstractions) | NPS v1 Host API：manifest、插件契约、配置 schema、秘密、权限、诊断 | Abstractions + Chat + Application + Cli.Abstractions |
 | [src/Natter.Plugin.Store](../src/Natter.Plugin.Store) | 插件包校验/签名/app 私有 store | Plugin.Abstractions |
+| [src/Natter.Chat.Discord](../src/Natter.Chat.Discord) | Discord.Net transport、NLMP 映射、upstream | Chat + Abstractions |
+| [samples/Natter.Sample.Plugin.Discord](../samples/Natter.Sample.Plugin.Discord) | `natter.transport.discord` NPS 示例插件 | Chat.Discord + Plugin.Abstractions + Cli.Abstractions |
 | [src/Natter.Cli.Abstractions](../src/Natter.Cli.Abstractions) | CLI 契约（`IConsole`、命令描述符） | 无 |
 | [src/Natter.Cli.Core](../src/Natter.Cli.Core) | CLI 内核、内建命令、输出渲染 | Infrastructure 及以下 |
 | [src/Natter.Cli](../src/Natter.Cli) | 桌面宿主 | Cli.Core |
@@ -654,6 +656,7 @@ CLI 全局选项：`--plugin-dir`（可重复）、`--no-plugins`、`--verbose/-
 | Chat/NLMP | 键作用域、降级、分片、幂等、去重、Satori 映射 | 纯单元测试 + 真实 `TestHost` 组合 |
 | NPS v1 | manifest/semver、依赖图、config schema、秘密/权限、激活回滚、contribution、legacy 适配、CLI 诊断 | 单元测试 + 临时插件目录 + 嵌入式 NPS 插件 |
 | Plugin Store | zip 安全、哈希/签名、安装/更新/回退/卸载、依赖与配置校验、宿主加载 | 真实 zip 包 fixture + 临时 store 目录 + NPS host |
+| Discord transport | DM/Group/Guild/Thread、bot/self/allowlist/mention、分片、错误映射、slash、NPS 生命周期 | fake `IDiscordTransport`，不连接真实网关 |
 | Plugin | 清单探测、适配器覆盖、命令贡献 | 构建宿主并解析真实插件输出 |
 
 ### 6.2 假 Console
@@ -757,6 +760,7 @@ docs: 补充支付模块开发说明
 - [ ] NLMP 变更同步了 `Natter.Chat` 契约、一致性测试与 [NLMP](NLMP.md) 实现映射。
 - [ ] 插件变更同步了 NPS manifest、依赖/权限声明、示例与 [插件规范](PLUGIN_SPEC.md) 实现映射。
 - [ ] Android dynamic 变更验证 `-c DynamicPlugins` 构建，并同步 [Android 插件宿主](ANDROID_PLUGIN_HOST.md)。
+- [ ] Discord transport 变更使用 fake transport 覆盖，不把真实 token 写进仓库或 CI；同步 [Discord 设计](DISCORD_PLUGIN_DESIGN.md)。
 
 ## 10. 常用命令速查
 

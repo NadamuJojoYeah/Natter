@@ -18,6 +18,7 @@
 | 插件 Host API | `Natter.Plugin.Abstractions` 的 manifest、`INatterPlugin`、`IPluginContext`、contribution、配置/秘密/权限/诊断模型 |
 | 插件运行时 | `Natter.Infrastructure/Plugins/Nps` 的 manifest reader、依赖图、插件本地容器、contribution staging、激活回滚、端口路由与诊断 |
 | 插件包/存储 | `Natter.Plugin.Store` 的 `.natter-plugin.zip` 校验、SHA-256/ECDSA 签名、app 私有安装/更新/回退 store |
+| Discord transport | `Natter.Chat.Discord` 的 Discord.Net transport、DTO 映射与 `DiscordChatUpstream`；示例 NPS 插件 `natter.transport.discord` |
 
 依赖规则：
 
@@ -36,6 +37,7 @@ Domain   Application  Chat    Cli.Abstractions
                        │                  └── Natter.Plugin.Store（桌面/Android）
                        │
              Natter.Chat.Satori（协议适配）
+             Natter.Chat.Discord（Discord 协议适配）
 ```
 
 - `Natter.Abstractions` 不引用任何产品程序集，只依赖 `Microsoft.Extensions.DependencyInjection.Abstractions`（用于契约中的服务注册）。
@@ -245,7 +247,30 @@ PluginStore.Cleanup
 - 插件配置从 `FilesDir/plugin-config/<pluginId>.json` 读取（`CompositionOptions.PluginConfigDirectory`），插件目录保持不可变。
 - 失败回退：启动回调 reconcile；新版本失败时切回 `previousVersion`，没有上一版本则禁用。跨进程崩溃的自动回滚不承诺。
 
-### 6.4 加载上下文
+### 6.4 Discord transport
+
+```text
+Discord Gateway / REST
+        │  Discord.Net
+        ▼
+DiscordSocketTransport ── IObservable<DiscordTransportEvent>
+        │
+        ▼
+DiscordChatUpstream ── NLMP events / commands
+        │
+        ▼
+ChatOrchestrator / IChatResponder / feature plugins
+```
+
+- `DiscordPlugin.ConfigureAsync` 只注册 transport/upstream/status command；NPS 在 `ActivateAsync` 后调用 `ConnectAsync`。
+- `Source.SelfId` 来自配置，不依赖登录后的 `CurrentUser`。
+- token 只从 `IPluginSecrets` 取得；manifest/config/日志不出现 token。
+- 入站：`DiscordEventMapper` 过滤 bot/self/allowlist/mention，映射 DM/Group/Guild/Thread、附件、回复、编辑/删除、slash。
+- 出站：`DiscordChatUpstream` 分片、显式 mention、`AllowedMentions.None`、错误映射；transport 执行 Discord REST。
+- slash：transport 在 3 秒内 defer 并缓存 interaction token；core 路由到 responder，`interaction.respond` 走 followup。
+- fake transport 覆盖 CI；真实网关需要手动集成。
+
+### 6.5 加载上下文
 
 - 每个文件插件一个 `PluginLoadContext`（`isCollectible: true`）：
   - `Natter.*`、`Microsoft.Extensions.*`、`System.*`、`System.Reactive*` 回落到默认上下文，保证**端口与契约类型身份共享**；
@@ -275,6 +300,7 @@ PluginStore.Cleanup
 - 插件加载是宿主构建期行为；NPS v1 只保证重启生效，运行中热加载/HMR 未实现。
 - NPS Phase 2–4（Discord transport、AI feature、启用/禁用 CLI、市场、签名、out-of-process 宿主）尚未交付。
 - Android dynamic 已完成 store/校验/安装/回退/构建骨架；文件选择器/完整管理 UI、真机矩阵、远程下载器与崩溃前自动回滚仍待补。
+- Discord transport 已交付消息/编辑/删除/typing/slash 核心；附件上传、按钮/Modal、stream edit、真实网关集成矩阵仍待补。
 - 权限是宿主治理与可观测性，不是进程内安全沙箱；不可信第三方插件需要独立进程/容器。
 - NLMP 不包含 wire transport、远程插件、握手/服务发现；Satori WebSocket/HTTP 客户端与原生 Discord 适配器不在框架内。
 - Satori message elements 采用有损文本化（v0.1），富文本/按钮/Modal 需要后续能力扩展。

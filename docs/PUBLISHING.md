@@ -208,6 +208,36 @@ natter plugins store install ./plugin.natter-plugin.zip \
 
 动态形态的 app 私有 store、哈希/签名、AOT off、回滚与管理入口见 [Android 插件宿主设计](ANDROID_PLUGIN_HOST.md)。默认/Play 发行继续使用 embedded。
 
+### 3.5 Discord transport 插件
+
+`natter.transport.discord` 是 NPS transport 插件，不包含 AI 逻辑。构建：
+
+```bash
+dotnet build samples/Natter.Sample.Plugin.Discord/Natter.Sample.Plugin.Discord.csproj -c Release
+```
+
+插件目录需要：
+
+```text
+plugin.json
+config.schema.json
+config.json                 # 不含 token 明文
+lib/Natter.Sample.Plugin.Discord.dll
+lib/Discord.Net.*.dll
+lib/Natter.Chat.Discord.dll
+```
+
+发布前：
+
+1. 将 bot token 放进宿主的 secret provider（桌面可用环境变量 `DISCORD_BOT_TOKEN`，Android 用 AndroidKeyStore provider）；
+2. `config.json` 只写 `"token": "${secret:DISCORD_BOT_TOKEN}"`；
+3. 设置 `selfId` 为 bot 的 numeric user id；
+4. 只声明需要的 intents；`MessageContent` 是 privileged intent，需在 Discord Developer Portal 开启；
+5. 不把真实 token、config.json 或 `.env` 打进插件包；
+6. 使用 fake transport CI 测试；真实网关验证单独在测试 guild 进行。
+
+详细设计见 [Discord Transport Plugin Design](DISCORD_PLUGIN_DESIGN.md)。
+
 ## 4. 发布检查清单
 
 - [ ] `dotnet test tests/Natter.Framework.Tests` 全绿；
@@ -218,4 +248,6 @@ natter plugins store install ./plugin.natter-plugin.zip \
 - [ ] Android 使用正式签名并检查 `targetSdkVersion`；
 - [ ] Android dynamic 构建使用 `-c DynamicPlugins`，签名包校验通过，安装后重启能加载 active 版本；
 - [ ] plugin store 的 `installed.json` / `pending.json` 不含秘密；
+- [ ] Discord 插件 `config.json` 只含 secret reference，token 只在 secret provider；
+- [ ] Discord `selfId` 与 token 对应的 bot 一致，intents 已在 Developer Portal 开启；
 - [ ] 生产环境替换内存适配器（仓储、UoW、事件日志）并评估事件可靠性。

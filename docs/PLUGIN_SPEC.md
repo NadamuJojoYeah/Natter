@@ -1,12 +1,12 @@
 # Natter Plugin Specification v1（NPS v1）
 
-> **状态**：Draft · Phase 1 已实现（manifest / Host API / contribution / 依赖图 / 配置 / 秘密 / 权限 / 激活回滚 / 诊断）  
+> **状态**：Draft · Phase 1 与 Discord transport 核心已实现（manifest / Host API / contribution / 依赖图 / 配置 / 秘密 / 权限 / 激活回滚 / 诊断 / 消息与 interaction 映射）  
 > **日期**：2026-11-15  
 > **目标**：在接入 Discord 等具体上游之前，先固定 Natter 的插件包、manifest、宿主 API、contribution、依赖图、配置、权限、生命周期和诊断约定。  
 > **参考对象**：DSH 的插件图 / 配置 schema / 版本约束 / HMR 与插件管理；RimWorld 的 packageId / 依赖声明 / `loadAfter` / `loadBefore` / 版本兼容。  
 > **相关文档**：[NLMP 轻量消息协议](NLMP.md)、[当前插件开发指南](PLUGINS.md)、[架构设计](ARCHITECTURE.md)
 >
-> **实现说明**：Phase 1 已在 `Natter.Plugin.Abstractions` + `Natter.Infrastructure/Plugins/Nps` 中交付，示例插件已迁移到 NPS v1；Phase 2–4（Discord transport、AI feature、启用/禁用与市场）仍是路线图，见 §16 与 §18。
+> **实现说明**：Phase 1 已在 `Natter.Plugin.Abstractions` + `Natter.Infrastructure/Plugins/Nps` 中交付，示例插件已迁移到 NPS v1；Discord transport Phase 2 核心已交付；AI feature、插件市场与 out-of-process 宿主仍属路线图，见 §16 与 §18。
 
 ---
 
@@ -153,20 +153,15 @@ plugins/
   "author": "Natter",
   "license": "MIT",
 
-  "dependsOn": [
-    {
-      "id": "natter.chat.core",
-      "version": ">=0.1.0 <1.0.0"
-    }
-  ],
-  "loadAfter": ["natter.chat.core"],
-
   "permissions": [
     "network",
     "secrets:DISCORD_BOT_TOKEN",
     "chat.read",
     "chat.send",
+    "chat.edit",
+    "chat.delete",
     "chat.commands",
+    "chat.interactions",
     "cli.commands"
   ],
 
@@ -215,17 +210,19 @@ plugins/
 
 ```json
 "dependsOn": [
-  { "id": "natter.chat.core", "version": ">=0.1.0 <1.0.0" }
+  { "id": "natter.feature.memory", "version": ">=0.1.0 <1.0.0" }
 ],
 "optionalDependsOn": [
   { "id": "natter.cli.diagnostics", "version": ">=0.1.0" }
 ],
-"loadAfter": ["natter.chat.core"],
+"loadAfter": ["natter.feature.memory"],
 "loadBefore": [],
 "conflicts": [
   { "id": "natter.transport.discord.legacy", "version": "<0.2.0" }
 ]
 ```
+
+> 示例中的插件 ID 只是占位；当前仓库没有 `natter.feature.memory` / `natter.cli.diagnostics` 这两个插件。核心兼容性由 `hostApi` 表达，不要声明不存在的 core 依赖。
 
 语义：
 
@@ -721,9 +718,9 @@ natter plugins config validate <plugin-id>
   "phase": "dependency",
   "code": "missing-dependency",
   "pluginId": "natter.transport.discord",
-  "message": "Required plugin 'natter.chat.core' >=0.1.0 <1.0.0 was not found.",
+  "message": "Required plugin 'natter.feature.memory' >=0.1.0 <1.0.0 was not found.",
   "detail": {
-    "dependency": "natter.chat.core",
+    "dependency": "natter.feature.memory",
     "range": ">=0.1.0 <1.0.0"
   }
 }
@@ -731,9 +728,15 @@ natter plugins config validate <plugin-id>
 
 `phase` 取值：`manifest` / `dependency` / `load` / `configure` / `config` / `permission` / `activate` / `runtime`。
 
+> 示例中的插件 ID 仅用于展示错误结构；当前仓库并没有这些插件。核心兼容性由 `hostApi` 表达，不要声明不存在的 core 依赖。
+
 ---
 
 ## 11. Discord transport plugin
+
+> 完整的 Discord transport 设计见 [Discord Transport Plugin Design](DISCORD_PLUGIN_DESIGN.md)。
+>
+> **实现状态**：`natter.transport.discord` 示例插件与 `Natter.Chat.Discord` 已交付消息上游、typing、编辑/删除、slash interaction、allowlist/mention 过滤、分片与 `discord status`；附件上传、按钮/Modal、stream edit 尚未交付。
 
 ### 11.1 定位
 
@@ -756,6 +759,7 @@ AI / memory / tools（feature plugins）
 ```json
 {
   "token": "${secret:DISCORD_BOT_TOKEN}",
+  "selfId": "123456789012345678",
   "intents": ["Guilds", "GuildMessages", "DirectMessages", "MessageContent"],
   "guilds": ["123456789012345678"],
   "channels": ["987654321098765432"],
@@ -847,9 +851,6 @@ public sealed class DiscordPlugin : INatterPlugin
     "assembly": "lib/Natter.Feature.Ai.OpenAi.dll",
     "type": "Natter.Feature.Ai.OpenAi.OpenAiPlugin"
   },
-  "dependsOn": [
-    { "id": "natter.chat.core", "version": ">=0.1.0" }
-  ],
   "permissions": ["network", "ai.complete", "storage"],
   "secrets": [
     { "name": "OPENAI_API_KEY", "required": true }
@@ -863,7 +864,7 @@ public sealed class DiscordPlugin : INatterPlugin
 
 关键点：
 
-- AI 插件不依赖 Discord 插件，只依赖 `natter.chat.core` 和 NLMP；
+- AI 插件不依赖 Discord 插件，只依赖 `hostApi` 与 NLMP 契约；
 - AI 插件不 import Discord.Net；
 - Discord 插件也不 import AI SDK；
 - 换模型、换 persona、加记忆工具，都不需要改 Discord transport。
@@ -956,14 +957,17 @@ v1 不做：
 - ✅ `plugins list --detail` / `plugins graph` / `plugins doctor` / `plugins contributions` / `plugins permissions` / `plugins config validate`；
 - ✅ 迁移 Greetings/Metrics 示例（legacy 类保留用于 Android 嵌入兼容）。
 
-### Phase 2：Discord transport（未交付）
+### Phase 2：Discord transport（核心已交付）
 
-- `natter.transport.discord` 插件；
-- Discord Gateway/REST 抽象；
-- NLMP 事件/命令映射；
-- 能力、allowlist、分片、限流、安全；
-- `discord status`；
-- fake gateway 测试。
+> 详细设计见 [Discord Transport Plugin Design](DISCORD_PLUGIN_DESIGN.md)。
+
+- ✅ `natter.transport.discord` 示例插件；
+- ✅ Discord Gateway/REST 抽象 + Discord.Net transport；
+- ✅ NLMP 消息/编辑/删除/interaction 映射；
+- ✅ 能力、allowlist、分片、限流、安全；
+- ✅ `discord status`；
+- ✅ fake transport 测试；
+- 待补：附件上传、按钮/Modal、stream edit、全局命令注册策略。
 
 ### Phase 3：AI / feature（未交付）
 
@@ -1005,7 +1009,7 @@ v1 不做：
 | --- | --- | --- |
 | Phase 1：规范与内核 | **已实现** | manifest v1、Host API、contribution、依赖图、配置 schema、秘密、权限、激活回滚、诊断 CLI、示例迁移 |
 | Android 插件宿主 | **基础实现已交付** | embedded 默认；dynamic extended store/校验/安装/回退与构建配置见 [Android 插件宿主](ANDROID_PLUGIN_HOST.md)；管理 UI 与真机矩阵待补 |
-| Phase 2：Discord transport | 未交付 | 需要 Discord Gateway/REST 客户端与真实凭据；当前只有传输边界与 NPS 内核 |
+| Phase 2：Discord transport | **核心已交付** | `Natter.Chat.Discord` + `samples/Natter.Sample.Plugin.Discord`；消息、typing、编辑/删除、slash interaction、状态命令；真实网关/真实凭据集成测试待补 |
 | Phase 3：AI / feature | 未交付 | `chat.responder` contribution 已可用；AI SDK、会话存储与流式输出尚未实现 |
 | Phase 4：管理能力 | 未交付 | 热禁用/重载、市场、签名、out-of-process 宿主 |
 
@@ -1026,6 +1030,7 @@ v1 不做：
 | §13 legacy 兼容 | `PluginLoader`（无 `schemaVersion`）、`LegacyPluginManifest`、NPS 入口指向 `IPluginModule` 的 adapter 路径 |
 | 示例迁移 | `samples/Natter.Sample.Plugin.Greetings`、`samples/Natter.Sample.Plugin.Metrics`（NPS 类 + legacy 类供 Android 嵌入） |
 | Android 动态宿主 | `src/Natter.Plugin.Store`、`AndroidPluginHost`、`AndroidKeystoreSecretProvider`、`DynamicPlugins` 构建；默认 embedded 已迁移 NPS |
+| Discord transport | `src/Natter.Chat.Discord` + `samples/Natter.Sample.Plugin.Discord`；Discord.Net transport、NLMP 映射、slash interaction、fake transport 测试 |
 
 ### 18.3 一致性测试映射（对应 §14）
 
@@ -1045,7 +1050,7 @@ v1 不做：
 | 12 停止顺序逆依赖 | `NpsRuntimeTests.Stop_order_is_the_reverse_of_activation_order` |
 | 13 禁用/启用 | `NpsRuntimeTests.Disabled_plugin_*`（启用/禁用 CLI 属 Phase 4） |
 | 14 legacy 适配 | `NpsRuntimeTests.Legacy_manifest_*`、`Nps_manifest_can_point_at_a_legacy_plugin_module` |
-| 15 Discord fixture | 未交付（Phase 2） |
+| 15 Discord fixture | `DiscordTransportTests`、`DiscordNpsTests`、`DiscordConfigTests`（fake transport，不连接真实 Discord） |
 | 16 graph/contributions/permissions JSON | `NpsCliTests.Plugin_graph_*` |
 | 17 卸载无残留 | `NpsRuntimeTests.Chat_responder_and_event_subscriber_*`（停止后订阅失效）、端口回退测试 |
 | 18 路径逃逸/非法入口类型 | `NpsManifestTests`、`NpsRuntimeTests.Missing_entry_type_*` |
