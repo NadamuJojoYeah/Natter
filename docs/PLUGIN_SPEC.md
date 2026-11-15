@@ -1,6 +1,6 @@
 # Natter Plugin Specification v1（NPS v1）
 
-> **状态**：Draft · Phase 1、Discord transport 与 DeepSeek AI responder 核心已实现（manifest / Host API / contribution / 依赖图 / 配置 / 秘密 / 权限 / 激活回滚 / 诊断 / 消息与 interaction 映射 / IChatClient responder）  
+> **状态**：Draft · Phase 1、Discord transport、DeepSeek AI responder 与第二上游/消费者（钉钉 + 星火）核心已实现（manifest / Host API / contribution / 依赖图 / 配置 / 秘密 / 权限 / 激活回滚 / 诊断 / 消息与 interaction 映射 / IChatClient responder / 多 transport 验证）  
 > **日期**：2026-11-15  
 > **目标**：在接入 Discord 等具体上游之前，先固定 Natter 的插件包、manifest、宿主 API、contribution、依赖图、配置、权限、生命周期和诊断约定。  
 > **参考对象**：DSH 的插件图 / 配置 schema / 版本约束 / HMR 与插件管理；RimWorld 的 packageId / 依赖声明 / `loadAfter` / `loadBefore` / 版本兼容。  
@@ -1025,7 +1025,8 @@ v1 不做：
 | Phase 1：规范与内核 | **已实现** | manifest v1、Host API、contribution、依赖图、配置 schema、秘密、权限、激活回滚、诊断 CLI、示例迁移 |
 | Android 插件宿主 | **基础实现已交付** | embedded 默认；dynamic extended store/校验/安装/回退与构建配置见 [Android 插件宿主](ANDROID_PLUGIN_HOST.md)；管理 UI 与真机矩阵待补 |
 | Phase 2：Discord transport | **核心已交付** | `Natter.Chat.Discord` + `samples/Natter.Sample.Plugin.Discord`；消息、typing、编辑/删除、slash interaction、状态命令；真实网关/真实凭据集成测试待补 |
-| Phase 3：AI / feature | **核心已交付** | `Natter.Feature.Ai.DeepSeek`：M.E.AI `IChatClient`、DeepSeek adapter、responder、内存历史、gate、幂等、`ai status`；流式/tools/持久化待补 |
+| Phase 3：AI / feature | **核心已交付** | `Natter.Feature.Ai.DeepSeek` / `Natter.Feature.Ai.Spark`：M.E.AI `IChatClient`、shared responder/context/memory、gate、幂等、状态命令；流式/tools/持久化待补 |
+| 第二上游/消费者验证 | **代码与 fake/HTTP 交叉验证已交付** | `Natter.Chat.DingTalk` + `Natter.Feature.Ai.Spark`；真实钉钉/星火凭据未接入 |
 | Phase 4：管理能力 | 未交付 | 热禁用/重载、市场、签名、out-of-process 宿主 |
 
 ### 18.2 代码映射
@@ -1047,6 +1048,8 @@ v1 不做：
 | Android 动态宿主 | `src/Natter.Plugin.Store`、`AndroidPluginHost`、`AndroidKeystoreSecretProvider`、`DynamicPlugins` 构建；默认 embedded 已迁移 NPS |
 | Discord transport | `src/Natter.Chat.Discord` + `samples/Natter.Sample.Plugin.Discord`；Discord.Net transport、NLMP 映射、slash interaction、fake transport 测试 |
 | AI responder | `src/Natter.Feature.Ai.DeepSeek`：M.E.AI `IChatClient`、DeepSeek HTTP adapter、responder、history/gate、`ai status` |
+| 共享 AI 边界 | `src/Natter.Feature.Ai`：`AiChatResponder`、`IAiContextAssembler`、`IAiConversationStore` |
+| 第二上游/消费者 | `src/Natter.Chat.DingTalk`、`samples/Natter.Sample.Plugin.DingTalk`、`src/Natter.Feature.Ai.Spark` |
 
 ### 18.3 一致性测试映射（对应 §14）
 

@@ -10,9 +10,9 @@
 
 ## 0. 一句话结论
 
-两个插件在 **真实 Discord 网关 + 真实 DeepSeek Chat Completions** 上完成了「入站 → NLMP → responder → 出站」的完整链路。开发修复后已从正式修复构建重跑全部自动 live：**26/26 通过**（L1 8、L2 9、L2b 2、L3/L3b 2、L4 5），**175/175 框架回归通过**；仅 L5 人工闸门待执行。过程中记录并修复了 2 个会直接导致 CLI 无法加载插件的真实缺陷（见 §7）。
+两个插件在 **真实 Discord 网关 + 真实 DeepSeek Chat Completions** 上完成了「入站 → NLMP → responder → 出站」的完整链路。开发修复后已从正式修复构建重跑全部自动 live：**27/27 通过**（L1 8、L2 9、L2b 2、L3/L3b/L3c 3、L4 5），**177/177 框架回归通过**；L5 人工闸门修复后复测通过（见下方链接）。过程中记录并修复了 2 个会直接导致 CLI 无法加载插件的真实缺陷（见 §7）。
 
-> **L5 人工闸门（2026-11-15 13:24）首次执行未通过**：guild 里真实 @bot 消息被编排器静默丢弃（`BUG-003`），typing 出现但无回复。详见[人工闸门记录](testing/2026-11-15-live-manual-gate.md)。
+> **L5 人工闸门**：2026-11-15 13:24 首次执行**未通过**（guild 真实 @bot 被编排器静默丢弃，`BUG-003`）；修复 `687f27f` 后 13:50 复测**通过**（约 3s 回复、reply 引用正确），详见[首测记录](testing/2026-11-15-live-manual-gate.md)、[处置记录](testing/2026-11-15-live-manual-gate-response.md)与[复测记录](testing/2026-11-15-live-manual-gate-rerun.md)。
 
 ---
 
@@ -42,6 +42,7 @@
 | L2b 入站 | `GatewayIngressLiveTests` | Discord Gateway + REST | 真实入站映射、mention 清理、conversation 映射、`ignoreSelf` 过滤 | 2 |
 | L3 编排 E2E | `OrchestrationLiveTests` | Gateway + DeepSeek + REST | 双插件激活、真实网关连接、注入一条 NLMP → 真实 AI 回复 → REST 复核、幂等重放、`ai status` | 1 |
 | L3b 文件插件 E2E | `FilePluginE2ELiveTests` | 文件插件目录 + Gateway + DeepSeek + REST | NPS 从 `lib/` 包加载（私有依赖、secret 引用）、真实网关连接、真实 AI 回复、`discord status` | 1 |
+| L3c 真实入站 E2E | `RealInboundMentionLiveTests` | Gateway 入站 + orchestrator + DeepSeek + REST | 真实 `MESSAGE_CREATE`（REST 发送，`allowed_mentions` 含 bot）→ mapper → mention 门控 → 真实 AI 回复；专门覆盖 BUG-003 类盲区 | 1 |
 | L4 部署 | `DeploymentCliLiveTests` | 独立 CLI 进程 + 文件插件 + 环境 secret | 插件布局加载、`upstreams`/`discord status`/`ai status`、缺 secret 诊断 | 5 |
 | L5 人工闸门 | `ManualGateLiveTests` | 真人 + 全链路 | 人类消息触发 AI 回复（`NATTER_LIVE_MANUAL=1`） | 1（默认 skip） |
 

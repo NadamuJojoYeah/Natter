@@ -1,5 +1,7 @@
 # 架构设计
 
+> 多平台 chat/agent harness 的控制面、Session/Task、上下文与记忆设计见 [Harness 架构](HARNESS_ARCHITECTURE.md)。
+
 ## 1. 六边形映射
 
 | 六边形概念 | 本项目落地 |
@@ -20,6 +22,8 @@
 | 插件包/存储 | `Natter.Plugin.Store` 的 `.natter-plugin.zip` 校验、SHA-256/ECDSA 签名、app 私有安装/更新/回退 store |
 | Discord transport | `Natter.Chat.Discord` 的 Discord.Net transport、DTO 映射与 `DiscordChatUpstream`；示例 NPS 插件 `natter.transport.discord` |
 | AI responder | `Natter.Feature.Ai.DeepSeek` 的 M.E.AI `IChatClient`、DeepSeek adapter、history/gate 与 `chat.responder` |
+| 共享 AI 边界 | `Natter.Feature.Ai` 的 `AiChatResponder`、`IAiContextAssembler`、`IAiConversationStore` |
+| 第二 transport/provider | `Natter.Chat.DingTalk` + `Natter.Feature.Ai.Spark`，均只通过 NPS/host contract 接入 |
 
 依赖规则：
 
@@ -292,7 +296,26 @@ DeepSeek API
 - API key 只来自 NPS secret provider；prompt/response/reasoning 不写日志。
 - v1 固定非思考、非流式、无 tools；能力边界明确，不用 OpenAI connector 假装完整适配。
 
-### 6.6 加载上下文
+### 6.6 第二上游/消费者验证
+
+```text
+DingTalk callback ── DingTalkChatUpstream ──┐
+                                          ├── NLMP ── ChatOrchestrator
+Discord/Satori adapter ────────────────────┘                │
+                                                          ▼
+                                             AiChatResponder（共享）
+                                              │ IAiContextAssembler
+                                              │ IAiConversationStore
+                                              ▼
+                                      IChatClient（DeepSeek / Spark）
+```
+
+- 钉钉与星火均作为 NPS 插件加载；第二个 transport/provider 没有在 `ChatOrchestrator` 中加入平台特判。
+- DeepSeek 与 Spark 共用 `AiChatResponder`、`IAiContextAssembler`、`IAiConversationStore`；会话 key 包含 `Source`，两个平台同 id 不共享记忆。
+- 钉钉回调实现 HMAC-SHA256 签名、timestamp 漂移校验、`sessionWebhook` 回复、文本分片；`Capabilities` 明确关闭 edit/delete/typing/slash。
+- 真实钉钉/星火凭据尚未接入；当前以 fake transport、fake `IChatClient`、HTTP callback 契约和 NPS 交叉链路验证。
+
+### 6.7 加载上下文
 
 - 每个文件插件一个 `PluginLoadContext`（`isCollectible: true`）：
   - `Natter.*`、`Microsoft.Extensions.*`、`System.*`、`System.Reactive*` 回落到默认上下文，保证**端口与契约类型身份共享**；
@@ -323,7 +346,8 @@ DeepSeek API
 - NPS Phase 2–4（Discord transport、AI feature、启用/禁用 CLI、市场、签名、out-of-process 宿主）尚未交付。
 - Android dynamic 已完成 store/校验/安装/回退/构建骨架；文件选择器/完整管理 UI、真机矩阵、远程下载器与崩溃前自动回滚仍待补。
 - Discord transport 已交付消息/编辑/删除/typing/slash 核心；附件上传、按钮/Modal、stream edit、真实网关集成矩阵仍待补。
-- DeepSeek responder 已交付非思考、非流式、无 tools 的 fake 测试闭环；真实 DeepSeek + 真实 Discord 联合验证、流式/tools/持久化/多 provider 仍待补。
+- DeepSeek responder 已交付非思考、非流式、无 tools 的 fake 测试闭环；真实 DeepSeek + 真实 Discord 联合验证已通过；流式/tools/持久化仍待补。
+- 钉钉/星火已交付代码与 fake/HTTP 交叉验证；真实平台 live、真实 callback 公网部署、多平台长跑仍待补。
 - 权限是宿主治理与可观测性，不是进程内安全沙箱；不可信第三方插件需要独立进程/容器。
 - NLMP 不包含 wire transport、远程插件、握手/服务发现；Satori WebSocket/HTTP 客户端与原生 Discord 适配器不在框架内。
 - Satori message elements 采用有损文本化（v0.1），富文本/按钮/Modal 需要后续能力扩展。

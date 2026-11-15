@@ -68,6 +68,10 @@ dotnet test tests/Natter.Framework.Tests/Natter.Framework.Tests.csproj
 | [src/Natter.Chat.Discord](../src/Natter.Chat.Discord) | Discord.Net transport、NLMP 映射、upstream | Chat + Abstractions |
 | [samples/Natter.Sample.Plugin.Discord](../samples/Natter.Sample.Plugin.Discord) | `natter.transport.discord` NPS 示例插件 | Chat.Discord + Plugin.Abstractions + Cli.Abstractions |
 | [src/Natter.Feature.Ai.DeepSeek](../src/Natter.Feature.Ai.DeepSeek) | DeepSeek `IChatClient` + responder 插件 | Chat + Application + Plugin.Abstractions + M.E.AI |
+| [src/Natter.Feature.Ai](../src/Natter.Feature.Ai) | 共享 responder/context/memory 边界 | Chat + Application + Plugin.Abstractions + M.E.AI |
+| [src/Natter.Chat.DingTalk](../src/Natter.Chat.DingTalk) | 钉钉 callback transport | Chat + System.Reactive |
+| [samples/Natter.Sample.Plugin.DingTalk](../samples/Natter.Sample.Plugin.DingTalk) | 钉钉 NPS 插件 | Chat.DingTalk + Plugin.Abstractions |
+| [src/Natter.Feature.Ai.Spark](../src/Natter.Feature.Ai.Spark) | 星火 `IChatClient` + shared responder | Chat + Application + M.E.AI |
 | [src/Natter.Cli.Abstractions](../src/Natter.Cli.Abstractions) | CLI 契约（`IConsole`、命令描述符） | 无 |
 | [src/Natter.Cli.Core](../src/Natter.Cli.Core) | CLI 内核、内建命令、输出渲染 | Infrastructure 及以下 |
 | [src/Natter.Cli](../src/Natter.Cli) | 桌面宿主 | Cli.Core |
@@ -659,6 +663,7 @@ CLI 全局选项：`--plugin-dir`（可重复）、`--no-plugins`、`--verbose/-
 | Plugin Store | zip 安全、哈希/签名、安装/更新/回退/卸载、依赖与配置校验、宿主加载 | 真实 zip 包 fixture + 临时 store 目录 + NPS host |
 | Discord transport | DM/Group/Guild/Thread、bot/self/allowlist/mention、分片、错误映射、slash、NPS 生命周期 | fake `IDiscordTransport`，不连接真实网关 |
 | DeepSeek AI | 请求 body/thinking、usage、错误、responder、历史、gate、幂等、NPS 全链路 | fake `IChatClient` + fake HTTP，不调用真实 DeepSeek |
+| DingTalk + Spark | 回调签名/ACK、NLMP 映射、sessionWebhook 回复、分片、Spark HTTP、共享 responder/context/memory、source 隔离 | fake transport + fake IChatClient + 本机 HttpListener |
 | Plugin | 清单探测、适配器覆盖、命令贡献 | 构建宿主并解析真实插件输出 |
 
 ### 6.2 假 Console
