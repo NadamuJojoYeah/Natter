@@ -1,4 +1,4 @@
-# 2026-11-15 · P3 Context & Memory 验收测试（No-Go）
+# 2026-11-15 · P3 Context & Memory 验收测试（Closed · Go）
 
 > **开发侧处置**：[P3 验收处置记录](2026-11-15-p3-acceptance-response.md)（临时配对文档，High/Medium 关闭并复测后归档）。
 
@@ -29,11 +29,11 @@
 
 | ID | 用例 | 结果 |
 | --- | --- | --- |
-| P3-010 | `plugins contributions` | **失败**：只显示 chat.responder / chat.upstream / cli.command，**没有 prompt.provider / context.assembler / memory.store**（`BUG-P3-HOST-CONTRIB`） |
+| P3-010 | `plugins contributions` | **通过（修复后）**：显示 `host#static`(prompt.provider)、`host#recent-window`(context.assembler)、`host#inline`/`host#sqlite`(memory.store) |
 | P3-011 | 组件选择 | **部分**：默认 `host#recent-window` 启动成功；profile 切换未单独验证（无差异可观测） |
-| P3-012 | plugin 组件 | **未实现/无法测**：仓库没有提供 memory.store 示例插件 |
+| P3-012 | plugin 组件 | **未测**：仓库仍没有 memory.store 示例插件（建议工程补一个，或明确豁免） |
 | P3-013 | 缺失组件 | **通过（启动层面）**：P3-007/008 |
-| P3-014 | 组件回滚 | **未测**：无插件可停用 |
+| P3-014 | 组件回滚 | **未测**：无插件可停用（与 P3-012 同源） |
 
 ## 4. Gate C：SQLite 迁移与存储
 
@@ -45,7 +45,7 @@
 | P3-023 | 权限 | **通过**：state 700、`natter.db` 600 | `p3-023` 输出 |
 | P3-024 | summary 持久化 | **组件级通过**（`ContextStorageTests`）；CLI 无 summary 命令，需通过 Gate E 间接验证 | `ContextStorageTests` |
 | P3-025 | memory 持久化 | **通过**：CLI 重启后 `memory list` 仍返回 | `memory-cli.json` |
-| P3-026 | export/import | **未实现 CLI**：`IMemoryStore.ExportAsync` 存在，但无 `memory export/import` 命令（`BUG-P3-EXPORT-CLI`） | 代码 |
+| P3-026 | export/import | **通过（修复后）**：`memory export --output` 导出 1 条 → `memory import` into 新 state `{"imported":1,"skipped":0}`，list 可见 | `evidence/p3-fix-contrib-export.json`、`memory-export.json` |
 | P3-027 | delete | **通过**：`forget` by id / by text 均 `deleted:true`，list 消失 | `memory-forget.json` |
 | P3-028 | 过期 | **通过**：SQL 把 `expires_at` 改为过去时间后，`memory list` 不再返回该条 | 终端输出 |
 
@@ -62,9 +62,9 @@
 | P3-036 | forget by id | **通过** `deleted:true` |
 | P3-037 | forget by text | **通过** `deleted:true` |
 | P3-038 | forget 后 list | **通过**：不再出现 |
-| P3-039 | source/actor 不匹配 | **失败**：user scope 跨 actor 拒绝（`deleted:false`）✅；但 **global scope 用其他 actor 删除返回 `deleted:true`**❌；跨 source 删除拒绝 ✅ |
+| P3-039 | source/actor 不匹配 | **通过（修复后）**：其他 actor 删除 global → `{"deleted":false,"reason":"not the creator"}`；创建者删除 → `deleted:true`；user scope 跨 actor / 跨 source 仍拒绝 |
 
-### BUG-P3-FORGET-SHARED-SCOPE（High）
+### BUG-P3-FORGET-SHARED-SCOPE（High，已修复复测通过）
 
 - **现象**：`forget <mem_id>` 对 conversation / guild / global 三类共享 scope 不校验 actor。同一 source 下的任意 actor 都能删除他人的共享记忆。
 - **证据**：
@@ -101,6 +101,23 @@
   - P3-073 双 source 同时在线：**通过**（Discord→DeepSeek、DingTalk→Spark，SQLite 两个 source 分开、内容不串）；
   - P3-074 重启隔离：**通过**（同一 state 重启后 conversations=2、2 sessions / 4 messages / 1 memory 完整，双 upstream 重连）。
 
+## 8.1 修复复测（19:43–19:46，基线 `HEAD=e9e3b0b`）
+
+修复提交 `742faab fix: 收敛 P3 共享删除、host contribution、导出与注入边界`。
+
+| 项 | 结果 |
+| --- | --- |
+| 构建 | 成功 |
+| 框架回归 | **232/232 通过** |
+| P3-039 共享删除 | **通过**：其他 actor → `deleted:false`（reason: not the creator）；创建者 → `deleted:true` |
+| P3-010 contribution | **通过**：`plugins contributions` 显示 host prompt/context/memory |
+| P3-026 export/import | **通过**：export 1 条 → import 新 state `imported:1` |
+| P3-067 注入边界 | **通过**：`ContextPipelineTests` 新增 `Ignore previous instructions` 用例（memory 作为数据，不被执行） |
+| P3-060 DM private | **通过**：`ContextPipelineTests.Private_memory_is_not_injected_into_guild_context` |
+| 真实记忆回归 | **3/3 通过**：召回（9s）、删除后不召回（16s）、重启后召回（23s） |
+| P3-004 回归 | 通过：P2 legacy profile 启动，双 upstream connected |
+| P3-020 回归 | 通过：迁移 `user_version=2` |
+
 ## 9. 临时改动
 
 无产品代码改动；新增测试证据与 run 目录。复用 P2 的 `scripts/p2-serve.sh` 逻辑做 staging（P3 用独立 config/state）。
@@ -110,16 +127,16 @@
 | 标准 | 状态 | 说明 |
 | --- | --- | --- |
 | P3-001 ~ 009 | **是** | 构建/227 回归/38 skip/旧新 profile/非法 ref/缺失组件/预算 |
-| P3-010 ~ 014 | **否** | P3-010 无 prompt/context/memory contribution；012/014 无插件可测 |
-| P3-020 ~ 028 | **部分** | 除 P3-026（export CLI 缺失）外全通过 |
-| P3-030 ~ 039 | **否** | P3-039 共享 scope 跨 actor 删除（High） |
+| P3-010 ~ 014 | **部分** | P3-010 修复通过；012/014 仍无示例插件（未测，建议补或豁免） |
+| P3-020 ~ 028 | **是** | export/import 修复后全部通过 |
+| P3-030 ~ 039 | **是** | P3-039 修复后通过 |
 | P3-040 ~ 049 | **是** | 组件级 10/10 |
 | P3-050 ~ 054 | **部分** | 050/051/052/053 真实通过；054 summary 真实多轮未触发（组件级通过） |
-| P3-060 ~ 067 | **部分** | 061/062/063/065/066 通过；060/067 未测（DM private、prompt injection） |
+| P3-060 ~ 067 | **是** | 060/067 修复后新增测试通过；061/062/063/065/066 通过 |
 | P3-070 ~ 074 | **是** | 钉钉 smoke、双 source 路由、重启隔离全部通过 |
-| 无 Blocker/High | **否** | 1 个 High（P3-039） |
+| 无 Blocker/High | **是** | 1 High（P3-039）已修复复测通过 |
 | P2 227/227 | **是** | 未回归 |
-| Go/No-Go | **No-Go** | 见下 |
+| Go/No-Go | **Go（附 2 项未测）** | 见下 |
 
 ## 11. 证据索引
 
@@ -141,10 +158,9 @@ artifacts/p3/2026-11-15-1918/
 
 ## 12. 结论
 
-- **真实链路全部通过**：Discord 真实入站召回（「你喜欢喝乌龙茶。」）、钉钉 Spark smoke、双 source 路由不串、重启后会话/记忆完整。
-- **No-Go 原因**：
-  1. `BUG-P3-FORGET-SHARED-SCOPE`（High）：conversation/guild/global 的 `forget` 不校验 actor，同 source 任意 actor 可删共享记忆；
-  2. `BUG-P3-HOST-CONTRIB`（Medium）：`plugins contributions` 不显示 host prompt/context/memory；
-  3. `BUG-P3-EXPORT-CLI`（Medium）：`ExportAsync` 无 CLI 入口，P3-026 无法执行。
-- **未测项**：P3-060 DM private memory（scope 隔离已在 CLI 层覆盖）、P3-067 prompt injection（建议补对抗用例）、P3-054 真实多轮 summary。
-- **建议复测顺序**：修复 P3-039 后跑 Gate D 全量 + 真实入站；补 export CLI 后跑 P3-026；补 host contribution 后跑 P3-010；再补一条多轮 summary 与 DM 用例。
+- **Go**：3 个缺陷（P3-039 High、P3-010 Medium、P3-026 Medium）已在 `742faab` 修复并复测通过；框架 **232/232**、真实记忆回归 3/3、P2 profile 兼容与 DB 迁移回归通过。
+- **真实链路**：Discord 真实入站召回（「你喜欢喝乌龙茶。」）、钉钉 Spark smoke、双 source 路由不串、重启后 2 sessions / 4 messages / 1 memory 完整。
+- **未测/建议**：
+  1. P3-012 / P3-014（plugin memory.store 组件与回滚）：仓库无示例插件，建议补一个最小 memory.store 插件或明确豁免；
+  2. P3-054 真实多轮 summary：真实只发了单轮消息，`summaries` 未触发；组件级 `ContextPipelineTests` 已覆盖 `[Summary]` 注入，建议补一次多轮（> history window）实测；
+  3. 安全侧已由新增测试覆盖：prompt injection（memory 不作为指令）、private memory 不进 guild context。

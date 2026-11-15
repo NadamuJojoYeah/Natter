@@ -1,11 +1,11 @@
-# 开发侧处置记录：2026-11-15 P3 Context & Memory 验收（No-Go）
+# 开发侧处置记录：2026-11-15 P3 Context & Memory 验收（Closed · Go）
 
-> **状态**：Fixed · Ready for test-side retest（1 High + 2 Medium 已修复；DM private、prompt injection、summary 增量已有回归）  
+> **状态**：**Closed · Go**（1 High + 2 Medium 修复并复测通过；2026-11-15 19:47 测试侧签收）  
 > **类型**：测试配对处置记录，不是长期设计文档  
 > **对应测试**：[P3 Context & Memory 验收测试](2026-11-15-p3-acceptance.md)  
-> **对应计划**：[P3 Acceptance Test Plan](P3_ACCEPTANCE.md)  
+> **对应计划**：[P3 Acceptance Test Plan](../P3_ACCEPTANCE.md)  
 > **基线**：`HEAD=04831df`；测试侧新增测试资产，产品代码未修改  
-> **归档**：1 个 High、2 个 Medium、3 个未测项关闭并复测后，与测试记录一并归档
+> **归档**：**Archived**（2026-11-15 19:50，与测试记录一并移入 `docs/testing/archive/`）
 
 ---
 
@@ -345,7 +345,7 @@ P3 签收前不进入 P4。
 
 1. 与 [P3 验收测试](2026-11-15-p3-acceptance.md) 一起移入 `docs/testing/archive/`；
 2. 标记 `Archived`；
-3. 更新 [测试记录索引](README.md)；
+3. 更新 [测试记录索引](../README.md)；
 4. 保留缺陷编号、修复提交 SHA、复测证据；
 5. 不保留 state/插件 staging/凭据。
 
