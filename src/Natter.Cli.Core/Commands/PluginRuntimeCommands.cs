@@ -181,7 +181,10 @@ public sealed class PluginsContributionsCommand : ICliCommandHandler
                 status = contribution.Status,
             })
             .ToArray();
-        var rows = pluginRows.Concat(hostRows).ToArray();
+        var rows = pluginRows.Concat(hostRows)
+            .GroupBy(row => (row.owner, row.type, row.id))
+            .Select(group => group.First())
+            .ToArray();
 
         if (invocation.HasFlag("json"))
         {

@@ -189,6 +189,32 @@ public sealed class AiChatResponderTests
         Assert.Null(authCommand);
     }
 
+    [Fact]
+    public async Task Clipped_provider_output_is_retried_and_never_reaches_history()
+    {
+        var calls = 0;
+        var chat = new FakeChatClient
+        {
+            AsyncResponseFactory = _ => Task.FromResult(++calls == 1
+                ? new ChatResponse(new ChatMessage(ChatRole.Assistant, "<response clipped>"))
+                : new ChatResponse(new ChatMessage(ChatRole.Assistant, "complete answer"))),
+        };
+        var responder = Build(chat, 20);
+        var source = ChatTestData.Source();
+        var command = Assert.IsType<MessageSendCommand>(await responder.RespondAsync(
+            ChatTestData.CreatedEvent(source, ChatTestData.Message(source, id: "m-clip"), "evt:clip")));
+        Assert.Equal("complete answer", command.Payload.Content.Text);
+        Assert.Equal(2, calls);
+
+        var alwaysClipped = new FakeChatClient
+        {
+            ResponseFactory = _ => new ChatResponse(new ChatMessage(ChatRole.Assistant, "<response clipped>")),
+        };
+        var fallback = await Build(alwaysClipped, 20).RespondAsync(
+            ChatTestData.CreatedEvent(source, ChatTestData.Message(source, id: "m-clip2"), "evt:clip2"));
+        Assert.Equal("AI is temporarily unavailable.", Assert.IsType<MessageSendCommand>(fallback).Payload.Content.Text);
+    }
+
     private static (AiChatResponder Responder, FakeChatClient Chat, Source Source, TestClock Clock) CreateResponder(
         int maxHistoryMessages = 20)
     {

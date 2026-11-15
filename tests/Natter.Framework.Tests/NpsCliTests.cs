@@ -170,4 +170,26 @@ public sealed class NpsCliTests
         };
 
     private static NatterCliOptions NoPlugins() => new() { LoadPlugins = false };
+    [Fact]
+    public async Task Host_and_plugin_contributions_are_deduplicated()
+    {
+        var console = new StringConsole();
+        var plugin = new Natter.Sample.Plugin.Memory.MemoryStorePlugin();
+        var exitCode = await NatterCli.RunAsync(
+            ["plugins", "contributions", "--json"],
+            console,
+            NoPlugins(),
+            builder => builder.AddEmbeddedNpsPlugin(
+                Natter.Sample.Plugin.Memory.MemoryStorePlugin.Manifest,
+                plugin));
+
+        Assert.Equal(CliExitCodes.Success, exitCode);
+        using var document = JsonDocument.Parse(console.Output);
+        var rows = document.RootElement.EnumerateArray()
+            .Where(item => item.GetProperty("owner").GetString() == "natter.sample.memory")
+            .ToArray();
+        Assert.Single(rows);
+        Assert.Equal("memory.store", rows[0].GetProperty("type").GetString());
+    }
+
 }

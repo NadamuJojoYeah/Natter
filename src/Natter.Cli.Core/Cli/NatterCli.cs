@@ -38,6 +38,18 @@ public static class NatterCli
 
         options.AddDefaultPluginLocations();
 
+        using var instanceLock = args.Length > 0
+                                 && string.Equals(args[0], "serve", StringComparison.OrdinalIgnoreCase)
+            ? StateDirectoryLock.TryAcquire(options, console)
+            : null;
+        if (args.Length > 0
+            && string.Equals(args[0], "serve", StringComparison.OrdinalIgnoreCase)
+            && !string.IsNullOrWhiteSpace(options.StateDirectory)
+            && instanceLock is null)
+        {
+            return CliExitCodes.Failure;
+        }
+
         var builder = NatterApplicationBuilder.Create()
             .AddNatterFramework()
             .AddModule<CliCoreCompositionModule>()

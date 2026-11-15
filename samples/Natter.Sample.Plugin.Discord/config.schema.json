@@ -40,8 +40,14 @@
     "maxAttachmentBytes": { "type": "integer", "minimum": 1 },
     "commands": {
       "type": "object",
-      "patternProperties": { "^[a-z0-9_-]{1,32}$": { "type": "boolean" } },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "properties": {
+        "ask": { "type": "boolean" },
+        "remember": { "type": "boolean" },
+        "forget": { "type": "boolean" },
+        "memory": { "type": "boolean" },
+        "reset": { "type": "boolean" }
+      }
     },
     "interactionTtlSeconds": { "type": "integer", "minimum": 1, "maximum": 900 },
     "readyTimeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 300 },

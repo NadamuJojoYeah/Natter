@@ -17,7 +17,8 @@ public sealed class ChatCommandRouter(
     ISummaryStore summaries,
     IConversationStore conversations,
     ChatCommandFactory commands,
-    IContextComponentCatalog? components = null) : IChatCommandRouter
+    IContextComponentCatalog? components = null,
+    IProfileMemoryStoreResolver? memoryResolver = null) : IChatCommandRouter
 {
     private static readonly string[] Help =
     [
@@ -68,7 +69,7 @@ public sealed class ChatCommandRouter(
                 ephemeral: true);
         }
 
-        var item = await ActiveMemory.WriteAsync(
+        var item = await Store(chatEvent, interaction).WriteAsync(
             new MemoryWriteRequest(
                 chatEvent.Source,
                 interaction.Conversation,
@@ -91,7 +92,7 @@ public sealed class ChatCommandRouter(
             return Reply(chatEvent, interaction, "Usage: /forget target:<id|text>", ephemeral: true);
 
         var byId = target.StartsWith("mem_", StringComparison.Ordinal);
-        var deleted = await ActiveMemory.DeleteAsync(
+        var deleted = await Store(chatEvent, interaction).DeleteAsync(
             new MemoryDeleteRequest(
                 chatEvent.Source,
                 interaction.Conversation,
@@ -127,7 +128,7 @@ public sealed class ChatCommandRouter(
             && int.TryParse(limitText, out var parsed))
             limit = Math.Clamp(parsed, 1, 50);
 
-        var items = await ActiveMemory.SearchAsync(
+        var items = await Store(chatEvent, interaction).SearchAsync(
             new MemoryQuery(
                 chatEvent.Source,
                 interaction.Conversation,
@@ -163,13 +164,17 @@ public sealed class ChatCommandRouter(
         return Reply(chatEvent, interaction, "Conversation reset.", ephemeral: true);
     }
 
-    private IMemoryStore ActiveMemory
-        => components is not null
-           && ProfileContext.Current is { } profile
-           && components.TryGetMemory(profile.Memory.Store, out var selected)
-           && selected is not null
+    private IMemoryStore Store(InteractionCreatedEvent chatEvent, Interaction interaction)
+    {
+        if (memoryResolver is not null)
+            return memoryResolver.Resolve(chatEvent.Source, interaction.Conversation, interaction.User);
+        return components is not null
+               && ProfileContext.Current is { } profile
+               && components.TryGetMemory(profile.Memory.Store, out var selected)
+               && selected is not null
             ? selected
             : memories;
+    }
 
     private ChatCommand Reply(
         InteractionCreatedEvent chatEvent,

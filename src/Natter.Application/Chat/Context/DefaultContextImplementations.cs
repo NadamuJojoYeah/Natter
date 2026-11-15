@@ -247,6 +247,11 @@ public sealed class InMemoryMemoryStore : IMemoryStore
         return ValueTask.FromResult(count);
     }
 
+    public MemoryExport ExportAll()
+    {
+        lock (_gate)
+            return new MemoryExport(1, DateTimeOffset.UtcNow, _items.Values.OrderBy(item => item.CreatedAt).ToArray());
+    }
 }
 
 /// <summary>Small in-memory summary store for embedded/non-persistent hosts and tests.</summary>

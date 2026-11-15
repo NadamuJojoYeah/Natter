@@ -90,6 +90,15 @@ public sealed class ChatCompositionModule : ICompositionModule
                 context.Options.PluginConfigDirectory,
                 context.Options.ProfileOverride));
         services.AddSingleton<Natter.Application.Chat.IProfileResolver, Natter.Application.Chat.ProfileResolver>();
+        services.AddSingleton<Natter.Application.Chat.IProfileMemoryStoreResolver, Natter.Application.Chat.ProfileMemoryStoreResolver>();
+        services.AddSingleton<Natter.Application.Chat.IChatCommandRouter>(provider =>
+            new Natter.Application.Chat.ChatCommandRouter(
+                provider.GetRequiredService<Natter.Application.Chat.IMemoryStore>(),
+                provider.GetRequiredService<Natter.Application.Chat.ISummaryStore>(),
+                provider.GetRequiredService<Natter.Application.Chat.IConversationStore>(),
+                provider.GetRequiredService<ChatCommandFactory>(),
+                provider.GetRequiredService<Natter.Application.Chat.IContextComponentCatalog>(),
+                provider.GetRequiredService<Natter.Application.Chat.IProfileMemoryStoreResolver>()));
         services.AddSingleton<Natter.Application.Chat.IChatResponder>(provider =>
             new Natter.Application.Chat.ProfileAwareChatResponder(
                 provider.GetRequiredService<Natter.Application.Chat.IChatResponderRegistry>(),

@@ -156,6 +156,62 @@ public sealed class RuntimeCliTests
     }
 
     [Fact]
+    public async Task Cli_memory_follows_the_profile_selected_memory_store()
+    {
+        using var temp = new TempDirectory();
+        var config = Path.Combine(temp.Path, "config");
+        var state = Path.Combine(temp.Path, "state");
+        Directory.CreateDirectory(config);
+        File.WriteAllText(Path.Combine(config, "profiles.json"), """
+            {
+              "schemaVersion": 1,
+              "defaultProfile": "sample",
+              "profiles": [
+                {
+                  "id": "sample",
+                  "supportTier": 2,
+                  "match": { "protocols": ["discord"] },
+                  "ai": { "provider": "missing#provider" },
+                  "memory": { "store": "natter.sample.memory#file" }
+                }
+              ]
+            }
+            """);
+        var samplePath = Path.Combine(temp.Path, "sample-memory.json");
+        var plugin = new Natter.Sample.Plugin.Memory.MemoryStorePlugin(samplePath);
+        var options = new NatterCliOptions
+        {
+            LoadPlugins = false,
+            ConfigDirectory = config,
+            StateDirectory = state,
+        };
+        var remember = new StringConsole();
+        Assert.Equal(CliExitCodes.Success, await NatterCli.RunAsync(
+            ["remember", "sample profile memory", "--source", "discord:discord:bot", "--actor", "u1", "--conversation", "c1"],
+            remember,
+            options,
+            builder => builder.AddEmbeddedNpsPlugin(
+                Natter.Sample.Plugin.Memory.MemoryStorePlugin.Manifest,
+                plugin)));
+
+        var list = new StringConsole();
+        Assert.Equal(CliExitCodes.Success, await NatterCli.RunAsync(
+            ["memory", "list", "--json", "--source", "discord:discord:bot", "--actor", "u1", "--conversation", "c1"],
+            list,
+            options,
+            builder => builder.AddEmbeddedNpsPlugin(
+                Natter.Sample.Plugin.Memory.MemoryStorePlugin.Manifest,
+                plugin)));
+        Assert.Contains("sample profile memory", list.Output);
+
+        using var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={Path.Combine(state, "natter.db")}");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT COUNT(*) FROM memory_items;";
+        Assert.Equal(0, Convert.ToInt32(command.ExecuteScalar()));
+    }
+
+    [Fact]
     public async Task Memory_export_import_roundtrip_is_scoped_and_private_file()
     {
         using var temp = new TempDirectory();

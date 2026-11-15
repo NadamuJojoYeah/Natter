@@ -6,7 +6,7 @@ using Natter.Cli.Abstractions;
 namespace Natter.Cli.Core.Commands;
 
 /// <summary>Explicit, user-confirmed memory. No model inference is performed here.</summary>
-public sealed class RememberCommand(IMemoryStore store) : ICliCommandHandler
+public sealed class RememberCommand(IProfileMemoryStoreResolver resolver) : ICliCommandHandler
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -24,7 +24,8 @@ public sealed class RememberCommand(IMemoryStore store) : ICliCommandHandler
         }
 
         var context = MemoryCommandContext.Parse(invocation);
-        var item = await store.WriteAsync(
+        var selectedStore = resolver.Resolve(context.Source, context.Conversation, context.User);
+        var item = await selectedStore.WriteAsync(
             new MemoryWriteRequest(
                 context.Source,
                 context.Conversation,
@@ -46,7 +47,7 @@ public sealed class RememberCommand(IMemoryStore store) : ICliCommandHandler
     }
 }
 
-public sealed class ForgetCommand(IMemoryStore store, ISummaryStore summaries) : ICliCommandHandler
+public sealed class ForgetCommand(IProfileMemoryStoreResolver resolver, ISummaryStore summaries) : ICliCommandHandler
 {
     public async ValueTask<int> ExecuteAsync(CliInvocation invocation, CancellationToken cancellationToken = default)
     {
@@ -58,7 +59,8 @@ public sealed class ForgetCommand(IMemoryStore store, ISummaryStore summaries) :
         }
 
         var context = MemoryCommandContext.Parse(invocation);
-        var deleted = await store.DeleteAsync(
+        var selectedStore = resolver.Resolve(context.Source, context.Conversation, context.User);
+        var deleted = await selectedStore.DeleteAsync(
             new MemoryDeleteRequest(context.Source, context.Conversation, context.User,
                 MemoryId: value.StartsWith("mem_", StringComparison.Ordinal) ? value : null,
                 Text: value.StartsWith("mem_", StringComparison.Ordinal) ? null : value),
@@ -87,7 +89,7 @@ public sealed class ForgetCommand(IMemoryStore store, ISummaryStore summaries) :
     }
 }
 
-public sealed class MemoryListCommand(IMemoryStore store) : ICliCommandHandler
+public sealed class MemoryListCommand(IProfileMemoryStoreResolver resolver) : ICliCommandHandler
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -98,7 +100,8 @@ public sealed class MemoryListCommand(IMemoryStore store) : ICliCommandHandler
     public async ValueTask<int> ExecuteAsync(CliInvocation invocation, CancellationToken cancellationToken = default)
     {
         var context = MemoryCommandContext.Parse(invocation);
-        var items = await store.SearchAsync(
+        var selectedStore = resolver.Resolve(context.Source, context.Conversation, context.User);
+        var items = await selectedStore.SearchAsync(
             new MemoryQuery(
                 context.Source,
                 context.Conversation,
@@ -147,7 +150,7 @@ internal sealed record MemoryCommandContext(Source Source, Conversation Conversa
 }
 
 /// <summary>Exports visible memory as a versioned envelope (memory only, no summary text).</summary>
-public sealed class MemoryExportCommand(IMemoryStore store) : ICliCommandHandler
+public sealed class MemoryExportCommand(IProfileMemoryStoreResolver resolver) : ICliCommandHandler
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -159,7 +162,8 @@ public sealed class MemoryExportCommand(IMemoryStore store) : ICliCommandHandler
     public async ValueTask<int> ExecuteAsync(CliInvocation invocation, CancellationToken cancellationToken = default)
     {
         var context = MemoryCommandContext.Parse(invocation);
-        var export = await store.ExportAsync(
+        var selectedStore = resolver.Resolve(context.Source, context.Conversation, context.User);
+        var export = await selectedStore.ExportAsync(
             new MemoryExportRequest(context.Source, context.Conversation, context.User),
             cancellationToken).ConfigureAwait(false);
         var json = JsonSerializer.Serialize(export, JsonOptions);
@@ -184,7 +188,7 @@ public sealed class MemoryExportCommand(IMemoryStore store) : ICliCommandHandler
 }
 
 /// <summary>Imports a memory envelope; only current scope/source/actor-visible items are accepted.</summary>
-public sealed class MemoryImportCommand(IMemoryStore store) : ICliCommandHandler
+public sealed class MemoryImportCommand(IProfileMemoryStoreResolver resolver) : ICliCommandHandler
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -233,7 +237,8 @@ public sealed class MemoryImportCommand(IMemoryStore store) : ICliCommandHandler
             return CliExitCodes.Failure;
         }
 
-        var imported = await store.ImportAsync(
+        var selectedStore = resolver.Resolve(context.Source, context.Conversation, context.User);
+        var imported = await selectedStore.ImportAsync(
             new MemoryImportRequest(
                 context.Source,
                 context.Conversation,

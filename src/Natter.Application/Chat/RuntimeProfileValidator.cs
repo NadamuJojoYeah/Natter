@@ -18,15 +18,23 @@ public static class RuntimeProfileValidator
         var disabled = new HashSet<string>(StringComparer.Ordinal);
         foreach (var profile in set.Profiles)
         {
-            var missingComponent = components is not null
-                                   && (!components.TryGetPrompt(profile.Prompt.Provider, out _)
-                                       || !components.TryGetAssembler(profile.Context.Assembler, out _)
-                                       || !components.TryGetMemory(profile.Memory.Store, out _));
-            if (missingComponent)
+            var missingComponents = new List<string>();
+            if (components is not null && !components.TryGetPrompt(profile.Prompt.Provider, out _))
+                missingComponents.Add($"prompt.provider={profile.Prompt.Provider}");
+            if (components is not null && !components.TryGetAssembler(profile.Context.Assembler, out _))
+                missingComponents.Add($"context.assembler={profile.Context.Assembler}");
+            if (components is not null && !components.TryGetMemory(profile.Memory.Store, out _))
+                missingComponents.Add($"memory.store={profile.Memory.Store}");
+            if (missingComponents.Count > 0)
             {
                 if (profile.SupportTier == 1 || set.OverrideProfile is not null)
+                {
                     throw new InvalidOperationException(
-                        $"Runtime profile '{profile.Id}' references a missing prompt/context/memory component.");
+                        $"Runtime profile '{profile.Id}' references missing component(s): "
+                        + string.Join(", ", missingComponents)
+                        + ". Enable the owning plugin or change memory.store to host#sqlite; "
+                        + "silent fallback is disabled.");
+                }
                 disabled.Add(profile.Id);
                 continue;
             }

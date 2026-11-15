@@ -205,10 +205,19 @@ public sealed class AiChatResponder : IChatResponder
             var options = string.IsNullOrWhiteSpace(profile?.Ai.Model)
                 ? null
                 : new ChatOptions { ModelId = profile.Ai.Model };
-            var response = await _chatClient.GetResponseAsync(messages, options, cancellationToken)
-                .ConfigureAwait(false);
+            var text = await CallAsync(messages, options, cancellationToken).ConfigureAwait(false);
+            if (IsClipped(text))
+            {
+                _log.Warning("AI provider returned a clipped response; retrying once.");
+                text = await CallAsync(messages, options, cancellationToken).ConfigureAwait(false);
+            }
 
-            var text = response.Text?.Trim();
+            if (IsClipped(text))
+            {
+                _log.Warning("AI provider still returned a clipped response; using fallback text.");
+                return new GenerationResult(FallbackText());
+            }
+
             if (string.IsNullOrWhiteSpace(text))
                 return new GenerationResult(
                     string.IsNullOrWhiteSpace(_options.EmptyResponseText) ? null : _options.EmptyResponseText);
@@ -235,6 +244,22 @@ public sealed class AiChatResponder : IChatResponder
             return new GenerationResult(FallbackText());
         }
     }
+
+    private async ValueTask<string?> CallAsync(
+        IReadOnlyList<ChatMessage> messages,
+        ChatOptions? options,
+        CancellationToken cancellationToken)
+    {
+        var response = await _chatClient.GetResponseAsync(messages, options, cancellationToken)
+            .ConfigureAwait(false);
+        return response.Text?.Trim();
+    }
+
+    private static bool IsClipped(string? text)
+        => text is not null
+           && (text.Contains("<response clipped>", StringComparison.OrdinalIgnoreCase)
+               || text.Contains("<response truncated>", StringComparison.OrdinalIgnoreCase)
+               || text.Contains("[response clipped]", StringComparison.OrdinalIgnoreCase));
 
     private string? FallbackText()
         => string.IsNullOrWhiteSpace(_options.FallbackText) ? null : _options.FallbackText;
