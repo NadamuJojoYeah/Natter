@@ -1,16 +1,21 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "required": ["appSecret", "botId"],
+  "required": ["clientId", "clientSecret", "botId"],
   "additionalProperties": false,
   "properties": {
-    "appSecret": {
+    "clientId": { "type": "string", "minLength": 1 },
+    "clientSecret": {
       "type": "string",
-      "pattern": "^\\$\\{secret:DINGTALK_APP_SECRET\\}$",
-      "description": "Secret reference only; the callback signing secret comes from IPluginSecrets."
+      "pattern": "^\\$\\{secret:DINGTALK_CLIENT_SECRET\\}$",
+      "description": "Secret reference only; the Stream client secret comes from IPluginSecrets."
     },
     "botId": { "type": "string", "minLength": 1 },
-    "listenPrefix": { "type": "string", "pattern": "^https?://" },
+    "robotCode": { "type": "string" },
+    "streamGatewayUrl": { "type": "string", "pattern": "^https?://" },
+    "streamTopic": { "type": "string" },
+    "reconnectBaseDelayMs": { "type": "integer", "minimum": 0, "maximum": 60000 },
+    "reconnectMaxDelayMs": { "type": "integer", "minimum": 0, "maximum": 300000 },
     "maxClockSkewMinutes": { "type": "integer", "minimum": 1, "maximum": 1440 },
     "requireMention": { "type": "boolean" },
     "conversations": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },

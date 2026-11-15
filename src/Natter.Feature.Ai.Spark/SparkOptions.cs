@@ -4,13 +4,13 @@ public sealed class SparkOptions
 {
     public string? ApiKey { get; set; }
 
-    public string BaseUrl { get; set; } = "https://spark-api-open.xf-yun.com/v1";
+    public string BaseUrl { get; set; } = "https://maas-api.cn-huabei-1.xf-yun.com/v2";
 
-    public string Model { get; set; } = "generalv3.5";
+    public string Model { get; set; } = "spark-x2.5-1.7b";
+
+    public string Thinking { get; set; } = "disabled";
 
     public string SystemPrompt { get; set; } = "You are Natter, a concise assistant.";
-
-    public double Temperature { get; set; } = 0.7;
 
     public int MaxOutputTokens { get; set; } = 1024;
 

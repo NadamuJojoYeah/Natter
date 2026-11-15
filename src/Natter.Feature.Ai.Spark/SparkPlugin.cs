@@ -97,6 +97,8 @@ public sealed class SparkPlugin : INatterPlugin
 
         if (string.IsNullOrWhiteSpace(options.Model))
             throw new InvalidOperationException("Spark config 'model' must not be empty.");
+        if (options.Thinking is not ("disabled" or "enabled" or "auto"))
+            throw new InvalidOperationException("Spark config 'thinking' must be disabled/enabled/auto.");
         if (options.Streaming)
             throw new InvalidOperationException("Spark streaming is not enabled in this Natter version.");
         if (options.Tools is { Count: > 0 })
@@ -127,6 +129,7 @@ public sealed class SparkStatusCommandHandler(SparkOptions options, SparkMetrics
         var snapshot = new SparkStatusSnapshot(
             "iflytek-spark",
             options.Model,
+            options.Thinking,
             host,
             options.Streaming,
             options.HistoryMaxMessages,
@@ -141,6 +144,7 @@ public sealed class SparkStatusCommandHandler(SparkOptions options, SparkMetrics
 
         invocation.Console.Out.WriteLine("provider: iflytek-spark");
         invocation.Console.Out.WriteLine($"model: {snapshot.Model}");
+        invocation.Console.Out.WriteLine($"thinking: {snapshot.Thinking}");
         invocation.Console.Out.WriteLine($"baseUrlHost: {snapshot.BaseUrlHost}");
         invocation.Console.Out.WriteLine($"historyConversations: {snapshot.HistoryConversations}");
         invocation.Console.Out.WriteLine($"requests: {snapshot.Metrics.Requests}");
@@ -157,6 +161,7 @@ public sealed class SparkStatusCommandHandler(SparkOptions options, SparkMetrics
 public sealed record SparkStatusSnapshot(
     string Provider,
     string Model,
+    string Thinking,
     string BaseUrlHost,
     bool Streaming,
     int HistoryMaxMessages,

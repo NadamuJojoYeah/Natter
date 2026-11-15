@@ -126,8 +126,13 @@ public sealed class SparkChatClient : IChatClient
                 ["content"] = message.Text ?? string.Empty,
             }).ToArray(),
             ["stream"] = false,
-            ["temperature"] = options?.Temperature ?? (float?)_options.Temperature,
-            ["max_tokens"] = options?.MaxOutputTokens ?? _options.MaxOutputTokens,
+            ["max_completion_tokens"] = options?.MaxOutputTokens ?? _options.MaxOutputTokens,
+            ["thinking"] = new Dictionary<string, object?>
+            {
+                ["type"] = string.Equals(_options.Thinking, "enabled", StringComparison.OrdinalIgnoreCase)
+                    ? "enabled"
+                    : "disabled",
+            },
         };
     }
 
@@ -188,6 +193,11 @@ public sealed class SparkChatClient : IChatClient
                 content = dc.GetString() ?? string.Empty;
             }
 
+            var reasoning = message.ValueKind == JsonValueKind.Object
+                             && message.TryGetProperty("reasoning_content", out var rc)
+                             && rc.ValueKind == JsonValueKind.String
+                ? rc.GetString()
+                : null;
             var usage = ParseUsage(root);
             var responseObject = new ChatResponse(new ChatMessage(ChatRole.Assistant, content))
             {
@@ -201,6 +211,7 @@ public sealed class SparkChatClient : IChatClient
                 AdditionalProperties = new AdditionalPropertiesDictionary
                 {
                     ["spark.usage"] = usage,
+                    ["spark.has_reasoning"] = reasoning is { Length: > 0 },
                 },
             };
 
@@ -261,7 +272,12 @@ public sealed class SparkChatClient : IChatClient
             : role.Value ?? "user";
 }
 
-public sealed record SparkUsage(long PromptTokens, long CompletionTokens, long TotalTokens)
+public sealed record SparkUsage(
+    long PromptTokens,
+    long CompletionTokens,
+    long TotalTokens,
+    long CachedTokens = 0,
+    long ReasoningTokens = 0)
 {
     public static SparkUsage Empty { get; } = new(0, 0, 0);
 }

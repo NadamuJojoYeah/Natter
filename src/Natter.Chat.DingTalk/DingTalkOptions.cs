@@ -4,8 +4,23 @@ public sealed class DingTalkOptions
 {
     public string? AppSecret { get; set; }
 
+    public string? ClientId { get; set; }
+
+    public string? ClientSecret { get; set; }
+
     public string BotId { get; set; } = string.Empty;
 
+    public string? RobotCode { get; set; }
+
+    public string StreamGatewayUrl { get; set; } = "https://api.dingtalk.com/v1.0/gateway/connections/open";
+
+    public string StreamTopic { get; set; } = "/v1.0/im/bot/messages/get";
+
+    public int ReconnectBaseDelayMs { get; set; } = 500;
+
+    public int ReconnectMaxDelayMs { get; set; } = 30000;
+
+    /// <summary>Legacy HTTP callback listener; Stream mode does not use this.</summary>
     public string ListenPrefix { get; set; } = "http://127.0.0.1:5088/dingtalk/";
 
     public int MaxClockSkewMinutes { get; set; } = 60;

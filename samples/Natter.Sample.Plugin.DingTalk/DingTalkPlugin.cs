@@ -9,7 +9,7 @@ namespace Natter.Sample.Plugin.DingTalk;
 
 public sealed class DingTalkPlugin : INatterPlugin
 {
-    public const string AppSecretName = "DINGTALK_APP_SECRET";
+    public const string ClientSecretName = "DINGTALK_CLIENT_SECRET";
 
     private readonly IDingTalkTransport? _transport;
 
@@ -28,23 +28,26 @@ public sealed class DingTalkPlugin : INatterPlugin
     public ValueTask ConfigureAsync(IPluginContext context, CancellationToken cancellationToken = default)
     {
         var options = context.Config.Get<DingTalkOptions>();
-        if (!SecretReference.TryParse(options.AppSecret, out var secret)
-            || !string.Equals(secret.Name, AppSecretName, StringComparison.Ordinal))
+        if (string.IsNullOrWhiteSpace(options.ClientId))
+            throw new InvalidOperationException("DingTalk Stream config 'clientId' must not be empty.");
+
+        if (!SecretReference.TryParse(options.ClientSecret, out var secret)
+            || !string.Equals(secret.Name, ClientSecretName, StringComparison.Ordinal))
         {
             throw new InvalidOperationException(
-                "DingTalk config 'appSecret' must be '${secret:DINGTALK_APP_SECRET}'; literal secrets are not accepted.");
+                "DingTalk config 'clientSecret' must be '${secret:DINGTALK_CLIENT_SECRET}'; literal secrets are not accepted.");
         }
 
         if (string.IsNullOrWhiteSpace(options.BotId))
             throw new InvalidOperationException("DingTalk config 'botId' must not be empty.");
 
-        var appSecret = context.Secrets.GetRequired(AppSecretName);
+        var clientSecret = context.Secrets.GetRequired(ClientSecretName);
         var source = Source.Create("dingtalk", "dingtalk", options.BotId);
         var services = context.Services.Collection;
 
         services.AddSingleton(options);
         services.AddSingleton(source);
-        services.AddSingleton<IDingTalkTransport>(provider => _transport ?? new DingTalkWebhookTransport(options, appSecret));
+        services.AddSingleton<IDingTalkTransport>(provider => _transport ?? new DingTalkStreamTransport(options, clientSecret));
         services.AddSingleton<DingTalkChatUpstream>();
         services.AddTransient<DingTalkStatusCommandHandler>();
 
@@ -84,7 +87,8 @@ public sealed class DingTalkStatusCommandHandler(DingTalkOptions options, DingTa
             source = upstream.Source.Key,
             connected = upstream.IsConnected,
             botId = options.BotId,
-            listenPrefix = options.ListenPrefix,
+            streamGatewayUrl = options.StreamGatewayUrl,
+            streamTopic = options.StreamTopic,
             requireMention = options.RequireMention,
             conversations = options.Conversations,
             users = options.Users,
@@ -98,7 +102,8 @@ public sealed class DingTalkStatusCommandHandler(DingTalkOptions options, DingTa
 
         invocation.Console.Out.WriteLine($"source: {snapshot.source}");
         invocation.Console.Out.WriteLine($"connected: {snapshot.connected.ToString().ToLowerInvariant()}");
-        invocation.Console.Out.WriteLine($"listenPrefix: {snapshot.listenPrefix}");
+        invocation.Console.Out.WriteLine($"streamGatewayUrl: {snapshot.streamGatewayUrl}");
+        invocation.Console.Out.WriteLine($"streamTopic: {snapshot.streamTopic}");
         invocation.Console.Out.WriteLine($"requireMention: {snapshot.requireMention.ToString().ToLowerInvariant()}");
         invocation.Console.Out.WriteLine($"conversations: {(snapshot.conversations.Count == 0 ? "*" : string.Join(",", snapshot.conversations))}");
         invocation.Console.Out.WriteLine($"users: {(snapshot.users.Count == 0 ? "*" : string.Join(",", snapshot.users))}");

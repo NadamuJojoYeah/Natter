@@ -11,13 +11,13 @@
   },
   "permissions": [
     "network",
-    "secrets:DINGTALK_APP_SECRET",
+    "secrets:DINGTALK_CLIENT_SECRET",
     "chat.read",
     "chat.send",
     "cli.commands"
   ],
   "secrets": [
-    { "name": "DINGTALK_APP_SECRET", "required": true }
+    { "name": "DINGTALK_CLIENT_SECRET", "required": true }
   ],
   "configSchema": "config.schema.json",
   "contributions": [
