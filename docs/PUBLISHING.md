@@ -187,7 +187,7 @@ builder => builder
 
 - [ ] `dotnet test tests/Natter.Framework.Tests` 全绿；
 - [ ] 目标 RID 的可执行文件能运行 `version` / `doctor`；
-- [ ] `plugins/` 目录结构正确，`plugins list` 显示 `Loaded`；
+- [ ] `plugins/` 目录结构正确，NPS 插件 `plugins list --detail` 显示 `Activated`，legacy 插件显示 `Loaded`；
 - [ ] `ports` 显示插件覆盖（如 `plugin:greetings`）；
 - [ ] `exec "demo --times 2" "metrics"` 能看到事件被多个订阅者消费；
 - [ ] Android 使用正式签名并检查 `targetSdkVersion`；

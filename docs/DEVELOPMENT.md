@@ -57,6 +57,7 @@ dotnet test tests/Natter.Framework.Tests/Natter.Framework.Tests.csproj
 | [src/Natter.Infrastructure](../src/Natter.Infrastructure) | Rx 总线、默认适配器、组合根、插件加载、NLMP 入口/调度 | Application + Domain + Chat + Abstractions |
 | [src/Natter.Chat](../src/Natter.Chat) | NLMP 0.1 模型、键、事件/命令、能力降级、幂等/去重、JSON | Abstractions |
 | [src/Natter.Chat.Satori](../src/Natter.Chat.Satori) | Satori 事件/元素/feature/API 映射与会话序号 | Chat + Abstractions |
+| [src/Natter.Plugin.Abstractions](../src/Natter.Plugin.Abstractions) | NPS v1 Host API：manifest、插件契约、配置 schema、秘密、权限、诊断 | Abstractions + Chat + Application + Cli.Abstractions |
 | [src/Natter.Cli.Abstractions](../src/Natter.Cli.Abstractions) | CLI 契约（`IConsole`、命令描述符） | 无 |
 | [src/Natter.Cli.Core](../src/Natter.Cli.Core) | CLI 内核、内建命令、输出渲染 | Infrastructure 及以下 |
 | [src/Natter.Cli](../src/Natter.Cli) | 桌面宿主 | Cli.Core |
@@ -71,7 +72,8 @@ dotnet test tests/Natter.Framework.Tests/Natter.Framework.Tests.csproj
 3. 宿主只通过 `NatterCli.RunAsync` 或 `NatterApplicationBuilder` 组装，不直接 new 适配器。
 4. 领域层不读环境变量、不写 Console、不发 HTTP。
 5. `Natter.Chat` 不引用 Infrastructure、宿主或 Satori 类型；`Natter.Chat.Satori` 只依赖 Chat + Abstractions。
-6. 平台 SDK/协议类型只存在于协议适配器或 `Natter.Chat.Satori` 内部，不进入 NLMP 核心。
+6. `Natter.Plugin.Abstractions` 只放 Host API/契约，不引用 Infrastructure/宿主；插件只引用它，不引用 Infrastructure。
+7. 平台 SDK/协议类型只存在于协议适配器或 `Natter.Chat.Satori` 内部，不进入 NLMP 核心。
 
 违反依赖方向通常意味着“端口定义放错了层”。端口接口应放在**使用它的那一层**：
 
@@ -386,6 +388,8 @@ Assert.Contains("exporting up to 10", console.Output);
 
 ### 4.5 新增插件
 
+> 新插件优先按 [NPS v1](PLUGIN_SPEC.md)：`plugin.json`（`schemaVersion: 1`）+ `INatterPlugin` + `IContributionRegistry`，依赖图/配置/权限/激活由 `NpsPluginRuntime` 管理。以下 `IPluginModule` 步骤用于 legacy 兼容与嵌入式宿主。
+
 最小步骤：
 
 1. 新建 `net10.0` 类库，引用 `Natter.Abstractions`、`Natter.Cli.Abstractions`（贡献命令时）与 `System.Reactive`（订阅时）。
@@ -641,6 +645,7 @@ CLI 全局选项：`--plugin-dir`（可重复）、`--no-plugins`、`--verbose/-
 | Infrastructure | Rx 分发/隔离、插件加载、适配器 | 真实 `RxDomainEventBus`、临时目录 |
 | CLI | 解析、帮助、退出码、输出 | `StringConsole` + `NatterCli.RunAsync` |
 | Chat/NLMP | 键作用域、降级、分片、幂等、去重、Satori 映射 | 纯单元测试 + 真实 `TestHost` 组合 |
+| NPS v1 | manifest/semver、依赖图、config schema、秘密/权限、激活回滚、contribution、legacy 适配、CLI 诊断 | 单元测试 + 临时插件目录 + 嵌入式 NPS 插件 |
 | Plugin | 清单探测、适配器覆盖、命令贡献 | 构建宿主并解析真实插件输出 |
 
 ### 6.2 假 Console
@@ -742,6 +747,7 @@ docs: 补充支付模块开发说明
 - [ ] 没有把业务逻辑写入 CLI 命令或适配器；
 - [ ] 没有新增对 Infrastructure/宿主的反向依赖。
 - [ ] NLMP 变更同步了 `Natter.Chat` 契约、一致性测试与 [NLMP](NLMP.md) 实现映射。
+- [ ] 插件变更同步了 NPS manifest、依赖/权限声明、示例与 [插件规范](PLUGIN_SPEC.md) 实现映射。
 
 ## 10. 常用命令速查
 
@@ -756,6 +762,8 @@ dotnet test tests/Natter.Framework.Tests/Natter.Framework.Tests.csproj
 dotnet run --project src/Natter.Cli -- doctor
 dotnet run --project src/Natter.Cli -- exec "demo --times 3" "metrics"
 dotnet run --project src/Natter.Cli -- --verbose plugins list --failed
+dotnet run --project src/Natter.Cli -- plugins graph --json
+dotnet run --project src/Natter.Cli -- plugins doctor natter.sample.greetings
 dotnet run --project src/Natter.Cli -- upstreams --json
 dotnet run --project src/Natter.Cli -- satori status --features message.update
 

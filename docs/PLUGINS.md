@@ -1,5 +1,9 @@
 # 插件开发指南
 
+> **NPS v1 Phase 1 已实现。** 新插件应使用 [Natter Plugin Specification v1](PLUGIN_SPEC.md) 的 manifest、`INatterPlugin`、`IContributionRegistry` 与依赖图；本文的 `IPluginModule` 章节用于 legacy 兼容、嵌入式宿主和现有示例。NPS 插件示例见 `samples/*/plugin.json` 与 `*NpsPlugin.cs`。
+>
+> NPS 诊断：`natter plugins list --detail`、`plugins graph`、`plugins contributions`、`plugins permissions`、`plugins doctor <id>`、`plugins config validate <id>`。
+
 插件是对外扩展点，不修改框架代码即可：
 
 - 覆盖或新增**端口适配器**；

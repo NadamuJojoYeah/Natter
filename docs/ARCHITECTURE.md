@@ -15,6 +15,8 @@
 | 事件流 | `System.Reactive` 的 `Subject<T>` + 安全观察者包装 |
 | 聊天运行时 | `RxChatEventHub`、`ChatUpstreamRegistry`、`ChatIngressProcessor`、`InMemoryChatUpstream` |
 | 聊天适配映射 | `Natter.Chat.Satori` 的 `SatoriChatUpstream`、`ISatoriTransport`、event / element / feature / API mapper |
+| 插件 Host API | `Natter.Plugin.Abstractions` 的 manifest、`INatterPlugin`、`IPluginContext`、contribution、配置/秘密/权限/诊断模型 |
+| 插件运行时 | `Natter.Infrastructure/Plugins/Nps` 的 manifest reader、依赖图、插件本地容器、contribution staging、激活回滚、端口路由与诊断 |
 
 依赖规则：
 
@@ -23,12 +25,15 @@ Natter.Abstractions
    ▲        ▲          ▲          ▲
    │        │          │          │
 Domain   Application  Chat    Cli.Abstractions
-            ▲          ▲
-            │          │
-       Infrastructure ─┘ ◀── Cli.Core ◀── Cli / Android
-                              ▲
-                              │
-                    Natter.Chat.Satori（仅 CLI/适配器引用）
+            ▲          ▲          ▲
+            │          │          │
+            └──── Natter.Plugin.Abstractions ────┘
+                       ▲
+                       │
+                  Infrastructure ◀── Cli.Core ◀── Cli / Android
+                       ▲
+                       │
+             Natter.Chat.Satori（协议适配）
 ```
 
 - `Natter.Abstractions` 不引用任何产品程序集，只依赖 `Microsoft.Extensions.DependencyInjection.Abstractions`（用于契约中的服务注册）。
@@ -37,6 +42,8 @@ Domain   Application  Chat    Cli.Abstractions
 - `Natter.Infrastructure` 依赖 Application/Domain/Abstractions/Chat，**不依赖宿主**。
 - `Natter.Chat` 只依赖 Abstractions（`IClock`），不引用 Infrastructure、宿主或 Satori 类型。
 - `Natter.Chat.Satori` 依赖 Chat + Abstractions，是协议适配层；NLMP 核心不知道 Satori 的存在。
+- `Natter.Plugin.Abstractions` 是 Host API/契约聚合层，依赖 Abstractions + Chat + Application + Cli.Abstractions；插件只引用它，不引用 Infrastructure/宿主。
+- `Natter.Infrastructure` 额外依赖 Plugin.Abstractions，负责 NPS manifest、依赖图、插件本地 provider、contribution 与激活。
 - `Natter.Cli.Core` 依赖 Infrastructure，向上提供命令内核；宿主只负责提供 `IConsole` 和额外模块。
 
 ## 2. DDD 基元
@@ -159,24 +166,67 @@ ChatIngressLifecycle                  ChatCommandDispatcher
 
 ## 6. 插件加载
 
+### 6.1 NPS v1
+
 ```text
 plugins/
 ├── greetings/
-│   ├── plugin.json
+│   ├── plugin.json          # schemaVersion: 1
+│   ├── config.schema.json   # 可选
+│   ├── config.json          # 用户维护
 │   └── Natter.Sample.Plugin.Greetings.dll
 └── metrics/
-    ├── plugin.json
-    └── Natter.Sample.Plugin.Metrics.dll
+    └── ...
 ```
 
-- 每个子目录是一个插件；也可以直接指向包含 `plugin.json` 的目录。
-- `PluginLoader` 读取清单，优先使用 `entryAssembly`；没有清单时按目录名/程序集名启发式选择入口。
-- 每个插件一个 `PluginLoadContext`（`isCollectible: true`），并重写 `Load`：
+加载链路：
+
+```text
+PluginManifestReader ── NPS manifest / legacy detection
+        │
+        ▼
+NpsPluginGraph ── hostApi / dependsOn / loadAfter / conflicts / cycle
+        │
+        ▼
+NpsPluginRuntime.Prepare ── config schema / secrets / permissions
+        │                    ALC + entry type + ConfigureAsync
+        │                    staging contributions
+        ▼
+Host ServiceProvider ── port bridge / CLI contributor / runtime services
+        │
+        ▼
+NpsPluginRuntime.StartAsync ── plugin-local provider
+        │                        commit chat/CLI/port contributions
+        │                        ActivateAsync
+        │                        host-driven upstream ConnectAsync
+        ▼
+Activated / Failed / Blocked
+```
+
+关键语义：
+
+- **Manifest first**：`plugin.json` 的 `schemaVersion: 1` 走 NPS；没有版本走 legacy loader。未知字段、非法 id、路径逃逸、host API 不兼容都在入口加载前失败。
+- **依赖图**：必需依赖缺失/版本不匹配 → `Blocked`；冲突/循环 → `Failed`；`loadAfter`/`loadBefore` 只影响顺序；同层按 id ordinal 排序。
+- **插件本地容器**：每个插件一个 `ServiceProvider`；`IPluginContext.Services.Collection` 只注册插件本地服务，宿主公开合约由 runtime 注入；插件不能访问宿主根容器。
+- **Contribution staging**：`ConfigureAsync` 只声明 `chat.upstream` / `chat.responder` / `chat.event-subscriber` / `cli.command` / `port.adapter`；manifest 必须预先声明 `(type,id)`，重复或越权直接失败。
+- **激活事务**：staging → commit → `ActivateAsync` → upstream connect；任一步失败都会回滚贡献、断开上游、释放插件 provider/ALC，并把依赖它的插件标记 `Blocked`。
+- **端口适配器**：宿主 DI 中注册 late-bound 路由；插件激活时使用插件实现，失败/停止后回退到宿主原绑定。
+- **停止顺序**：先断开所有 `chat.upstream`，再逆激活顺序调用 `DeactivateAsync`，释放 provider，最后 ALC best-effort unload。
+- **诊断**：`plugins graph/contributions/permissions/doctor/config validate` 读取 `IPluginRuntimeDiagnostics`；`doctor` 汇总 active/failed/blocked/disabled 与 contribution 数。
+
+### 6.2 Legacy 兼容
+
+- 无 `schemaVersion` 的 `plugin.json` 继续使用 `LegacyPluginManifest` + `IPluginModule` 路径，注册到宿主根容器。
+- NPS manifest 的 `entry.type` 如果只实现 `IPluginModule`，运行时走 legacy adapter，并提示“NPS contributions 不生效”。
+- `IPluginLifecycle` 仍由宿主启动/停止；legacy 插件可继续订阅 Rx 领域事件。
+
+### 6.3 加载上下文
+
+- 每个文件插件一个 `PluginLoadContext`（`isCollectible: true`）：
   - `Natter.*`、`Microsoft.Extensions.*`、`System.*`、`System.Reactive*` 回落到默认上下文，保证**端口与契约类型身份共享**；
   - 其他依赖从插件目录解析（`AssemblyDependencyResolver`）。
-- 插件模块必须有公共无参构造函数；扫描 `IPluginModule` 实现。
-- 单个插件失败（清单损坏、入口缺失、类型加载异常、重复 Id）会记录为 `PluginState.Failed` 并继续加载其他插件。
-- `PluginCatalog` 拥有加载上下文；宿主释放时尝试 `Unload()`。由于 DI 单例在容器生命周期内持有插件对象，通常要等容器释放后 GC 才真正卸载。
+- 单个插件失败（manifest、依赖、配置、权限、加载、activate）只影响自身与依赖方；宿主继续启动其他插件。
+- `PluginCatalog` 拥有加载上下文；宿主释放时尝试 `Unload()`。
 
 ## 7. CLI 内核
 
@@ -197,7 +247,9 @@ plugins/
 
 - 事件总线是进程内、内存态；不提供 outbox、持久化、重试或跨进程投递。
 - 仓储与工作单元是脚手架适配器，不模拟事务/并发。
-- 插件加载是宿主构建期行为；运行中热加载需要重建容器，未在本框架实现。
+- 插件加载是宿主构建期行为；NPS v1 只保证重启生效，运行中热加载/HMR 未实现。
+- NPS Phase 2–4（Discord transport、AI feature、启用/禁用 CLI、市场、签名、out-of-process 宿主）尚未交付。
+- 权限是宿主治理与可观测性，不是进程内安全沙箱；不可信第三方插件需要独立进程/容器。
 - NLMP 不包含 wire transport、远程插件、握手/服务发现；Satori WebSocket/HTTP 客户端与原生 Discord 适配器不在框架内。
 - Satori message elements 采用有损文本化（v0.1），富文本/按钮/Modal 需要后续能力扩展。
 - Android 为保持反射与插件类型完整，关闭了 trimming/AOT；启用时应补充 trim 注解与真机验证。

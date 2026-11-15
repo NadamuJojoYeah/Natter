@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://natter.dev/schemas/plugin-v1.json",
+  "title": "Natter Plugin Manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "id", "name", "version", "kind", "hostApi", "entry"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:[._-][a-z0-9]+)+$"
+    },
+    "name": { "type": "string", "minLength": 1 },
+    "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$" },
+    "kind": { "enum": ["transport", "feature", "tool"] },
+    "hostApi": { "type": "string", "minLength": 1 },
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["assembly", "type"],
+      "properties": {
+        "assembly": { "type": "string", "minLength": 1 },
+        "type": { "type": "string", "minLength": 1 }
+      }
+    },
+    "description": { "type": "string" },
+    "author": { "type": "string" },
+    "license": { "type": "string" },
+    "homepage": { "type": "string" },
+    "dependsOn": { "$ref": "#/$defs/dependencies" },
+    "optionalDependsOn": { "$ref": "#/$defs/dependencies" },
+    "loadAfter": { "type": "array", "items": { "type": "string" } },
+    "loadBefore": { "type": "array", "items": { "type": "string" } },
+    "conflicts": { "$ref": "#/$defs/dependencies" },
+    "permissions": { "type": "array", "items": { "type": "string" } },
+    "secrets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "required": { "type": "boolean", "default": true }
+        }
+      }
+    },
+    "configSchema": { "type": "string" },
+    "contributions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "id"],
+        "properties": {
+          "type": { "enum": ["chat.upstream", "chat.responder", "chat.event-subscriber", "cli.command", "port.adapter"] },
+          "id": { "type": "string", "minLength": 1 },
+          "priority": { "type": "integer", "default": 0 }
+        }
+      }
+    },
+    "platforms": {
+      "type": "array",
+      "items": { "enum": ["windows", "linux", "macos", "android"] }
+    },
+    "capabilities": { "type": "array", "items": { "type": "string" } }
+  },
+  "$defs": {
+    "dependencies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id"],
+        "properties": {
+          "id": { "type": "string" },
+          "version": { "type": "string" }
+        }
+      }
+    }
+  }
+}
