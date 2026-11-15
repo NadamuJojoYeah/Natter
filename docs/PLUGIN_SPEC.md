@@ -1058,6 +1058,9 @@ v1 不做：
 6. **配置 default**：只在内存中的 effective config 补全，不写回 `config.json`。
 7. **未知字段**：v1 加载器拒绝未知 manifest 字段，便于发现拼写错误。
 8. **未实现**：Discord/AI/远程市场/HMR/跨进程插件宿主/配置热更新/启用禁用 CLI，均按 §16 后续阶段处理。
+9. **上游连接时机**：每个插件按拓扑顺序 Activate 后立即由宿主执行其 `chat.upstream.ConnectAsync`；连接失败只影响该插件和尚未激活的依赖方，避免已激活依赖方被“事后阻塞”。
+10. **插件 provider 的权限面**：`IChatCommandDispatcher` 对插件按 `chat.send/edit/delete/interactions` 包装；`IChatEventSource` 仅在授予 `chat.read` 时注入；`IChatUpstreamRegistry`/`IChatResponderRegistry` 不暴露给插件。
+11. **包卫生**：加载 NPS 插件前检查插件目录中的 `.pfx/.p12/.key/.keystore/.jks/.pem`、`.env`、token/credentials 等文件并拒绝加载；这不替代 secret manager。
 
 ### 18.5 最小用法
 
