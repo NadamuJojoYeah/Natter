@@ -22,13 +22,12 @@ public sealed class DiscordEventMapper
         if (_options.IgnoreSelf && string.Equals(message.Author.Id, _source.SelfId, StringComparison.Ordinal))
             return null;
 
-        if (!_options.IsGuildAllowed(message.Guild?.Id) || !_options.IsChannelAllowed(message.Channel.Id))
+        var conversation = MapConversation(message.Channel);
+        if (!IsConversationAllowed(conversation, message.Channel.Id, message.Guild?.Id))
             return null;
 
         if (!_options.IsUserAllowed(message.Author.Id))
             return null;
-
-        var conversation = MapConversation(message.Channel);
         var selfMentioned = message.MentionedUsers?.Any(user =>
             string.Equals(user.Id, _source.SelfId, StringComparison.Ordinal)) == true;
 
@@ -78,7 +77,8 @@ public sealed class DiscordEventMapper
         if (_options.IgnoreSelf && string.Equals(interaction.User.Id, _source.SelfId, StringComparison.Ordinal))
             return null;
 
-        if (!_options.IsGuildAllowed(interaction.Guild?.Id) || !_options.IsChannelAllowed(interaction.Channel.Id))
+        var conversation = MapConversation(interaction.Channel);
+        if (!IsConversationAllowed(conversation, interaction.Channel.Id, interaction.Guild?.Id))
             return null;
 
         if (!_options.IsUserAllowed(interaction.User.Id))
@@ -97,12 +97,22 @@ public sealed class DiscordEventMapper
             interaction.Id,
             kind,
             MapUser(interaction.User),
-            MapConversation(interaction.Channel),
+            conversation,
             interaction.CreatedAt,
             interaction.Command,
             interaction.Options,
             interaction.Values,
             interaction.ReplyToken);
+    }
+
+    private bool IsConversationAllowed(Conversation conversation, string? channelId, string? guildId)
+    {
+        // DMs and group DMs have no guild and their channel ids are not part of the
+        // guild/channel allowlist. User allowlisting still applies to them.
+        if (conversation.Kind is ConversationKind.Direct or ConversationKind.Group)
+            return true;
+
+        return _options.IsGuildAllowed(guildId) && _options.IsChannelAllowed(channelId);
     }
 
     public Conversation MapConversation(DiscordChannel channel)

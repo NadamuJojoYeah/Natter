@@ -36,6 +36,12 @@ public sealed class ProfileAwareChatResponder(
                     $"Profile '{profile.Id}' requires provider '{profile.Ai.Provider}', but no responder is loaded.");
             }
 
+            if (set.OverrideProfile is not null)
+            {
+                throw new InvalidOperationException(
+                    $"Profile override '{set.OverrideProfile}' requires provider '{profile.Ai.Provider}', but it is not loaded.");
+            }
+
             if (set.IsExplicit && profile.SupportTier == 2)
             {
                 logger?.LogWarning(

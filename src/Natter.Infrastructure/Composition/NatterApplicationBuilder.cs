@@ -135,6 +135,7 @@ public sealed class NatterApplicationBuilder
 
     public NatterHost Build()
     {
+        EnsureStateDirectory();
         if (_built)
             throw new InvalidOperationException("This composition builder has already been built.");
 
@@ -234,6 +235,21 @@ public sealed class NatterApplicationBuilder
 
         _npsRuntime.Attach(provider, provider.GetRequiredService<ILoggerFactory>());
         return new NatterHost(provider, _pluginCatalog, _npsRuntime);
+    }
+
+    private void EnsureStateDirectory()
+    {
+        if (string.IsNullOrWhiteSpace(_options.StateDirectory))
+            return;
+
+        var directory = Path.GetFullPath(_options.StateDirectory);
+        Directory.CreateDirectory(directory);
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(
+                directory,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
     }
 
     private PluginScanResult ScanPlugins()

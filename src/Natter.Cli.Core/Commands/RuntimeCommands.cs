@@ -1,10 +1,8 @@
-using System.Diagnostics;
 using System.Text.Json;
 using Natter.Abstractions.Plugins;
 using Natter.Application.Chat;
 using Natter.Chat;
 using Natter.Cli.Abstractions;
-using Natter.Cli.Core.Rendering;
 
 namespace Natter.Cli.Core.Commands;
 
@@ -25,6 +23,18 @@ public sealed class ServeCommand(
     public async ValueTask<int> ExecuteAsync(CliInvocation invocation, CancellationToken cancellationToken = default)
     {
         var duration = invocation.GetIntOption("duration", 0);
+        var failed = plugins.Plugins
+            .Where(plugin => plugin.State == PluginState.Failed)
+            .Select(plugin => new
+            {
+                id = plugin.Id,
+                state = plugin.State.ToString(),
+                phase = plugin.ErrorDetail?.Phase ?? "unknown",
+                code = plugin.ErrorDetail?.Code ?? "unknown",
+                message = RuntimeHealth.Sanitize(plugin.ErrorDetail?.Message ?? plugin.Error ?? "plugin failed"),
+            })
+            .ToArray();
+
         var summary = new
         {
             mode = "serve",
@@ -42,7 +52,8 @@ public sealed class ServeCommand(
             plugins = new
             {
                 activated = plugins.Plugins.Count(plugin => plugin.State == PluginState.Activated),
-                failed = plugins.Plugins.Count(plugin => plugin.State == PluginState.Failed),
+                failed = failed.Length,
+                failures = failed,
             },
         };
 
@@ -55,31 +66,35 @@ public sealed class ServeCommand(
                 + $"upstreams={summary.upstreams.Length} plugins={summary.plugins.activated} failed={summary.plugins.failed}");
             foreach (var upstream in summary.upstreams)
                 invocation.Console.Out.WriteLine($"upstream {upstream.source} connected={upstream.connected}");
+            foreach (var failure in summary.plugins.failures)
+                invocation.Console.Out.WriteLine(
+                    $"plugin failed {failure.id} phase={failure.phase} code={failure.code}: {failure.message}");
         }
 
         using var healthServer = CreateHealthServer(invocation);
         healthServer?.Start();
 
         if (duration <= 0)
+        {
+            try
             {
-                try
-                {
-                    await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException)
-                {
-                }
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken).ConfigureAwait(false);
             }
-            else
+            catch (OperationCanceledException)
             {
-                try
-                {
-                    await Task.Delay(TimeSpan.FromSeconds(duration), cancellationToken).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException)
-                {
-                }
             }
+        }
+        else
+        {
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(duration), cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }
+
         return CliExitCodes.Success;
     }
 
@@ -89,35 +104,12 @@ public sealed class ServeCommand(
         if (port <= 0)
             return null;
 
-        return new HealthHttpServer(port, async () =>
-        {
-            var conversationCount = await conversations.CountAsync().ConfigureAwait(false);
-            return new
-            {
-                status = upstreams.Upstreams.All(upstream => upstream.IsConnected) ? "healthy" : "degraded",
-                profiles = profiles.Current.Profiles.Count,
-                conversations = conversationCount,
-                providers = profiles.Current.Profiles
-                    .Select(profile => profile.Ai.Provider)
-                    .Distinct(StringComparer.Ordinal)
-                    .Select(provider => new
-                    {
-                        id = provider,
-                        available = responders.TryGet(provider, out _),
-                    })
-                    .ToArray(),
-                upstreams = upstreams.Upstreams.Select(upstream => new
-                {
-                    source = upstream.Source.Key,
-                    connected = upstream.IsConnected,
-                }).ToArray(),
-                plugins = new
-                {
-                    activated = plugins.Plugins.Count(plugin => plugin.State == PluginState.Activated),
-                    failed = plugins.Plugins.Count(plugin => plugin.State == PluginState.Failed),
-                },
-            };
-        });
+        return new HealthHttpServer(port, async () => await RuntimeHealth.CreateAsync(
+            upstreams,
+            profiles,
+            responders,
+            conversations,
+            plugins).ConfigureAwait(false));
     }
 }
 
@@ -129,60 +121,40 @@ public sealed class HealthCommand(
     IConversationStore conversations,
     IPluginCatalog plugins) : ICliCommandHandler
 {
-    private static readonly Stopwatch Uptime = Stopwatch.StartNew();
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        WriteIndented = false,
+    };
 
     public async ValueTask<int> ExecuteAsync(CliInvocation invocation, CancellationToken cancellationToken = default)
     {
-        var conversationCount = await conversations.CountAsync(cancellationToken).ConfigureAwait(false);
-        var providers = profiles.Current.Profiles
-            .Select(profile => new
-            {
-                id = profile.Ai.Provider,
-                available = responders.TryGet(profile.Ai.Provider, out _),
-                profile = profile.Id,
-                supportTier = profile.SupportTier,
-            })
-            .DistinctBy(item => item.id)
-            .ToArray();
-
-        var snapshot = new
-        {
-            status = upstreams.Upstreams.All(upstream => upstream.IsConnected) ? "healthy" : "degraded",
-            uptimeSeconds = (long)Uptime.Elapsed.TotalSeconds,
-            profiles = profiles.Current.Profiles.Count,
-            conversations = conversationCount,
-            upstreams = upstreams.Upstreams.Select(upstream => new
-            {
-                source = upstream.Source.Key,
-                connected = upstream.IsConnected,
-            }).ToArray(),
-            providers,
-            plugins = new
-            {
-                activated = plugins.Plugins.Count(plugin => plugin.State == PluginState.Activated),
-                failed = plugins.Plugins.Count(plugin => plugin.State == PluginState.Failed),
-            },
-        };
+        var snapshot = await RuntimeHealth.CreateAsync(
+            upstreams,
+            profiles,
+            responders,
+            conversations,
+            plugins,
+            cancellationToken).ConfigureAwait(false);
 
         if (invocation.HasFlag("json"))
         {
-            invocation.Console.Out.WriteLine(JsonSerializer.Serialize(snapshot, new JsonSerializerOptions
-            {
-                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                WriteIndented = false,
-            }));
+            invocation.Console.Out.WriteLine(JsonSerializer.Serialize(snapshot, JsonOptions));
             return CliExitCodes.Success;
         }
 
-        invocation.Console.Out.WriteLine($"status: {snapshot.status}");
-        invocation.Console.Out.WriteLine($"uptimeSeconds: {snapshot.uptimeSeconds}");
-        invocation.Console.Out.WriteLine($"profiles: {snapshot.profiles}");
-        invocation.Console.Out.WriteLine($"conversations: {snapshot.conversations}");
-        foreach (var upstream in snapshot.upstreams)
-            invocation.Console.Out.WriteLine($"upstream {upstream.source} connected={upstream.connected}");
-        foreach (var provider in providers)
-            invocation.Console.Out.WriteLine($"provider {provider.id} available={provider.available} tier={provider.supportTier}");
-        invocation.Console.Out.WriteLine($"plugins: activated={snapshot.plugins.activated} failed={snapshot.plugins.failed}");
+        invocation.Console.Out.WriteLine($"status: {snapshot.Status}");
+        invocation.Console.Out.WriteLine($"uptimeSeconds: {snapshot.UptimeSeconds}");
+        invocation.Console.Out.WriteLine($"profiles: {snapshot.Profiles}");
+        invocation.Console.Out.WriteLine($"conversations: {snapshot.Conversations}");
+        foreach (var upstream in snapshot.Upstreams)
+            invocation.Console.Out.WriteLine($"upstream {upstream.Source} connected={upstream.Connected}");
+        foreach (var provider in snapshot.Providers)
+            invocation.Console.Out.WriteLine($"provider {provider.Id} available={provider.Available} tier={provider.SupportTier}");
+        invocation.Console.Out.WriteLine($"plugins: activated={snapshot.Plugins.Activated} failed={snapshot.Plugins.Failed}");
+        foreach (var failure in snapshot.Plugins.Failures)
+            invocation.Console.Out.WriteLine(
+                $"plugin failed {failure.Id} phase={failure.Phase} code={failure.Code}: {failure.Message}");
         return CliExitCodes.Success;
     }
 }

@@ -7,15 +7,20 @@ namespace Natter.Infrastructure.Chat;
 public sealed class SqliteConversationStore : IConversationStore
 {
     private readonly string _connectionString;
+    private readonly string _databasePath;
 
     public SqliteConversationStore(string databasePath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(databasePath);
-        var fullPath = Path.GetFullPath(databasePath);
-        var directory = Path.GetDirectoryName(fullPath);
+        _databasePath = Path.GetFullPath(databasePath);
+        var directory = Path.GetDirectoryName(_databasePath);
         if (!string.IsNullOrEmpty(directory))
+        {
             Directory.CreateDirectory(directory);
-        _connectionString = new SqliteConnectionStringBuilder { DataSource = fullPath }.ToString();
+            if (!OperatingSystem.IsWindows())
+                File.SetUnixFileMode(directory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+        _connectionString = new SqliteConnectionStringBuilder { DataSource = _databasePath }.ToString();
         Initialize();
     }
 
@@ -160,12 +165,32 @@ public sealed class SqliteConversationStore : IConversationStore
             CREATE INDEX IF NOT EXISTS ix_messages_session ON messages(session_id, message_id);
             """;
         command.ExecuteNonQuery();
+        SecureFiles();
+    }
+
+    private void SecureFiles()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        foreach (var path in new[] { _databasePath, _databasePath + "-wal", _databasePath + "-shm" })
+        {
+            try
+            {
+                if (File.Exists(path))
+                    File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            }
+            catch (IOException)
+            {
+            }
+        }
     }
 
     private async ValueTask<SqliteConnection> OpenAsync(CancellationToken cancellationToken)
     {
         var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+        SecureFiles();
         await using var pragma = connection.CreateCommand();
         pragma.CommandText = "PRAGMA foreign_keys = ON;";
         await pragma.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);

@@ -24,6 +24,8 @@ public sealed class DiscordChatUpstream : IChatUpstream, IDisposable
     private long _sequence;
     private bool _connected;
     private bool _disposed;
+    private int _sendFailures;
+    private string? _lastSendError;
 
     public DiscordChatUpstream(
         Source source,
@@ -160,7 +162,9 @@ public sealed class DiscordChatUpstream : IChatUpstream, IDisposable
             _options.Channels.ToArray(),
             _options.Users.ToArray(),
             _options.RequireMention,
-            _options.SlashCommands);
+            _options.SlashCommands,
+            _sendFailures,
+            _lastSendError);
 
     public void Dispose()
     {
@@ -226,7 +230,11 @@ public sealed class DiscordChatUpstream : IChatUpstream, IDisposable
 
             var result = await _transport.SendMessageAsync(request, cancellationToken).ConfigureAwait(false);
             if (!result.Ok)
+            {
+                Interlocked.Increment(ref _sendFailures);
+                _lastSendError = $"{result.ErrorCode ?? "unknown"}: channel {request.ChannelId}";
                 return ChatAck.Failure(command, ToError(result));
+            }
 
             if (!string.IsNullOrWhiteSpace(result.MessageId))
                 messageIds.Add(result.MessageId);
@@ -554,4 +562,6 @@ public sealed record DiscordStatusSnapshot(
     IReadOnlyList<string> Channels,
     IReadOnlyList<string> Users,
     bool RequireMention,
-    bool SlashCommands);
+    bool SlashCommands,
+    int SendFailures,
+    string? LastSendError);

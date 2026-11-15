@@ -92,6 +92,7 @@ public sealed class RuntimeProfileStore : IRuntimeProfileStore
     };
 
     private readonly string? _path;
+    private readonly string? _profileOverride;
     private readonly Lock _gate = new();
     private RuntimeProfileSet _current;
 
@@ -100,20 +101,8 @@ public sealed class RuntimeProfileStore : IRuntimeProfileStore
         _path = string.IsNullOrWhiteSpace(configDirectory)
             ? null
             : Path.Combine(configDirectory, "profiles.json");
-        _current = Load(_path);
-        if (!string.IsNullOrWhiteSpace(profileOverride))
-        {
-            if (_current.Profiles.All(profile => !string.Equals(profile.Id, profileOverride, StringComparison.Ordinal)))
-                throw new InvalidOperationException($"Profile override '{profileOverride}' does not exist.");
-            _current = new RuntimeProfileSet
-            {
-                SchemaVersion = _current.SchemaVersion,
-                DefaultProfile = _current.DefaultProfile,
-                Profiles = _current.Profiles,
-                IsExplicit = _current.IsExplicit,
-                OverrideProfile = profileOverride,
-            };
-        }
+        _profileOverride = string.IsNullOrWhiteSpace(profileOverride) ? null : profileOverride;
+        _current = ApplyOverride(Load(_path));
     }
 
     public RuntimeProfileSet Current
@@ -124,10 +113,26 @@ public sealed class RuntimeProfileStore : IRuntimeProfileStore
     public ValueTask ReloadAsync(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var loaded = Load(_path);
+        var loaded = ApplyOverride(Load(_path));
         lock (_gate)
             _current = loaded;
         return ValueTask.CompletedTask;
+    }
+
+    private RuntimeProfileSet ApplyOverride(RuntimeProfileSet set)
+    {
+        if (_profileOverride is null)
+            return set;
+        if (set.Profiles.All(profile => !string.Equals(profile.Id, _profileOverride, StringComparison.Ordinal)))
+            throw new InvalidOperationException($"Profile override '{_profileOverride}' does not exist.");
+        return new RuntimeProfileSet
+        {
+            SchemaVersion = set.SchemaVersion,
+            DefaultProfile = set.DefaultProfile,
+            Profiles = set.Profiles,
+            IsExplicit = set.IsExplicit,
+            OverrideProfile = _profileOverride,
+        };
     }
 
     private static RuntimeProfileSet Load(string? path)
@@ -219,6 +224,12 @@ public sealed class ProfileResolver(IRuntimeProfileStore store) : IProfileResolv
     public RuntimeProfile? Resolve(Source source, Conversation conversation, User sender)
     {
         var set = _store.Current;
+        if (set.OverrideProfile is { } overrideId)
+        {
+            return set.Profiles.FirstOrDefault(profile =>
+                string.Equals(profile.Id, overrideId, StringComparison.Ordinal));
+        }
+
         var profiles = set.Profiles
             .Select((profile, index) => (Profile: profile, Index: index, Score: Score(profile, source, conversation, sender)))
             .Where(item => item.Score >= 0 && item.Profile.Policy.Enabled)

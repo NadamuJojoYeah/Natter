@@ -100,6 +100,28 @@ public sealed class SparkChatClientTests
     }
 
     [Fact]
+    public async Task Rate_limit_is_retryable_and_errors_never_leak_the_key()
+    {
+        using var http = new HttpClient(new RecordingHttpMessageHandler((_, _) =>
+            DeepSeekTestData.Json(
+                """{ "error": { "message": "too many requests", "type": "rate_limit" } }""",
+                HttpStatusCode.TooManyRequests)));
+        using var client = new SparkChatClient(
+            http,
+            new SparkOptions { MaxRetries = 0 },
+            "ak-super-secret-value");
+
+        var exception = await Assert.ThrowsAsync<SparkException>(
+            () => client.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")]));
+
+        Assert.Equal(AiErrorKind.RateLimited, exception.Kind);
+        Assert.Equal(429, exception.StatusCode);
+        Assert.True(exception.Retryable);
+        Assert.DoesNotContain("ak-super-secret-value", exception.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("ak-super-secret-value", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Transient_5xx_is_retried_and_rate_limit_is_retryable()
     {
         var attempts = 0;

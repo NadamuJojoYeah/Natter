@@ -15,7 +15,7 @@ public sealed class RuntimeCliTests
 
         Assert.Equal(CliExitCodes.Success, exitCode);
         using var document = JsonDocument.Parse(console.Output);
-        Assert.Equal("healthy", document.RootElement.GetProperty("status").GetString());
+        Assert.Equal("unknown", document.RootElement.GetProperty("status").GetString());
         Assert.Equal(2, document.RootElement.GetProperty("profiles").GetInt32());
         Assert.Equal(0, document.RootElement.GetProperty("conversations").GetInt32());
         Assert.Equal(2, document.RootElement.GetProperty("providers").GetArrayLength());
@@ -77,7 +77,7 @@ public sealed class RuntimeCliTests
             new NatterCliOptions { LoadPlugins = false, ConfigDirectory = config });
 
         Assert.Equal(CliExitCodes.Failure, exitCode);
-        Assert.Contains("Tier 1", console.ErrorText);
+        Assert.Contains("requires provider", console.ErrorText);
     }
 
     [Fact]
@@ -121,7 +121,7 @@ public sealed class RuntimeCliTests
 
         Assert.NotNull(body);
         using var document = JsonDocument.Parse(body!);
-        Assert.Equal("healthy", document.RootElement.GetProperty("status").GetString());
+        Assert.Equal("unknown", document.RootElement.GetProperty("status").GetString());
         var exitCode = await run;
         Assert.True(exitCode == CliExitCodes.Success, console.ErrorText + console.Output);
     }

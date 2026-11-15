@@ -15,10 +15,10 @@ public static class RuntimeProfileValidator
             if (registry.TryGet(profile.Ai.Provider, out _))
                 continue;
 
-            if (profile.SupportTier == 1)
+            if (profile.SupportTier == 1 || set.OverrideProfile is not null)
             {
                 throw new InvalidOperationException(
-                    $"Runtime profile '{profile.Id}' requires Tier 1 provider '{profile.Ai.Provider}', but it is not loaded.");
+                    $"Runtime profile '{profile.Id}' requires provider '{profile.Ai.Provider}', but it is not loaded.");
             }
 
             disabled.Add(profile.Id);

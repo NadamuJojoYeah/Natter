@@ -21,6 +21,9 @@ public sealed class DiscordSocketTransport : IDiscordTransport, IDisposable
     private readonly Subject<DiscordTransportEvent> _events = new();
     private readonly IObservable<DiscordTransportEvent> _synchronizedEvents;
     private readonly ConcurrentDictionary<string, CachedInteraction> _interactions = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, CachedChannel> _channels = new(StringComparer.Ordinal);
+    private const int ChannelCacheCapacity = 500;
+    private static readonly TimeSpan ChannelCacheTtl = TimeSpan.FromMinutes(30);
     private TaskCompletionSource _ready = NewReadySource();
     private bool _started;
     private bool _disposed;
@@ -273,6 +276,7 @@ public sealed class DiscordSocketTransport : IDiscordTransport, IDisposable
         _events.Dispose();
         _client.Dispose();
         _interactions.Clear();
+        _channels.Clear();
     }
 
     private void Subscribe()
@@ -300,6 +304,7 @@ public sealed class DiscordSocketTransport : IDiscordTransport, IDisposable
     private Task OnReadyAsync()
     {
         CleanupInteractions();
+        CleanupChannels();
         Publish(new DiscordTransportEvent
         {
             Kind = DiscordTransportEventKind.Ready,
@@ -427,6 +432,8 @@ public sealed class DiscordSocketTransport : IDiscordTransport, IDisposable
         _interactions[slash.Id.ToString()] = new CachedInteraction(
             slash,
             DateTimeOffset.UtcNow.AddSeconds(Math.Max(1, _options.InteractionTtlSeconds)));
+        if (slash.Channel is IMessageChannel interactionChannel)
+            CacheChannel(interactionChannel);
 
         var options = slash.Data.Options
             .GroupBy(option => option.Name, StringComparer.Ordinal)
@@ -483,6 +490,8 @@ public sealed class DiscordSocketTransport : IDiscordTransport, IDisposable
 
     private void PublishMessage(SocketMessage message, DiscordTransportEventKind kind)
     {
+        CacheChannel(message.Channel);
+
         Publish(new DiscordTransportEvent
         {
             Kind = kind,
@@ -579,13 +588,52 @@ public sealed class DiscordSocketTransport : IDiscordTransport, IDisposable
             };
     }
 
-    private async ValueTask<IMessageChannel?> GetMessageChannelAsync(string channelId)
+    private ValueTask<IMessageChannel?> GetMessageChannelAsync(string channelId)
     {
         if (!ulong.TryParse(channelId, out var id))
-            return null;
+            return ValueTask.FromResult<IMessageChannel?>(null);
 
-        await Task.Yield();
-        return _client.GetChannel(id) as IMessageChannel;
+        if (_channels.TryGetValue(channelId, out var cached))
+        {
+            if (cached.ExpiresAt > DateTimeOffset.UtcNow)
+                return ValueTask.FromResult<IMessageChannel?>(cached.Channel);
+            _channels.TryRemove(channelId, out _);
+        }
+
+        var channel = _client.GetChannel(id) as IMessageChannel;
+        if (channel is not null)
+            CacheChannel(channel);
+        return ValueTask.FromResult(channel);
+    }
+
+    private void CacheChannel(IMessageChannel channel)
+    {
+        var now = DateTimeOffset.UtcNow;
+        if (_channels.Count >= ChannelCacheCapacity)
+        {
+            foreach (var (id, item) in _channels)
+            {
+                if (item.ExpiresAt <= now)
+                    _channels.TryRemove(id, out _);
+            }
+            while (_channels.Count >= ChannelCacheCapacity
+                   && _channels.FirstOrDefault() is { Key: { } oldest })
+            {
+                _channels.TryRemove(oldest, out _);
+            }
+        }
+
+        _channels[channel.Id.ToString()] = new CachedChannel(channel, now.Add(ChannelCacheTtl));
+    }
+
+    private void CleanupChannels()
+    {
+        var now = DateTimeOffset.UtcNow;
+        foreach (var (id, cached) in _channels)
+        {
+            if (cached.ExpiresAt <= now)
+                _channels.TryRemove(id, out _);
+        }
     }
 
     private static ulong? ParseSnowflake(string? value)
@@ -646,4 +694,6 @@ public sealed class DiscordSocketTransport : IDiscordTransport, IDisposable
     }
 
     private sealed record CachedInteraction(SocketInteraction Interaction, DateTimeOffset ExpiresAt);
+
+    private sealed record CachedChannel(IMessageChannel Channel, DateTimeOffset ExpiresAt);
 }
