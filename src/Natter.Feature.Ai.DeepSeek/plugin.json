@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "id": "natter.feature.ai.deepseek",
+  "name": "DeepSeek AI Responder",
+  "version": "0.1.0",
+  "kind": "feature",
+  "hostApi": ">=0.1.0 <1.0.0",
+  "entry": {
+    "assembly": "lib/Natter.Feature.Ai.DeepSeek.dll",
+    "type": "Natter.Feature.Ai.DeepSeek.DeepSeekPlugin"
+  },
+  "description": "DeepSeek-backed chat responder for Natter.",
+  "author": "Natter",
+  "license": "MIT",
+  "permissions": [
+    "network",
+    "secrets:DEEPSEEK_API_KEY",
+    "chat.read",
+    "chat.send",
+    "chat.interactions",
+    "cli.commands"
+  ],
+  "secrets": [
+    { "name": "DEEPSEEK_API_KEY", "required": true }
+  ],
+  "configSchema": "config.schema.json",
+  "contributions": [
+    { "type": "chat.responder", "id": "deepseek", "priority": 10 },
+    { "type": "cli.command", "id": "ai.status" }
+  ],
+  "platforms": ["linux", "windows", "macos", "android"]
+}

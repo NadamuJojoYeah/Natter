@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Natter.Feature.Ai.DeepSeek</RootNamespace>
+    <AssemblyName>Natter.Feature.Ai.DeepSeek</AssemblyName>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <Description>DeepSeek IChatClient provider and NPS chat.responder using Microsoft.Extensions.AI.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.AI" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Natter.Plugin.Abstractions/Natter.Plugin.Abstractions.csproj" />
+    <ProjectReference Include="../Natter.Chat/Natter.Chat.csproj" />
+    <ProjectReference Include="../Natter.Application/Natter.Application.csproj" />
+    <ProjectReference Include="../Natter.Cli.Abstractions/Natter.Cli.Abstractions.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="plugin.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="config.schema.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <EmbeddedResource Include="plugin.json" LogicalName="Natter.Feature.Ai.DeepSeek.plugin.json" />
+    <EmbeddedResource Include="config.schema.json" LogicalName="Natter.Feature.Ai.DeepSeek.config.schema.json" />
+  </ItemGroup>
+
+  <Target Name="StageDeepSeekPlugin" AfterTargets="Build">
+    <ItemGroup>
+      <DeepSeekPluginRuntime Include="$(TargetPath)" />
+      <DeepSeekPluginRuntime Include="@(ReferenceCopyLocalPaths)" />
+    </ItemGroup>
+    <Copy SourceFiles="@(DeepSeekPluginRuntime)" DestinationFolder="$(OutDir)lib" SkipUnchangedFiles="true" />
+  </Target>
+
+</Project>
