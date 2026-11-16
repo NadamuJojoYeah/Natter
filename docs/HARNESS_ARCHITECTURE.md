@@ -733,6 +733,8 @@ providerRequestId
 
 ### Phase 7：进程隔离与生态
 
+> 依赖与类型演进策略见 [Dependency & Type Evolution Policy](DEPENDENCY_EVOLUTION_POLICY.md)。
+
 - out-of-process worker；
 - Android；
 - 插件市场；

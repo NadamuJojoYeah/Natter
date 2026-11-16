@@ -239,6 +239,7 @@ Android 产物位于 `artifacts/android/`。示例构建使用默认调试签名
 - [P2 Runtime & Profile 开发文档](docs/P2_RUNTIME_PROFILE.md)：serve、profiles、provider 路由、SQLite 会话、health 与一等/二等公民策略。
 - [P3 Context & Memory 开发文档](docs/P3_CONTEXT_MEMORY.md)：Prompt/Context/Memory 契约、profile 扩展、SQLite 摘要/记忆、NPS contribution 与验收。
 - [P4 Tier 1 产品化](docs/P4_TIER1_PRODUCTIZATION.md)：Discord 命令 UX、memory 用户入口、DeepSeek 稳定性、serve 部署/备份/24h soak 与发布闸门。
+- [依赖与类型演进策略](docs/DEPENDENCY_EVOLUTION_POLICY.md)：依赖检查/升级周期、net10→net12 LTS、插件 ABI、C# union/closed hierarchy 与 Result 边界。
 - [插件开发](docs/PLUGINS.md)：清单、适配器覆盖、CLI 命令、生命周期、嵌入模式。
 - [插件规范（NPS v1）](docs/PLUGIN_SPEC.md)：manifest、contribution、依赖图、Host API、配置/秘密、权限与激活回滚。
 - [Android 插件宿主](docs/ANDROID_PLUGIN_HOST.md)：embedded/dynamic 双发行、AOT off 动态加载、签名安装与回滚。

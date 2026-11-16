@@ -36,9 +36,9 @@
 
 - **通过（真实）**：`context.maxRecentMessages=2`，Discord 连续 7 轮 @bot 后 `summaries` 生成 2 条并增量更新（version 4 / 5），内容包含历史消息；重启持久化待补。
 
-## 4. P4 命令 UX（阻塞）
+## 4. P4 命令 UX（已复测通过）
 
-配置 `slashCommands=true` + `commands:{ask,remember,forget,memory,reset}` 后，Discord 插件启动失败：
+修复前（`34fc7ef` 之前）配置 `slashCommands=true` + `commands:{...}` 时 Discord 插件启动失败：
 
 ```text
 plugin failed natter.transport.discord phase=config code=invalid-config:
@@ -53,12 +53,22 @@ plugin failed natter.transport.discord phase=config code=invalid-config:
 
 **根因**：`config.schema.json` 的 `commands` 使用 `patternProperties`，而 NPS 的 schema 校验器**不支持 patternProperties**（源码无相关实现），只按 `properties` + `additionalProperties` 判定 → 所有命令名都被当成额外属性拒绝。
 
-### BUG-P4-SCHEMA-PATTERN（High）
+### BUG-P4-SCHEMA-PATTERN（High，已修复复测通过）
 
-- **现象**：Discord `commands` 无法配置，`slashCommands` 形同虚设，`/ask` `/remember` `/forget` `/memory` `/reset` 无法注册。
-- **影响**：P4 的核心用户入口（聊天内命令）完全不可用；P4 §9.2 全部用例阻塞。
-- **证据**：`evidence/serve.log`（首次启动失败）、`plugins config validate` 输出。
-- **建议**：schema 改为显式 `properties`（五个命令固定），或让校验器支持 `patternProperties`；两者都要补一条「带 commands 的 discord config 通过校验」测试。
+- **现象**：`commands` 配置被 schema 拒绝，slash 无法注册。
+- **修复**：schema 改为显式 `properties`（ask/remember/forget/memory/reset）；`plugins config validate` → `valid:true`，guild 命令注册 5 个。
+- **证据**：`p4-profile-store.json`、命令列表（REST）。
+
+### 4.1 真实命令交互（21:02–21:05，用户截图）
+
+| 命令 | 结果 |
+| --- | --- |
+| `/ask prompt:用一句话介绍你自己` | **通过**：「我是 Natter，一个简洁、直接的 AI 助手。」 |
+| `/remember text:我喜欢乌龙茶` | **通过**：「Remembered mem_fd8fd6d0d976.」 |
+| `/memory` | **通过**：`mem_fd8fd6d0d976 [user] 我喜欢乌龙茶` |
+| `/forget target:我喜欢乌龙茶` | **通过**：「Forget successful.」 |
+| `/reset` | **通过**：「Conversation reset.」；随后 `summaries=0`、Discord session 被清空 |
+| `/remember scope:conversation` | **通过（拒绝）**：「Shared memory scopes require an administrator permission model; use scope:user for now.」（ephemeral） |
 
 ## 5. 运维
 
@@ -67,7 +77,7 @@ plugin failed natter.transport.discord phase=config code=invalid-config:
 | 备份 | **通过**：`scripts/natter-backup.sh` → 0600、`PRAGMA integrity_check=ok`、含 1 条 memory |
 | 恢复 | **通过**：备份复制到新 state → serve exit 0，数据保留（1 memory） |
 | systemd/docker 示例 | 未执行（`deploy/` 存在，待静态检查） |
-| 24h soak | 未执行 |
+| 24h soak | **未执行**（P4 计划中列为长跑项，非阻塞本次功能签收） |
 
 ## 5.1 真实多轮发现（20:32）
 
@@ -96,6 +106,19 @@ plugin failed natter.transport.discord phase=config code=invalid-config:
 
 首轮回复出现 `<response clipped>`（已发送到 Discord、写入 SQLite、进入 summary）；停 P3 后的第六/七轮**未复现**。源码 grep 0 命中，判断为一次性模型输出或环境残留。风险：该异常串已进入 summary（`version=5`），会被后续上下文继承；建议清理该会话 summary 或观察是否再次出现。
 
+## 5.3 修复复测（20:58–21:00，基线 `HEAD=47c2c49`）
+
+修复提交 `34fc7ef fix: 收敛 P4 slash schema、profile memory、单实例与 clipped 输出`。
+
+| 项 | 结果 |
+| --- | --- |
+| 构建 + 框架回归 | **239/239 通过** |
+| `BUG-P4-SCHEMA-PATTERN` | **通过**：`plugins config validate` 返回 `valid:true`；启动后 guild 命令注册 5 个：`ask(prompt)` / `remember(text,scope)` / `forget(target)` / `memory(limit)` / `reset` |
+| `BUG-P4-PROFILE-STORE` | **通过**：CLI `remember`/`memory list` 经 `IProfileMemoryStoreResolver` 选择 `natter.sample.memory#file`；`NATTER_SAMPLE_MEMORY_PATH` 指向 state 时生成 0600 文件（517B），跨进程 list 可见 |
+| `OBS-P4-DUAL-INSTANCE` | **通过**：同 state 启动第二个 serve → exit 1，`Another Natter serve instance is using state directory ...` |
+| `OBS-P4-CLIPPED` | **通过（组件级）**：`AiChatResponder` 增加 clipped 检测 + 重试一次 + fallback；框架测试新增覆盖 |
+| 命令 UX 真实交互 | **待用户**：`/ask` `/remember` `/forget` `/memory` `/reset`、共享 scope 拒绝、ephemeral |
+
 ## 6. 缺陷与观察
 
 | 编号 | 级别 | 现象 |
@@ -111,9 +134,13 @@ plugin failed natter.transport.discord phase=config code=invalid-config:
 2. **Tier 2 smoke**：钉钉群 @机器人 一条；
 3. 命令 UX：等 `BUG-P4-SCHEMA-PATTERN` 修复后，再验证 `/ask` `/remember` `/forget` `/memory` `/reset`、共享 scope 拒绝、ephemeral。
 
-## 8. 结论（进行中）
+## 8. 结论（复测后）
 
-- P3.1：插件加载/选择（AI 路径）通过；CLI/命令路由未遵循 profile；回滚策略与文档不一致。
-- P4 命令 UX：**被 schema 缺陷阻塞**。
-- 运维：备份/恢复通过。
-- **当前 No-Go**（1 High：`BUG-P4-SCHEMA-PATTERN`；真实多轮已通过；Tier 2 smoke 待测）。
+- P3.1：memory 插件加载/选择/回滚（显式失败策略）通过；CLI 与命令路由均按 profile 选择 store（文件持久化）。
+- P4 命令 UX：`/ask` `/remember` `/forget` `/memory` `/reset` 与共享 scope 拒绝真实通过；命令注册 5 个。
+- 真实多轮 summary：通过（7 轮，summary 增量 version 4/5）。
+- Tier 2 smoke：通过（钉钉「第二次测试」→ Spark 27 字）。
+- 运维：备份/恢复通过；单实例锁通过；24h soak 未执行。
+- 安全：日志无密钥；state 700、DB/.lock 600。
+- **当前判定：Go**（24h soak 作为后续长跑项，不阻塞本次功能签收）。
+- **实例状态**：`serve --duration 3600` 于 21:59 正常到期退出（exit 0，无 error），5098 已无监听；DB 保留 1 session / 2 messages / 1 旧 memory / 0 summaries。
