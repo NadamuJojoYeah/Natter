@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_NOLOGO: "true"
+  DOTNET_CLI_TELEMETRY_OPTOUT: "true"
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: "true"
+
+jobs:
+  build-test:
+    name: Build & test (.NET 10)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Cache NuGet
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('global.json', 'Directory.Packages.props', '**/*.csproj', 'Natter.slnx') }}
+          restore-keys: |
+            nuget-${{ runner.os }}-
+
+      - name: Restore
+        run: |
+          dotnet restore src/Natter.Cli/Natter.Cli.csproj
+          dotnet restore tests/Natter.Framework.Tests/Natter.Framework.Tests.csproj
+          dotnet restore tests/Natter.Live.Tests/Natter.Live.Tests.csproj
+
+      - name: Build CLI
+        run: dotnet build src/Natter.Cli/Natter.Cli.csproj -c Release --no-restore
+
+      - name: Build framework tests
+        run: dotnet build tests/Natter.Framework.Tests/Natter.Framework.Tests.csproj -c Release --no-restore
+
+      - name: Run framework tests
+        run: |
+          dotnet test tests/Natter.Framework.Tests/Natter.Framework.Tests.csproj \
+            -c Release --no-build \
+            --logger "trx;LogFileName=framework.trx" \
+            --results-directory TestResults
+
+      - name: Build live tests
+        run: dotnet build tests/Natter.Live.Tests/Natter.Live.Tests.csproj -c Release --no-restore
+
+      - name: Live tests must skip without credentials
+        env:
+          NATTER_LIVE: ""
+        run: |
+          dotnet test tests/Natter.Live.Tests/Natter.Live.Tests.csproj \
+            -c Release --no-build \
+            --logger "trx;LogFileName=live-skip.trx" \
+            --results-directory TestResults
+
+      - name: Dependency vulnerability scan
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet restore tests/Natter.Framework.Tests/Natter.Framework.Tests.csproj \
+            -p:NuGetAudit=true
+          dotnet list tests/Natter.Framework.Tests/Natter.Framework.Tests.csproj \
+            package --vulnerable --include-transitive | tee vulnerability.txt
+          if grep -q "has the following vulnerable packages" vulnerability.txt; then
+            echo "Vulnerable NuGet packages detected."
+            exit 1
+          fi
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: |
+            TestResults/**
+            vulnerability.txt
+          if-no-files-found: ignore
