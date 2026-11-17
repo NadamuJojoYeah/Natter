@@ -248,6 +248,7 @@ Android 产物位于 `artifacts/android/`。示例构建使用默认调试签名
 - [插件 Manifest Schema](docs/plugin.schema.json)：NPS v1 `plugin.json` 的机器可读 JSON Schema。
 - [发布指南](docs/PUBLISHING.md)：RID 矩阵、单文件、Android 签名与裁剪。
 - [运维手册](docs/OPERATIONS_RUNBOOK.md)：部署、secret/state、health、备份恢复、升级回滚与故障处理。
+- [P4.5 测试验证](docs/testing/2026-11-17-p4-5-test-verification.md) / [运维验证](docs/operations/2026-11-17-p4-5-ops-verification.md)：代理、health/offline、systemd/Docker、OBS-007 与 24h soak 交接。
 
 ## 定位与边界
 
