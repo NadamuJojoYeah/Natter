@@ -315,7 +315,11 @@ internal static class BuiltInCommands
         {
             Name = "health",
             Description = "Print upstream, profile, provider and plugin health.",
-            Options = [new CliOptionDescriptor("json", "Emit machine-readable JSON.")],
+            Options =
+            [
+                new CliOptionDescriptor("json", "Emit machine-readable JSON."),
+                new CliOptionDescriptor("offline", "Read config/state without starting upstreams."),
+            ],
             Origin = Origin,
             HandlerFactory = services => services.GetRequiredService<HealthCommand>(),
         },

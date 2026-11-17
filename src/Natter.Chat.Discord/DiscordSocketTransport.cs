@@ -5,6 +5,8 @@ using System.Reactive.Subjects;
 using System.Text.Json;
 using Discord;
 using Discord.Net;
+using Discord.Net.Rest;
+using Discord.Net.WebSockets;
 using Discord.WebSocket;
 
 namespace Natter.Chat.Discord;
@@ -39,7 +41,18 @@ public sealed class DiscordSocketTransport : IDiscordTransport, IDisposable
             GatewayIntents = ParseIntents(options.Intents),
             MessageCacheSize = 100,
             AlwaysDownloadUsers = false,
+            // Slow egress (proxied links) must not be cut off before the ready window even starts.
+            ConnectionTimeout = (int)TimeSpan.FromSeconds(Math.Max(30, options.ReadyTimeoutSeconds)).TotalMilliseconds,
         };
+
+        // Discord.Net defaults ignore the process proxy: REST is created with useProxy: false and
+        // the gateway socket gets ClientWebSocketOptions.Proxy = null. Hand both legs the resolved
+        // proxy explicitly so REST (including GetBotGateway) and the gateway use the same route.
+        if (DiscordEgressProxy.FromEnvironment() is { } egressProxy)
+        {
+            config.RestClientProvider = DefaultRestClientProvider.Create(useProxy: true, webProxy: egressProxy);
+            config.WebSocketProvider = DefaultWebSocketProvider.Create(egressProxy);
+        }
 
         _client = new DiscordSocketClient(config);
         _synchronizedEvents = Subject.Synchronize(_events);

@@ -50,6 +50,7 @@ public sealed class NatterHost : IAsyncDisposable
         if (_started) return;
 
         _started = true;
+        _rootProvider.GetService<Natter.Application.Chat.HostRuntimeClock>()?.MarkStarted();
 
         // Force journal subscription before any event can be published.
         _ = _rootProvider.GetService(typeof(IEventJournal));

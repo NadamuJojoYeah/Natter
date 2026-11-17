@@ -112,6 +112,8 @@ public sealed class DiscordStatusCommandHandler(DiscordChatUpstream upstream) : 
         invocation.Console.Out.WriteLine($"lastError: {status.LastError ?? "-"}");
         invocation.Console.Out.WriteLine($"sendFailures: {status.SendFailures}");
         invocation.Console.Out.WriteLine($"lastSendError: {status.LastSendError ?? "-"}");
+        invocation.Console.Out.WriteLine($"lastEventAt: {status.LastEventAt?.ToString("O") ?? "-"}");
+        invocation.Console.Out.WriteLine($"reconnectCount: {status.ReconnectCount}");
         invocation.Console.Out.WriteLine($"slashCommands: {status.SlashCommands.ToString().ToLowerInvariant()}");
         invocation.Console.Out.WriteLine(
             $"capabilities: max={status.Capabilities.MaxMessageLength} markdown={status.Capabilities.Markdown} "

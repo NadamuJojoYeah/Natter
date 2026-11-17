@@ -86,18 +86,24 @@ public static class NatterCli
         configure?.Invoke(builder);
 
         await using var host = builder.Build();
-        try
+        var offlineHealth = args.Length > 0
+                            && string.Equals(args[0], "health", StringComparison.OrdinalIgnoreCase)
+                            && args.Contains("--offline", StringComparer.Ordinal);
+        if (!offlineHealth)
         {
-            await host.StartAsync(cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            console.Error.WriteLine($"Host startup failed: {ex.Message}");
-            return CliExitCodes.Failure;
-        }
+            try
+            {
+                await host.StartAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                console.Error.WriteLine($"Host startup failed: {ex.Message}");
+                return CliExitCodes.Failure;
+            }
 
-        if (options.OnHostStartedAsync is not null)
-            await options.OnHostStartedAsync(host.Services).ConfigureAwait(false);
+            if (options.OnHostStartedAsync is not null)
+                await options.OnHostStartedAsync(host.Services).ConfigureAwait(false);
+        }
 
         try
         {

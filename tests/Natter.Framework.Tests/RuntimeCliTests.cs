@@ -19,6 +19,24 @@ public sealed class RuntimeCliTests
         Assert.Equal(2, document.RootElement.GetProperty("profiles").GetInt32());
         Assert.Equal(0, document.RootElement.GetProperty("conversations").GetInt32());
         Assert.Equal(2, document.RootElement.GetProperty("providers").GetArrayLength());
+        Assert.True(document.RootElement.GetProperty("uptimeSeconds").GetInt64() > 0);
+        Assert.NotEqual(
+            default,
+            document.RootElement.GetProperty("startedAt").GetDateTimeOffset());
+    }
+
+    [Fact]
+    public async Task Offline_health_does_not_start_upstreams()
+    {
+        var console = new StringConsole();
+        var exitCode = await NatterCli.RunAsync(
+            ["health", "--offline", "--json"],
+            console,
+            new NatterCliOptions { LoadPlugins = false });
+        Assert.Equal(CliExitCodes.Success, exitCode);
+        using var document = JsonDocument.Parse(console.Output);
+        Assert.Equal("offline", document.RootElement.GetProperty("status").GetString());
+        Assert.Equal(0, document.RootElement.GetProperty("upstreams").GetArrayLength());
     }
 
     [Fact]

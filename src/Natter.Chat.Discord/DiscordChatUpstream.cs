@@ -9,7 +9,7 @@ namespace Natter.Chat.Discord;
 /// Discord transport upstream: source identity, allowlists, NLMP event mapping, command
 /// execution and capability declaration. Networking lives in <see cref="IDiscordTransport"/>.
 /// </summary>
-public sealed class DiscordChatUpstream : IChatUpstream, IDisposable
+public sealed class DiscordChatUpstream : IChatUpstream, IChatUpstreamHealth, IDisposable
 {
     private readonly IDiscordTransport _transport;
     private readonly DiscordOptions _options;
@@ -26,6 +26,10 @@ public sealed class DiscordChatUpstream : IChatUpstream, IDisposable
     private bool _disposed;
     private int _sendFailures;
     private string? _lastSendError;
+    private int _reconnectCount;
+    private DateTimeOffset? _lastEventAt;
+    private DateTimeOffset? _lastConnectedAt;
+    private DateTimeOffset? _lastDisconnectAt;
 
     public DiscordChatUpstream(
         Source source,
@@ -149,6 +153,16 @@ public sealed class DiscordChatUpstream : IChatUpstream, IDisposable
         return ack;
     }
 
+    public UpstreamHealth Health
+        => new(
+            Source.Key,
+            IsConnected,
+            _lastEventAt,
+            _lastConnectedAt,
+            _lastDisconnectAt,
+            _reconnectCount,
+            LastError);
+
     public DiscordStatusSnapshot GetStatus()
         => new(
             Source,
@@ -164,7 +178,11 @@ public sealed class DiscordChatUpstream : IChatUpstream, IDisposable
             _options.RequireMention,
             _options.SlashCommands,
             _sendFailures,
-            _lastSendError);
+            _lastSendError,
+            _lastEventAt,
+            _lastConnectedAt,
+            _lastDisconnectAt,
+            _reconnectCount);
 
     public void Dispose()
     {
@@ -311,6 +329,14 @@ public sealed class DiscordChatUpstream : IChatUpstream, IDisposable
 
     private void OnTransportEvent(DiscordTransportEvent transportEvent)
     {
+        _lastEventAt = _clock.UtcNow;
+        if (transportEvent.Kind == DiscordTransportEventKind.Ready)
+            _lastConnectedAt = _clock.UtcNow;
+        if (transportEvent.Kind == DiscordTransportEventKind.Disconnected)
+        {
+            _lastDisconnectAt = _clock.UtcNow;
+            Interlocked.Increment(ref _reconnectCount);
+        }
         switch (transportEvent.Kind)
         {
             case DiscordTransportEventKind.Ready:
@@ -564,4 +590,8 @@ public sealed record DiscordStatusSnapshot(
     bool RequireMention,
     bool SlashCommands,
     int SendFailures,
-    string? LastSendError);
+    string? LastSendError,
+    DateTimeOffset? LastEventAt = null,
+    DateTimeOffset? LastConnectedAt = null,
+    DateTimeOffset? LastDisconnectAt = null,
+    int ReconnectCount = 0);
