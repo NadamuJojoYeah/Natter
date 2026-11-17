@@ -1,5 +1,7 @@
 # Natter deployment (Tier 1)
 
+> 完整运维流程见 [运维手册](../docs/OPERATIONS_RUNBOOK.md)。
+
 ## systemd
 
 1. Install the published binary under `/opt/natter`.

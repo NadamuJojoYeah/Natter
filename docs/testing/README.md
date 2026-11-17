@@ -69,6 +69,8 @@
 | 2026-11-15 | [P3 验收处置记录（归档）](archive/2026-11-15-p3-acceptance-response.md) | 共享删除、host contribution、export CLI、DM private、prompt injection、summary 更新 | **Closed · Go**（Archived） |
 | 2026-11-15 | [P4 Tier 1 产品化验收](2026-11-15-p4-acceptance.md) | 命令 UX、memory.store、备份/恢复、真实多轮、单实例 | **Go**：命令 5/5 真实通过、Tier2 smoke、239/239；24h soak 未执行 |
 | 2026-11-15 | [P4 验收处置记录](2026-11-15-p4-acceptance-response.md) | Schema、profile store、fail-closed、单实例、clipped 输出 | 待修复：1 High + 2 Medium + 2 观测 |
+| 2026-11-16 | [首次部署测试（Tier 1）](2026-11-16-first-deployment-test.md) | `OPERATIONS_RUNBOOK.md` §1–§11：发布、配置/secret、health、单实例、备份/恢复、优雅停止、采样、T+13h 巡检 | **通过（有条件）**：18 用例 17 通过；2 个代理阻塞缺陷 + 5 个观测 + 2 个环境限制；T+13h 断连经重启恢复 |
+| 2026-11-17 | [首次部署处置记录](2026-11-16-first-ops-deploy-response.md) | 代理/超时、health 语义、CLI 巡检、静默断连、uptime、systemd/soak | 待修复：2 阻塞 + 5 OBS + 2 环境项 |
 
 ## 5. 相关文档
 

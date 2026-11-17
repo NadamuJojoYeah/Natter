@@ -236,6 +236,21 @@ plugins/Natter.Plugin.Discord/
 - **message/@mention**：`Guilds | GuildMessages | DirectMessages | MessageContent`；必须在 Discord Developer Portal 开启 Message Content Intent。
 - 没有 `MessageContent` 时，`SocketMessage.Content` 可能为空；插件不得把空内容当成正常消息。
 
+### 5.5 出网代理
+
+Discord.Net 3.x 的默认实现**不**继承代理环境变量：
+
+- `DefaultRestClientProvider.Instance` 是以 `useProxy: false` 创建的；
+- `DefaultWebSocketClient` 会给每个 gateway socket 显式赋 `ClientWebSocketOptions.Proxy`（默认 null），显式 null 会绕过 `HTTP_PROXY`。
+
+因此 `DiscordSocketTransport` 构造时：
+
+1. `DiscordEgressProxy.FromEnvironment()` 从 `HttpClient.DefaultProxy` 解析代理（`HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY`）；
+2. 命中则同时注入 `DefaultRestClientProvider.Create(useProxy: true, webProxy: proxy)` 与 `DefaultWebSocketProvider.Create(proxy)`，让 REST（含 `GET /gateway/bot`）与 gateway 走同一条出口；
+3. `ConnectionTimeout = max(30s, readyTimeoutSeconds)`，避免代理链路握手（实测 REST ~12s + WS ~23s）被 30s 默认值切断。
+
+代理只来自进程环境，不进入插件 config、不进入 `${secret:...}` 引用。
+
 ---
 
 ## 6. 插件入口

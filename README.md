@@ -23,7 +23,7 @@ Natter 只交付**框架能力**：端口契约、组合根、插件加载、DI 
 - **Runtime/Profile**：`profiles.json` 显式 provider 路由、SQLite 会话、`serve`/`health`、`--config-dir`/`--state-dir`、Tier 1/2 启动策略。
 - **Context/Memory**：host prompt/context/memory pipeline、SQLite `summaries`/`memory_items`、确定性摘要、显式 `remember`/`forget`、scope 隔离。
 - **P4 Tier 1 UX**：Discord `/ask` `/remember` `/forget` `/memory` `/reset`，sample `memory.store` 插件，deploy/backup 示例。
-- **测试**：239 个框架级测试覆盖聚合事件、Rx 总线、DI 管道、解析器、插件加载、CLI、NLMP 一致性与 NPS v1 插件内核；另有可选的 live 套件对真实 Discord 与 DeepSeek API 做分层联调（见 [真实 API 联调测试方案](docs/LIVE_TEST_PLAN.md)）。
+- **测试**：245 个框架级测试覆盖聚合事件、Rx 总线、DI 管道、解析器、插件加载、CLI、NLMP 一致性与 NPS v1 插件内核；另有可选的 live 套件对真实 Discord 与 DeepSeek API 做分层联调（见 [真实 API 联调测试方案](docs/LIVE_TEST_PLAN.md)）。
 
 ## 架构
 
@@ -167,7 +167,7 @@ natter <command> [arguments] [options]
 | `dingtalk status [--json]` | 钉钉 Stream source/allowlist/连接状态 |
 | `spark status [--json]` | 星火 model/请求/错误/延迟/token |
 | `serve [--duration <s>] [--json]` | 长驻 host；加载 profile/upstream，等待取消或到时退出 |
-| `health [--json]` | upstream/profile/provider/plugin/会话健康快照 |
+| `health [--json] [--offline]` | upstream/profile/provider/plugin/会话健康快照；`--offline` 不启动 gateway |
 | `remember <text> [--scope]` | 显式、用户确认的长期记忆 | `remember "likes tea" --scope user --source ...` |
 | `forget <id|text>` | 删除显式记忆并失效 summary | `forget "likes tea"` |
 | `memory list [--limit]` | 查看当前 source/conversation/actor 可见记忆 | `memory list --json` |
@@ -247,6 +247,7 @@ Android 产物位于 `artifacts/android/`。示例构建使用默认调试签名
 - [AI Provider 设计](docs/AI_PROVIDER_DESIGN.md)：Microsoft.Extensions.AI、IChatClient、DeepSeek 适配、thinking/reasoning 与 responder 设计。
 - [插件 Manifest Schema](docs/plugin.schema.json)：NPS v1 `plugin.json` 的机器可读 JSON Schema。
 - [发布指南](docs/PUBLISHING.md)：RID 矩阵、单文件、Android 签名与裁剪。
+- [运维手册](docs/OPERATIONS_RUNBOOK.md)：部署、secret/state、health、备份恢复、升级回滚与故障处理。
 
 ## 定位与边界
 
