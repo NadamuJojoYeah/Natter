@@ -70,6 +70,9 @@
 | 2026-11-15 | [P4 Tier 1 产品化验收](2026-11-15-p4-acceptance.md) | 命令 UX、memory.store、备份/恢复、真实多轮、单实例 | **Go**：命令 5/5 真实通过、Tier2 smoke、239/239；24h soak 未执行 |
 | 2026-11-17 | [P4.5 修复验证](2026-11-17-p4-5-test-report.md) | 代理、health offline/时间戳、Tier1 诊断、P4 回归 | **环境受限**：245/245、代理单测 5/5、health 通过；Discord 网络阻断，真实链路未完成；1 Medium（DingTalk 时间戳） |
 | 2026-11-17 | [P4.5 联合处置记录](2026-11-17-p4-5-joint-response.md) | 测试/运维结果冲突、代理 gateway、DingTalk 时间戳、OBS-009~014 | **Conditional No-Go**：代理 WS 结果冲突待复现；DingTalk 时间戳/诊断/退出延迟待修 |
+| 2026-11-17 | [P4.5 联合复测计划](2026-11-17-p4-5-retest-plan.md) | 代理 90s 受控复现、duration、DingTalk health、sendFailures、systemd/Docker/24h | 复测后 Go/No-Go |
+| 2026-11-17 | [P4.5 复测报告（测试）](2026-11-17-p4-5-retest-report.md) | 代理 gateway、duration、DingTalk health、Tier1/offline | **Conditional Pass**：代理/duration/DingTalk connected 通过；P4 真人回归待补 |
+| 2026-11-17 | [P4.5 复测处置记录](2026-11-17-p4-5-retest-response.md) | phase/lastError/canceled/sendFailures 稳定性、P4 回归、运维收口 | **Conditional Pass**：代理冲突关闭；真人回归/运维项待完成 |
 | 2026-11-15 | [P4 验收处置记录](2026-11-15-p4-acceptance-response.md) | Schema、profile store、fail-closed、单实例、clipped 输出 | 待修复：1 High + 2 Medium + 2 观测 |
 | 2026-11-16 | [首次部署测试（Tier 1）](2026-11-16-first-deployment-test.md) | `OPERATIONS_RUNBOOK.md` §1–§11：发布、配置/secret、health、单实例、备份/恢复、优雅停止、采样、T+13h 巡检 | **通过（有条件）**：18 用例 17 通过；2 个代理阻塞缺陷 + 5 个观测 + 2 个环境限制；T+13h 断连经重启恢复 |
 | 2026-11-17 | [首次部署处置记录](2026-11-16-first-ops-deploy-response.md) | 代理/超时、health 语义、CLI 巡检、静默断连、uptime、systemd/soak | 待修复：2 阻塞 + 5 OBS + 2 环境项 |

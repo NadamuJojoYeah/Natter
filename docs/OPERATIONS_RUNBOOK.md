@@ -4,7 +4,7 @@
 > **适用版本**：P4 Go 基线（.NET 10 / Natter 0.1.0-preview）  
 > **适用对象**：负责 Natter Discord/DeepSeek 主链路、DingTalk/Spark 辅助链路的运维人员  
 > **目标**：让服务可部署、可观察、可备份、可恢复、可升级、可排障  
-> **关联**：[部署示例](../deploy/README.md)、[P4 产品化](P4_TIER1_PRODUCTIZATION.md)、[依赖演进策略](DEPENDENCY_EVOLUTION_POLICY.md)、[首次部署测试记录](testing/2026-11-16-first-deployment-test.md)、[P4.5 修复验证（运维）](operations/2026-11-17-p4-5-ops-verification.md)、[P4.5 运维验收执行记录](operations/2026-11-17-p4-5-ops-verification-run.md)
+> **关联**：[部署示例](../deploy/README.md)、[P4 产品化](P4_TIER1_PRODUCTIZATION.md)、[依赖演进策略](DEPENDENCY_EVOLUTION_POLICY.md)、[首次部署测试记录](testing/2026-11-16-first-deployment-test.md)、[P4.5 修复验证（运维）](operations/2026-11-17-p4-5-ops-verification.md)、[P4.5 运维验收执行记录](operations/2026-11-17-p4-5-ops-verification-run.md)、[P4.5 联合复测（运维侧）](operations/2026-11-17-p4-5-retest-run.md)
 
 ---
 
@@ -123,6 +123,7 @@ natter --config-dir /etc/natter/config --state-dir /var/lib/natter upstreams --j
 
 - `health.status=healthy`（Tier 1 profile 的 provider 可用且 upstream 都连接；Tier 2 缺失只作为 warning，不单独把状态降级）；
 - `uptimeSeconds` / `startedAt` 的权威值来自主实例 loopback `/health`；CLI `health` 是新进程，不能用于 uptime 对账。
+- Discord 连接失败时错误包含 `phase`、`lastDisconnectedError`、`proxy`、`connectionState`；代理凭据会脱敏。
 - 只部署 Tier 1（未装 Spark）时 `status=degraded` 属预期：`profiles.json` 里 `tier2-dingtalk-spark` 的 provider 不可用；
 - Discord/DeepSeek `available=true`；
 - 没有 `Failed` 插件；

@@ -1,10 +1,11 @@
 # 开发侧处置记录：P4.5 修复验证（测试 + 运维联合）
 
-> **状态**：Fixed · Ready for joint retest（代理冲突仍需受控复现；DingTalk 时间戳、duration、phase、sendFailures、Docker 模板已收敛）  
-> **日期**：2026-11-17  
-> **基线**：`HEAD=c131e73`  
-> **对应测试**：[P4.5 修复验证（测试报告）](2026-11-17-p4-5-test-report.md)  
-> **对应运维**：[P4.5 运维验收执行记录](../operations/2026-11-17-p4-5-ops-verification-run.md)  
+> **状态**：Fixed · Ready for joint retest（代理冲突仍需受控复现；DingTalk 时间戳、duration、phase、sendFailures、Docker 模板已收敛）
+> **复测计划**：[P4.5 联合复测计划](2026-11-17-p4-5-retest-plan.md)
+> **日期**：2026-11-17
+> **基线**：`HEAD=c131e73`
+> **对应测试**：[P4.5 修复验证（测试报告）](2026-11-17-p4-5-test-report.md)
+> **对应运维**：[P4.5 运维验收执行记录](../operations/2026-11-17-p4-5-ops-verification-run.md)
 > **配套计划**：[测试交接](2026-11-17-p4-5-test-verification.md)、[运维交接](../operations/2026-11-17-p4-5-ops-verification.md)
 
 ---
@@ -66,7 +67,7 @@ Discord gateway did not become ready before the configured timeout.
 
 ### 3.3 处置
 
-**不能把两边结果直接对冲。**  
+**不能把两边结果直接对冲。**
 先做一次受控复现：
 
 1. 固定 `HEAD=c131e73`，不改代码；
@@ -111,7 +112,7 @@ Discord 同场景字段有值。
 
 ### 4.2 影响
 
-OBS-007 的可观测性对 Tier 2 不生效。  
+OBS-007 的可观测性对 Tier 2 不生效。
 运维无法判断 DingTalk 最近连接/事件时间。
 
 ### 4.3 修复
@@ -141,7 +142,7 @@ SIGTERM 场景 131ms 正常。
 
 ### 5.2 根因方向
 
-`duration` 只控制 `ServeCommand` 的等待；host shutdown / upstream connect 的 90s 超时仍可能拖住退出。  
+`duration` 只控制 `ServeCommand` 的等待；host shutdown / upstream connect 的 90s 超时仍可能拖住退出。
 需要区分：
 
 - 正常 duration 到期；

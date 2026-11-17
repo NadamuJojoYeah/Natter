@@ -1,4 +1,6 @@
-# 2026-11-17 · P4.5 修复验证（测试报告）
+# 2026-11-17 · P4.5 修复验证（测试报告，复测后 superseded）
+
+> **复测结论**：`BUG-P4.5-PROXY-WS` 关闭（代理 5s READY；此前失败为旧 staging 插件）；`BUG-P4.5-DT-TIMESTAMPS` 关闭。详见 [2026-11-17-p4-5-retest-report.md](2026-11-17-p4-5-retest-report.md)。
 
 > **开发侧处置**：[P4.5 联合处置记录](2026-11-17-p4-5-joint-response.md)（代理 gateway 冲突、DingTalk 时间戳、OBS 收敛后归档）。
 
