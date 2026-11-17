@@ -8,7 +8,9 @@ public sealed record UpstreamHealth(
     DateTimeOffset? LastConnectedAt,
     DateTimeOffset? LastDisconnectAt,
     int ReconnectCount,
-    string? LastError);
+    string? LastError,
+    int SendFailures = 0,
+    string? LastSendError = null);
 
 public interface IChatUpstreamHealth
 {

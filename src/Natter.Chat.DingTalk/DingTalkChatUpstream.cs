@@ -9,7 +9,7 @@ namespace Natter.Chat.DingTalk;
 /// DingTalk NLMP upstream. DingTalk is text-first: no edit/delete/typing/slash in this version.
 /// The sessionWebhook from the last callback is the reply token for the conversation.
 /// </summary>
-public sealed class DingTalkChatUpstream : IChatUpstream, IDisposable
+public sealed class DingTalkChatUpstream : IChatUpstream, IChatUpstreamHealth, IDisposable
 {
     private readonly IDingTalkTransport _transport;
     private readonly DingTalkOptions _options;
@@ -24,6 +24,10 @@ public sealed class DingTalkChatUpstream : IChatUpstream, IDisposable
     private long _sequence;
     private bool _connected;
     private bool _disposed;
+    private int _reconnectCount;
+    private DateTimeOffset? _lastEventAt;
+    private DateTimeOffset? _lastConnectedAt;
+    private DateTimeOffset? _lastDisconnectAt;
 
     public DingTalkChatUpstream(
         Source source,
@@ -64,6 +68,11 @@ public sealed class DingTalkChatUpstream : IChatUpstream, IDisposable
 
     public IObservable<ChatEvent> Events => _synchronized;
 
+    public string? LastError { get; private set; }
+
+    public UpstreamHealth Health
+        => new(Source.Key, IsConnected, _lastEventAt, _lastConnectedAt, _lastDisconnectAt, _reconnectCount, LastError, 0, null);
+
     public async ValueTask ConnectAsync(CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -74,13 +83,21 @@ public sealed class DingTalkChatUpstream : IChatUpstream, IDisposable
         await _transport.ConnectAsync(cancellationToken).ConfigureAwait(false);
         lock (_gate)
             _connected = true;
+        LastError = null;
+        _lastConnectedAt = _clock.UtcNow;
         PublishStatus(UpstreamState.Ready);
     }
 
     public async ValueTask DisconnectAsync(CancellationToken cancellationToken = default)
     {
+        var wasConnected = IsConnected;
         lock (_gate)
             _connected = false;
+        if (wasConnected)
+        {
+            _lastDisconnectAt = _clock.UtcNow;
+            Interlocked.Increment(ref _reconnectCount);
+        }
         _subscription?.Dispose();
         _subscription = null;
         await _transport.DisconnectAsync(cancellationToken).ConfigureAwait(false);
@@ -168,17 +185,21 @@ public sealed class DingTalkChatUpstream : IChatUpstream, IDisposable
 
     private void OnTransportEvent(DingTalkTransportEvent transportEvent)
     {
+        _lastEventAt = _clock.UtcNow;
         switch (transportEvent.Kind)
         {
             case DingTalkTransportEventKind.Message when transportEvent.Message is { } message:
                 OnMessage(message);
                 break;
             case DingTalkTransportEventKind.Error:
+                LastError = transportEvent.ErrorMessage;
                 PublishStatus(UpstreamState.Error, transportEvent.ErrorMessage);
                 break;
             case DingTalkTransportEventKind.Disconnected:
                 lock (_gate)
                     _connected = false;
+                _lastDisconnectAt = _clock.UtcNow;
+                Interlocked.Increment(ref _reconnectCount);
                 PublishStatus(UpstreamState.Disconnected);
                 break;
         }

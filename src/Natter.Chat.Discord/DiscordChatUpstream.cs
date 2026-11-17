@@ -161,7 +161,9 @@ public sealed class DiscordChatUpstream : IChatUpstream, IChatUpstreamHealth, ID
             _lastConnectedAt,
             _lastDisconnectAt,
             _reconnectCount,
-            LastError);
+            LastError,
+            _sendFailures,
+            _lastSendError);
 
     public DiscordStatusSnapshot GetStatus()
         => new(

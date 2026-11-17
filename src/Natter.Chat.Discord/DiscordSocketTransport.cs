@@ -66,21 +66,38 @@ public sealed class DiscordSocketTransport : IDiscordTransport, IDisposable
         ObjectDisposedException.ThrowIf(_disposed, this);
         _ready = NewReadySource();
 
+        var phase = "startup";
         try
         {
             if (!_started)
             {
+                phase = "rest_gateway";
                 await _client.LoginAsync(TokenType.Bot, _token.Value).ConfigureAwait(false);
+                phase = "ws_connect";
                 await _client.StartAsync().ConfigureAwait(false);
                 _started = true;
             }
 
+            phase = "identify_ready";
             await _ready.Task.WaitAsync(TimeSpan.FromSeconds(Math.Max(1, _options.ReadyTimeoutSeconds)), cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (TimeoutException ex)
         {
-            throw new TimeoutException("Discord gateway did not become ready before the configured timeout.", ex);
+            throw new TimeoutException(
+                $"Discord gateway did not become ready during phase '{phase}' within "
+                + $"{_options.ReadyTimeoutSeconds}s (proxy may delay REST/WS handshake).",
+                ex);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                $"Discord connect failed during phase '{phase}': {ex.GetType().Name}.",
+                ex);
         }
     }
 

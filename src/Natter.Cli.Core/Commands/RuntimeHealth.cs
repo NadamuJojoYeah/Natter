@@ -57,7 +57,9 @@ public static class RuntimeHealth
                         value.LastConnectedAt,
                         value.LastDisconnectAt,
                         value.ReconnectCount,
-                        value.LastError);
+                        value.LastError,
+                        value.SendFailures,
+                        value.LastSendError);
                 }
                 return new RuntimeHealthUpstream(upstream.Source.Key, upstream.IsConnected);
             })
@@ -107,7 +109,9 @@ public sealed record RuntimeHealthUpstream(
     DateTimeOffset? LastConnectedAt = null,
     DateTimeOffset? LastDisconnectAt = null,
     int ReconnectCount = 0,
-    string? LastError = null);
+    string? LastError = null,
+    int SendFailures = 0,
+    string? LastSendError = null);
 
 public sealed record RuntimeHealthProvider(string Id, bool Available, string Profile, int SupportTier);
 

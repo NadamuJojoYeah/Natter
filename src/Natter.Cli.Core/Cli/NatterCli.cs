@@ -50,6 +50,13 @@ public static class NatterCli
             return CliExitCodes.Failure;
         }
 
+        var durationSeconds = ReadServeDuration(args);
+        using var commandBudget = durationSeconds > 0
+            ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken)
+            : null;
+        commandBudget?.CancelAfter(TimeSpan.FromSeconds(durationSeconds));
+        var runToken = commandBudget?.Token ?? cancellationToken;
+
         var builder = NatterApplicationBuilder.Create()
             .AddNatterFramework()
             .AddModule<CliCoreCompositionModule>()
@@ -93,7 +100,7 @@ public static class NatterCli
         {
             try
             {
-                await host.StartAsync(cancellationToken).ConfigureAwait(false);
+                await host.StartAsync(runToken).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -108,7 +115,7 @@ public static class NatterCli
         try
         {
             var runner = host.Services.GetRequiredService<CliRunner>();
-            return await runner.RunAsync(args, console, cancellationToken).ConfigureAwait(false);
+            return await runner.RunAsync(args, console, runToken).ConfigureAwait(false);
         }
         finally
         {
@@ -125,4 +132,20 @@ public static class NatterCli
             }
         }
     }
+    private static int ReadServeDuration(string[] args)
+    {
+        if (args.Length == 0
+            || !string.Equals(args[0], "serve", StringComparison.OrdinalIgnoreCase))
+            return 0;
+
+        for (var index = 1; index < args.Length - 1; index++)
+        {
+            if (string.Equals(args[index], "--duration", StringComparison.Ordinal)
+                && int.TryParse(args[index + 1], out var seconds)
+                && seconds > 0)
+                return seconds;
+        }
+        return 0;
+    }
+
 }
