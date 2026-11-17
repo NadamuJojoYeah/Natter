@@ -76,6 +76,10 @@ public sealed class NatterHost : IAsyncDisposable
             {
                 await _npsRuntime.StartAsync(cancellationToken).ConfigureAwait(false);
             }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "The NPS plugin runtime failed to start.");

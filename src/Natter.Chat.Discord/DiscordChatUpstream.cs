@@ -374,6 +374,8 @@ public sealed class DiscordChatUpstream : IChatUpstream, IChatUpstreamHealth, ID
             case DiscordTransportEventKind.Disconnected:
                 lock (_gate)
                     _connected = false;
+                if (!string.IsNullOrWhiteSpace(transportEvent.ErrorMessage))
+                    LastError = transportEvent.ErrorMessage;
                 PublishStatus(UpstreamState.Disconnected, transportEvent.ErrorMessage);
                 break;
         }

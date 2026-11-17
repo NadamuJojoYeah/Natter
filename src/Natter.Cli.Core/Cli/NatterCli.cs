@@ -102,6 +102,17 @@ public static class NatterCli
             {
                 await host.StartAsync(runToken).ConfigureAwait(false);
             }
+            catch (OperationCanceledException) when (runToken.IsCancellationRequested)
+            {
+                if (durationSeconds > 0 && !cancellationToken.IsCancellationRequested)
+                {
+                    console.Error.WriteLine("Serve duration reached during host startup; canceled.");
+                    return CliExitCodes.Success;
+                }
+
+                console.Error.WriteLine("Host startup canceled.");
+                return CliExitCodes.Cancelled;
+            }
             catch (Exception ex)
             {
                 console.Error.WriteLine($"Host startup failed: {ex.Message}");

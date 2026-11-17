@@ -30,6 +30,10 @@ public sealed class DiscordSocketTransport : IDiscordTransport, IDisposable
     private bool _started;
     private bool _disposed;
     private int _commandsRegistered;
+    private string? _lastGatewayError;
+    private bool _proxyConfigured;
+    private bool _restCompleted;
+    private bool _gatewayStarted;
 
     public DiscordSocketTransport(DiscordOptions options, DiscordBotToken token)
     {
@@ -52,6 +56,7 @@ public sealed class DiscordSocketTransport : IDiscordTransport, IDisposable
         {
             config.RestClientProvider = DefaultRestClientProvider.Create(useProxy: true, webProxy: egressProxy);
             config.WebSocketProvider = DefaultWebSocketProvider.Create(egressProxy);
+            _proxyConfigured = true;
         }
 
         _client = new DiscordSocketClient(config);
@@ -66,27 +71,30 @@ public sealed class DiscordSocketTransport : IDiscordTransport, IDisposable
         ObjectDisposedException.ThrowIf(_disposed, this);
         _ready = NewReadySource();
 
-        var phase = "startup";
         try
         {
             if (!_started)
             {
-                phase = "rest_gateway";
                 await _client.LoginAsync(TokenType.Bot, _token.Value).ConfigureAwait(false);
-                phase = "ws_connect";
+                _restCompleted = true;
                 await _client.StartAsync().ConfigureAwait(false);
+                _gatewayStarted = true;
                 _started = true;
             }
 
-            phase = "identify_ready";
             await _ready.Task.WaitAsync(TimeSpan.FromSeconds(Math.Max(1, _options.ReadyTimeoutSeconds)), cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (TimeoutException ex)
         {
+            var actualPhase = _lastGatewayError is not null || !_restCompleted
+                ? (_restCompleted ? "ws_connect" : "rest_gateway")
+                : (_client.ConnectionState == ConnectionState.Connected ? "identify_ready" : "ws_connect");
             throw new TimeoutException(
-                $"Discord gateway did not become ready during phase '{phase}' within "
-                + $"{_options.ReadyTimeoutSeconds}s (proxy may delay REST/WS handshake).",
+                $"Discord gateway did not become ready during phase '{actualPhase}' within "
+                + $"{_options.ReadyTimeoutSeconds}s. lastDisconnectedError="
+                + $"{Sanitize(_lastGatewayError ?? "none")}; connectionState={_client.ConnectionState}; "
+                + $"proxy={_proxyConfigured}; restCompleted={_restCompleted}; gatewayStarted={_gatewayStarted}.",
                 ex);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -95,8 +103,10 @@ public sealed class DiscordSocketTransport : IDiscordTransport, IDisposable
         }
         catch (Exception ex)
         {
+            var actualPhase = !_restCompleted ? "rest_gateway" : "ws_connect";
             throw new InvalidOperationException(
-                $"Discord connect failed during phase '{phase}': {ex.GetType().Name}.",
+                $"Discord connect failed during phase '{actualPhase}': {ex.GetType().Name}; "
+                + $"lastDisconnectedError={Sanitize(_lastGatewayError ?? "none")}; proxy={_proxyConfigured}.",
                 ex);
         }
     }
@@ -526,11 +536,12 @@ public sealed class DiscordSocketTransport : IDiscordTransport, IDisposable
 
     private Task OnDisconnectedAsync(Exception exception)
     {
+        _lastGatewayError = Sanitize(exception?.Message ?? "gateway disconnected without exception detail");
         Publish(new DiscordTransportEvent
         {
             Kind = DiscordTransportEventKind.Disconnected,
             ErrorCode = "gateway_disconnected",
-            ErrorMessage = exception.Message,
+            ErrorMessage = _lastGatewayError,
         });
 
         return Task.CompletedTask;
@@ -540,11 +551,12 @@ public sealed class DiscordSocketTransport : IDiscordTransport, IDisposable
     {
         if (message.Severity is LogSeverity.Error or LogSeverity.Critical)
         {
+            _lastGatewayError = Sanitize(message.Exception?.Message ?? message.Message);
             Publish(new DiscordTransportEvent
             {
                 Kind = DiscordTransportEventKind.Error,
                 ErrorCode = "gateway_log",
-                ErrorMessage = message.Exception?.Message ?? message.Message,
+                ErrorMessage = _lastGatewayError,
             });
         }
 
@@ -737,6 +749,13 @@ public sealed class DiscordSocketTransport : IDiscordTransport, IDisposable
 
     private void Publish(DiscordTransportEvent transportEvent)
         => _events.OnNext(transportEvent);
+
+    private static string Sanitize(string message)
+        => System.Text.RegularExpressions.Regex.Replace(
+            message,
+            @"(https?://)([^/@\s]+)@",
+            "$1***@",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
     private static TaskCompletionSource NewReadySource()
         => new(TaskCreationOptions.RunContinuationsAsynchronously);
