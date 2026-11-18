@@ -34,6 +34,15 @@ public sealed class InMemoryTaskStore : ITaskStore
                 .ToArray());
     }
 
+    public ValueTask<IReadOnlyList<AgentTask>> ListRecoverableAsync(CancellationToken cancellationToken = default)
+    {
+        lock (_gate)
+            return ValueTask.FromResult<IReadOnlyList<AgentTask>>(_tasks.Values
+                .Where(task => task.Status is AgentTaskStatus.Pending or AgentTaskStatus.Running)
+                .OrderBy(task => task.CreatedAt)
+                .ToArray());
+    }
+
     public ValueTask<bool> TryAcquireLeaseAsync(string taskId, string owner, TimeSpan ttl, CancellationToken cancellationToken = default)
     {
         lock (_gate)

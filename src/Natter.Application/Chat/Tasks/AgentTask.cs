@@ -52,6 +52,8 @@ public interface ITaskStore
 
     ValueTask<IReadOnlyList<AgentTask>> ListActiveAsync(string sessionId, CancellationToken cancellationToken = default);
 
+    ValueTask<IReadOnlyList<AgentTask>> ListRecoverableAsync(CancellationToken cancellationToken = default);
+
     ValueTask<bool> TryAcquireLeaseAsync(string taskId, string owner, TimeSpan ttl, CancellationToken cancellationToken = default);
 
     ValueTask<AgentTask> TransitionAsync(

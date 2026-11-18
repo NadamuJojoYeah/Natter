@@ -38,7 +38,8 @@ public interface IToolPolicy
 public sealed class ReadOnlyToolPolicy : IToolPolicy
 {
     public bool IsAllowed(ITool tool, RuntimeProfile profile)
-        => (tool.Capabilities & (ToolCapabilities.Shell | ToolCapabilities.FileWrite)) == 0;
+        => (tool.Capabilities & (ToolCapabilities.Shell | ToolCapabilities.FileWrite)) == 0
+           && ((tool.Capabilities & ToolCapabilities.Network) == 0 || profile.Policy.AllowNetworkTools);
 
     public int MaxCallsPerTask => 3;
     public TimeSpan Timeout { get; init; } = TimeSpan.FromSeconds(20);

@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using Natter.Application.Chat;
 using Natter.Chat;
 using Xunit;
@@ -70,6 +71,27 @@ public sealed class TaskRuntimeTests
     }
 
     [Fact]
+    public async Task Recovery_requeues_pending_tasks_and_expires_stale_running()
+    {
+        var store = new InMemoryTaskStore();
+        var dispatcher = new RecordingTaskDispatcher();
+        var source = Source.Create("discord", "discord", "bot");
+        var pending = NewTask(source);
+        var running = NewTask(source) with { TaskId = "task_running", Prompt = "running" };
+        await store.CreateAsync(pending);
+        await store.CreateAsync(running);
+        Assert.True(await store.TryAcquireLeaseAsync(running.TaskId, "old", TimeSpan.FromMilliseconds(1)));
+        await store.TransitionAsync(running.TaskId, AgentTaskStatus.Running, running.Version);
+        await Task.Delay(5);
+
+        var lifecycle = new TaskRecoveryLifecycle(store, dispatcher);
+        await lifecycle.StartAsync(new Microsoft.Extensions.DependencyInjection.ServiceCollection().BuildServiceProvider());
+        Assert.Single(dispatcher.Enqueued);
+        Assert.Equal(pending.TaskId, dispatcher.Enqueued[0].TaskId);
+        Assert.Equal(AgentTaskStatus.Expired, (await store.GetAsync(running.TaskId))!.Status);
+    }
+
+    [Fact]
     public async Task Sqlite_task_store_persists_status_and_events()
     {
         var path = Path.Combine(Path.GetTempPath(), "natter-task-" + Guid.NewGuid().ToString("N"), "natter.db");
@@ -86,6 +108,24 @@ public sealed class TaskRuntimeTests
         Assert.Equal(AgentTaskStatus.Completed, completed!.Status);
         Assert.Equal("ok", completed.ResultText);
         Assert.True((await reopened.GetEventsAsync(task.TaskId)).Count >= 3);
+    }
+
+    [Fact]
+    public async Task Http_tool_enforces_allowlist_and_network_policy()
+    {
+        using var http = new HttpClient(new RecordingHttpMessageHandler((_, _) => DeepSeekTestData.Json("ok")));
+        var tool = new HttpFetchTool(http, new HashSet<string>(["example.com"], StringComparer.OrdinalIgnoreCase));
+        Assert.True((await tool.ExecuteAsync(new ToolRequest("https://example.com"))).Ok);
+        var denied = await tool.ExecuteAsync(new ToolRequest("https://other.example"));
+        Assert.Equal("host_not_allowed", denied.ErrorCode);
+
+        var policy = new ReadOnlyToolPolicy();
+        Assert.False(policy.IsAllowed(tool, new RuntimeProfile { Id = "p" }));
+        Assert.True(policy.IsAllowed(tool, new RuntimeProfile
+        {
+            Id = "p",
+            Policy = new ProfilePolicy { AllowNetworkTools = true },
+        }));
     }
 
     [Fact]
@@ -137,6 +177,20 @@ public sealed class TaskRuntimeTests
     {
         public ValueTask<TaskResult> ExecuteAsync(AgentTask task, TaskExecutionContext context, CancellationToken cancellationToken = default)
             => ValueTask.FromResult(new TaskResult(text));
+    }
+
+    private sealed class RecordingTaskDispatcher : ITaskDispatcher
+    {
+        public List<AgentTask> Enqueued { get; } = [];
+
+        public ValueTask<string> EnqueueAsync(AgentTask task, CancellationToken cancellationToken = default)
+        {
+            Enqueued.Add(task);
+            return ValueTask.FromResult(task.TaskId);
+        }
+
+        public ValueTask<bool> RequestCancelAsync(string taskId, string actorId, CancellationToken cancellationToken = default)
+            => ValueTask.FromResult(true);
     }
 
     private sealed class BlockingWorker : ITaskWorker

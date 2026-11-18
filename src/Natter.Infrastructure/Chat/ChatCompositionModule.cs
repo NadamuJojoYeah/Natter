@@ -98,11 +98,13 @@ public sealed class ChatCompositionModule : ICompositionModule
                 ? new Natter.Application.Chat.InMemoryTaskStore()
                 : new SqliteTaskStore(Path.Combine(Path.GetFullPath(context.Options.StateDirectory), "natter.db")));
         services.AddSingleton<Natter.Application.Chat.ITool, Natter.Application.Chat.ClockTool>();
+        services.AddSingleton<Natter.Application.Chat.ITool, Natter.Application.Chat.TextTransformTool>();
         services.AddSingleton<Natter.Application.Chat.IToolPolicy, Natter.Application.Chat.ReadOnlyToolPolicy>();
         services.AddSingleton<Natter.Application.Chat.ITaskWorker>(provider =>
             new Natter.Application.Chat.DefaultTaskWorker(
                 provider.GetServices<Natter.Application.Chat.ITool>(),
                 provider.GetRequiredService<Natter.Application.Chat.IToolPolicy>()));
+        services.AddSingleton<Natter.Abstractions.Plugins.IPluginLifecycle, Natter.Application.Chat.TaskRecoveryLifecycle>();
         services.AddSingleton<Natter.Application.Chat.ITaskDispatcher>(provider =>
             new Natter.Application.Chat.TaskDispatcher(
                 provider.GetRequiredService<Natter.Application.Chat.ITaskStore>(),

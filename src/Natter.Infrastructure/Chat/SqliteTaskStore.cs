@@ -55,6 +55,18 @@ public sealed class SqliteTaskStore : ITaskStore
         return result;
     }
 
+    public async ValueTask<IReadOnlyList<AgentTask>> ListRecoverableAsync(CancellationToken cancellationToken = default)
+    {
+        await using var connection = await _database.OpenAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT * FROM agent_tasks WHERE status IN ('Pending','Running') ORDER BY created_at;";
+        var result = new List<AgentTask>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            result.Add(Read(reader));
+        return result;
+    }
+
     public async ValueTask<bool> TryAcquireLeaseAsync(string taskId, string owner, TimeSpan ttl, CancellationToken cancellationToken = default)
     {
         await using var connection = await _database.OpenAsync(cancellationToken).ConfigureAwait(false);
