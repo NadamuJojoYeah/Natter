@@ -4,7 +4,7 @@
 > **适用版本**：P4 Go 基线（.NET 10 / Natter 0.1.0-preview）  
 > **适用对象**：负责 Natter Discord/DeepSeek 主链路、DingTalk/Spark 辅助链路的运维人员  
 > **目标**：让服务可部署、可观察、可备份、可恢复、可升级、可排障  
-> **关联**：[部署示例](../deploy/README.md)、[P4 产品化](P4_TIER1_PRODUCTIZATION.md)、[依赖演进策略](DEPENDENCY_EVOLUTION_POLICY.md)、[首次部署测试记录](testing/2026-11-16-first-deployment-test.md)、[P4.5 修复验证（运维）](operations/2026-11-17-p4-5-ops-verification.md)、[P4.5 运维验收执行记录](operations/2026-11-17-p4-5-ops-verification-run.md)、[P4.5 联合复测（运维侧）](operations/2026-11-17-p4-5-retest-run.md)
+> **关联**：[部署示例](../deploy/README.md)、[P4 产品化](P4_TIER1_PRODUCTIZATION.md)、[依赖演进策略](DEPENDENCY_EVOLUTION_POLICY.md)、[首次部署测试记录](testing/2026-11-16-first-deployment-test.md)、[P4.5 修复验证（运维）](operations/2026-11-17-p4-5-ops-verification.md)、[P4.5 运维验收执行记录](operations/2026-11-17-p4-5-ops-verification-run.md)、[P4.5 联合复测（运维侧）](operations/2026-11-17-p4-5-retest-run.md)、[P4.5 收尾复测](operations/2026-11-17-p4-5-final-retest-run.md)
 
 ---
 
@@ -17,6 +17,7 @@
 - 备份用 `scripts/natter-backup.sh`，恢复必须停服务。
 - 健康检查优先 loopback `/health`；无服务时用 `natter health --offline --json`（不启动 upstream/gateway）。
 - 多用户并发/多 guild 权限矩阵尚未完整验证，按“小范围部署”对待。
+- P5 task runtime 当前使用 deterministic clock worker；AI-backed worker、http-fetch 与重启恢复尚未上线。
 
 ---
 
