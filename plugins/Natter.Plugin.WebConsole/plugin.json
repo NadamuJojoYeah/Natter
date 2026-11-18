@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "id": "natter.plugin.webconsole",
+  "name": "Natter WebConsole",
+  "version": "0.1.0",
+  "kind": "tool",
+  "hostApi": ">=0.1.0 <1.0.0",
+  "entry": {
+    "assembly": "lib/Natter.Plugin.WebConsole.dll",
+    "type": "Natter.Plugin.WebConsole.WebConsolePlugin"
+  },
+  "description": "Loopback Web diagnostics console for Natter: health, upstreams, providers, plugins, sanitized config preview and audit trail.",
+  "author": "Natter",
+  "license": "MIT",
+  "homepage": "https://github.com/natter-framework/natter",
+  "permissions": [
+    "network",
+    "secrets:WEBCONSOLE_TOKEN",
+    "cli.commands"
+  ],
+  "secrets": [
+    { "name": "WEBCONSOLE_TOKEN", "required": true }
+  ],
+  "configSchema": "config.schema.json",
+  "contributions": [
+    { "type": "cli.command", "id": "web.status" }
+  ],
+  "platforms": ["windows", "linux", "macos"],
+  "capabilities": ["admin:diagnostics", "cli:web.status"]
+}

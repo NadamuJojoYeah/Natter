@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Natter WebConsole config",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["token"],
+  "properties": {
+    "bind": {
+      "type": "string",
+      "default": "127.0.0.1",
+      "pattern": "^(127(\\.[0-9]{1,3}){3}|::1|localhost)$"
+    },
+    "port": {
+      "type": "integer",
+      "default": 5090,
+      "minimum": 1,
+      "maximum": 65535
+    },
+    "publicBaseUrl": {
+      "type": "string",
+      "pattern": "^https?://[^\\s]+$"
+    },
+    "hostHealthUrl": {
+      "type": "string",
+      "default": "http://127.0.0.1:5099/health",
+      "pattern": "^https?://[^\\s]+$"
+    },
+    "token": {
+      "type": "string",
+      "default": "${secret:WEBCONSOLE_TOKEN}",
+      "enum": ["${secret:WEBCONSOLE_TOKEN}"]
+    },
+    "readOnly": {
+      "type": "boolean",
+      "default": true
+    },
+    "allowConfigWrite": {
+      "type": "boolean",
+      "default": false
+    },
+    "allowCommandConsole": {
+      "type": "boolean",
+      "default": false
+    },
+    "commandAllowlist": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": []
+    },
+    "sessionMinutes": {
+      "type": "integer",
+      "default": 60,
+      "minimum": 1,
+      "maximum": 1440
+    },
+    "maxLogLines": {
+      "type": "integer",
+      "default": 500,
+      "minimum": 1,
+      "maximum": 10000
+    },
+    "trustedProxies": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": ["127.0.0.1"]
+    }
+  }
+}
