@@ -19,8 +19,10 @@ public sealed class TaskDispatcher(
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _cancellations = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, byte> _resultsSent = new(StringComparer.Ordinal);
     private readonly string _owner = $"host:{Environment.ProcessId}";
-    private static readonly TimeSpan LeaseTtl = TimeSpan.FromMinutes(2);
+    // Lease must cover the worker timeout; a 2m lease would let the watchdog expire a
+    // legitimate 5m task before it can finish.
     private static readonly TimeSpan TaskTimeout = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan LeaseTtl = TaskTimeout + TimeSpan.FromMinutes(1);
 
     public ValueTask<string> EnqueueAsync(AgentTask task, CancellationToken cancellationToken = default)
     {
