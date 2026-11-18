@@ -20,6 +20,7 @@ public sealed class RuntimeCliTests
         Assert.Equal(0, document.RootElement.GetProperty("conversations").GetInt32());
         Assert.Equal(2, document.RootElement.GetProperty("providers").GetArrayLength());
         Assert.True(document.RootElement.GetProperty("uptimeSeconds").GetInt64() > 0);
+        Assert.Equal(0, document.RootElement.GetProperty("tasks").GetProperty("active").GetInt64());
         Assert.NotEqual(
             default,
             document.RootElement.GetProperty("startedAt").GetDateTimeOffset());
