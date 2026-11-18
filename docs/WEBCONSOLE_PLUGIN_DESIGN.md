@@ -1,6 +1,6 @@
 # Natter WebConsole Plugin Design
 
-> **状态**：Accepted design · Phase 1 implementation in progress（2026-11-18）  
+> **状态**：Accepted design · Phase 1 baseline delivered（2026-11-18，验收见 [测试记录](testing/2026-11-18-webconsole-p1.md)）  
 > **日期**：2026-11-17（设计）/ 2026-11-18（实现决策）  
 > **定位**：Natter 的独立运维/调试插件，提供 Web 诊断、配置编辑和受限命令终端；不进入 core，不默认启用。  
 > **关联**：[NPS v1](PLUGIN_SPEC.md)、[运维手册](OPERATIONS_RUNBOOK.md)、[Harness 架构](HARNESS_ARCHITECTURE.md)、[P5 Agent Runtime](P5_AGENT_TASK_RUNTIME.md)、[宿主契约缺口与适配](WEBCONSOLE_HOST_API_GAP.md)、[插件使用说明](WEBCONSOLE_PLUGIN.md)

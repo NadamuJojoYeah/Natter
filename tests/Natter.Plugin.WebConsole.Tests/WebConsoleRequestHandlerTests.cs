@@ -1,0 +1,318 @@
+using System.Text.Json;
+using Xunit;
+
+namespace Natter.Plugin.WebConsole.Tests;
+
+public sealed class WebConsoleRequestHandlerTests
+{
+    private const string Origin = "http://127.0.0.1:5090";
+
+    [Fact]
+    public async Task Index_serves_static_html_with_security_headers()
+    {
+        using var harness = WebConsoleHarness.Create();
+
+        var response = await harness.Handler.HandleAsync(harness.Request("GET", "/"));
+
+        Assert.Equal(200, response.StatusCode);
+        Assert.StartsWith("text/html", response.ContentType);
+        Assert.Contains("default-src 'none'", response.Headers["Content-Security-Policy"]);
+        Assert.Equal("nosniff", response.Headers["X-Content-Type-Options"]);
+    }
+
+    [Fact]
+    public async Task Snapshot_requires_login()
+    {
+        using var harness = WebConsoleHarness.Create();
+
+        var response = await harness.Handler.HandleAsync(harness.Request("GET", "/api/snapshot"));
+
+        Assert.Equal(401, response.StatusCode);
+        Assert.Equal("auth.required", LoginResult.Json(response).GetProperty("error").GetProperty("code").GetString());
+    }
+
+    [Fact]
+    public async Task Login_rejects_wrong_token_and_audits()
+    {
+        using var harness = WebConsoleHarness.Create();
+
+        var login = await harness.LoginAsync("definitely-wrong-token-value");
+
+        Assert.Equal(401, login.Response.StatusCode);
+        Assert.Null(login.Cookie);
+
+        var audit = harness.Audit.Read(10);
+        Assert.Contains(audit, entry => entry.Action == "auth.login" && entry.Result == "denied");
+    }
+
+    [Fact]
+    public async Task Login_sets_strict_cookie_and_csrf()
+    {
+        using var harness = WebConsoleHarness.Create();
+
+        var login = await harness.LoginAsync();
+
+        Assert.Equal(200, login.Response.StatusCode);
+        Assert.NotNull(login.Cookie);
+        Assert.NotNull(login.Csrf);
+        Assert.Contains("HttpOnly", login.Response.Headers["Set-Cookie"]);
+        Assert.Contains("SameSite=Strict", login.Response.Headers["Set-Cookie"]);
+        Assert.DoesNotContain(WebConsoleHarness.Token, login.Response.Headers["Set-Cookie"]);
+    }
+
+    [Fact]
+    public async Task Repeated_failures_rate_limit_even_correct_token()
+    {
+        using var harness = WebConsoleHarness.Create();
+
+        for (var index = 0; index < WebConsoleLoginThrottle.MaxFailuresPerClient; index++)
+        {
+            var failed = await harness.LoginAsync("wrong-token-" + index);
+            Assert.Equal(401, failed.Response.StatusCode);
+        }
+
+        var blocked = await harness.LoginAsync();
+
+        Assert.Equal(429, blocked.Response.StatusCode);
+        Assert.True(blocked.Response.Headers.ContainsKey("Retry-After"));
+    }
+
+    [Fact]
+    public async Task Session_endpoint_reports_authenticated_state()
+    {
+        using var harness = WebConsoleHarness.Create();
+        var login = await harness.LoginAsync();
+
+        var anonymous = await harness.Handler.HandleAsync(harness.Request("GET", "/api/session"));
+        Assert.Equal(401, anonymous.StatusCode);
+
+        var authenticated = await harness.Handler.HandleAsync(harness.Request("GET", "/api/session", cookie: login.Cookie));
+        Assert.Equal(200, authenticated.StatusCode);
+        Assert.True(LoginResult.Json(authenticated).GetProperty("authenticated").GetBoolean());
+    }
+
+    [Fact]
+    public async Task Snapshot_returns_sections_and_audit()
+    {
+        using var harness = WebConsoleHarness.Create();
+        var login = await harness.LoginAsync();
+
+        var response = await harness.Handler.HandleAsync(harness.Request(
+            "GET", "/api/snapshot", cookie: login.Cookie));
+
+        Assert.Equal(200, response.StatusCode);
+        var json = LoginResult.Json(response);
+        Assert.Equal("natter.plugin.webconsole", json.GetProperty("self").GetProperty("pluginId").GetString());
+        Assert.False(json.GetProperty("health").GetProperty("available").GetBoolean());
+        Assert.Equal("host.plugin_diagnostics.unavailable",
+            json.GetProperty("plugins").GetProperty("gapCode").GetString());
+        Assert.True(json.GetProperty("gaps").GetArrayLength() >= 5);
+        Assert.Contains(harness.Audit.Read(10), entry => entry.Action == "snapshot.view");
+    }
+
+    [Fact]
+    public async Task Config_preview_masks_secrets()
+    {
+        using var harness = WebConsoleHarness.Create();
+        var login = await harness.LoginAsync();
+
+        var response = await harness.Handler.HandleAsync(harness.Request(
+            "GET", "/api/config", cookie: login.Cookie));
+
+        Assert.Equal(200, response.StatusCode);
+        var json = LoginResult.Json(response);
+        Assert.Equal("***", json.GetProperty("values").GetProperty("nested").GetProperty("password").GetString());
+        Assert.Equal("${secret:WEBCONSOLE_TOKEN}", json.GetProperty("values").GetProperty("token").GetString());
+        Assert.False(json.GetProperty("writeEnabled").GetBoolean());
+    }
+
+    [Fact]
+    public async Task Config_write_requires_csrf_then_reports_disabled_or_gap()
+    {
+        using var harness = WebConsoleHarness.Create();
+        var login = await harness.LoginAsync();
+
+        var withoutCsrf = await harness.Handler.HandleAsync(harness.Request(
+            "POST", "/api/config/profiles", body: "{}", cookie: login.Cookie));
+        Assert.Equal(403, withoutCsrf.StatusCode);
+        Assert.Equal("csrf.invalid", LoginResult.Json(withoutCsrf).GetProperty("error").GetProperty("code").GetString());
+
+        var readonlyResponse = await harness.Handler.HandleAsync(harness.Request(
+            "POST", "/api/config/profiles", body: "{}", cookie: login.Cookie, csrf: login.Csrf));
+        Assert.Equal(403, readonlyResponse.StatusCode);
+        Assert.Equal("config.write_disabled",
+            LoginResult.Json(readonlyResponse).GetProperty("error").GetProperty("code").GetString());
+
+        using var writable = WebConsoleHarness.Create(new WebConsoleOptions
+        {
+            Port = 5090,
+            ReadOnly = false,
+            AllowConfigWrite = true,
+        });
+        var writableLogin = await writable.LoginAsync();
+        var gap = await writable.Handler.HandleAsync(writable.Request(
+            "POST", "/api/config/plugin:natter.plugin.webconsole", body: "{}", cookie: writableLogin.Cookie, csrf: writableLogin.Csrf));
+
+        Assert.Equal(501, gap.StatusCode);
+        Assert.Equal("host.admin_config.unavailable", LoginResult.Json(gap).GetProperty("error").GetProperty("code").GetString());
+    }
+
+    [Fact]
+    public async Task Config_id_whitelist_rejects_paths()
+    {
+        using var harness = WebConsoleHarness.Create(new WebConsoleOptions
+        {
+            Port = 5090,
+            ReadOnly = false,
+            AllowConfigWrite = true,
+        });
+        var login = await harness.LoginAsync();
+
+        var response = await harness.Handler.HandleAsync(harness.Request(
+            "POST", "/api/config/../../etc/passwd", body: "{}", cookie: login.Cookie, csrf: login.Csrf));
+
+        Assert.Equal(400, response.StatusCode);
+        Assert.Equal("config.id_invalid", LoginResult.Json(response).GetProperty("error").GetProperty("code").GetString());
+    }
+
+    [Fact]
+    public async Task Command_console_reports_disabled_and_gap()
+    {
+        using var harness = WebConsoleHarness.Create();
+        var login = await harness.LoginAsync();
+
+        var disabled = await harness.Handler.HandleAsync(harness.Request(
+            "POST", "/api/commands", body: "{\"command\":\"health --json\"}", cookie: login.Cookie, csrf: login.Csrf));
+        Assert.Equal(403, disabled.StatusCode);
+
+        using var enabled = WebConsoleHarness.Create(new WebConsoleOptions
+        {
+            Port = 5090,
+            ReadOnly = false,
+            AllowCommandConsole = true,
+        });
+        var enabledLogin = await enabled.LoginAsync();
+        var gap = await enabled.Handler.HandleAsync(enabled.Request(
+            "POST", "/api/commands", body: "{\"command\":\"health --json\"}", cookie: enabledLogin.Cookie, csrf: enabledLogin.Csrf));
+
+        Assert.Equal(501, gap.StatusCode);
+        Assert.Equal("host.admin_command.unavailable", LoginResult.Json(gap).GetProperty("error").GetProperty("code").GetString());
+        Assert.Contains(enabled.Audit.Read(20), entry => entry.Action == "command.run" && entry.Result == "unavailable");
+    }
+
+    [Fact]
+    public async Task Logout_requires_csrf_then_expires_session()
+    {
+        using var harness = WebConsoleHarness.Create();
+        var login = await harness.LoginAsync();
+
+        var withoutCsrf = await harness.Handler.HandleAsync(harness.Request(
+            "DELETE", "/api/session", cookie: login.Cookie));
+        Assert.Equal(403, withoutCsrf.StatusCode);
+
+        var logout = await harness.Handler.HandleAsync(harness.Request(
+            "DELETE", "/api/session", cookie: login.Cookie, csrf: login.Csrf));
+        Assert.Equal(200, logout.StatusCode);
+        Assert.Contains("Max-Age=0", logout.Headers["Set-Cookie"]);
+
+        var after = await harness.Handler.HandleAsync(harness.Request(
+            "GET", "/api/snapshot", cookie: login.Cookie));
+        Assert.Equal(401, after.StatusCode);
+    }
+
+    [Fact]
+    public async Task Cross_origin_requests_are_rejected()
+    {
+        using var harness = WebConsoleHarness.Create();
+        var login = await harness.LoginAsync();
+
+        var response = await harness.Handler.HandleAsync(harness.Request(
+            "GET", "/api/snapshot", cookie: login.Cookie, origin: "https://evil.example"));
+
+        Assert.Equal(403, response.StatusCode);
+        Assert.Equal("request.origin_denied", LoginResult.Json(response).GetProperty("error").GetProperty("code").GetString());
+    }
+
+    [Fact]
+    public async Task Same_origin_header_is_accepted()
+    {
+        using var harness = WebConsoleHarness.Create();
+        var login = await harness.LoginAsync();
+
+        var response = await harness.Handler.HandleAsync(harness.Request(
+            "GET", "/api/snapshot", cookie: login.Cookie, origin: Origin));
+
+        Assert.Equal(200, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Unknown_and_traversal_paths_return_404()
+    {
+        using var harness = WebConsoleHarness.Create();
+        var login = await harness.LoginAsync();
+
+        var traversal = await harness.Handler.HandleAsync(harness.Request(
+            "GET", "/../plugin.json", cookie: login.Cookie));
+        Assert.Equal(404, traversal.StatusCode);
+
+        var unknown = await harness.Handler.HandleAsync(harness.Request(
+            "GET", "/api/does-not-exist", cookie: login.Cookie));
+        Assert.Equal(404, unknown.StatusCode);
+    }
+
+    [Fact]
+    public async Task Wrong_method_returns_405_with_allow_header()
+    {
+        using var harness = WebConsoleHarness.Create();
+        var login = await harness.LoginAsync();
+
+        var response = await harness.Handler.HandleAsync(harness.Request(
+            "PUT", "/api/snapshot", body: "{}", cookie: login.Cookie, csrf: login.Csrf));
+
+        Assert.Equal(405, response.StatusCode);
+        Assert.Equal("GET", response.Headers["Allow"]);
+    }
+
+    [Fact]
+    public async Task Logs_endpoint_returns_audit_and_documented_host_gap()
+    {
+        using var harness = WebConsoleHarness.Create();
+        var login = await harness.LoginAsync();
+
+        var response = await harness.Handler.HandleAsync(harness.Request(
+            "GET", "/api/logs", cookie: login.Cookie, query: "limit=10"));
+
+        Assert.Equal(200, response.StatusCode);
+        var json = LoginResult.Json(response);
+        Assert.False(json.GetProperty("hostLogs").GetProperty("available").GetBoolean());
+        Assert.Equal("host.logs.unavailable", json.GetProperty("hostLogs").GetProperty("gapCode").GetString());
+        Assert.True(json.GetProperty("audit").GetArrayLength() >= 1);
+    }
+
+    [Fact]
+    public async Task Forwarded_for_is_only_trusted_for_configured_proxies()
+    {
+        using var harness = WebConsoleHarness.Create();
+        var login = await harness.LoginAsync();
+
+        var trusted = await harness.Handler.HandleAsync(harness.Request(
+            "GET",
+            "/api/snapshot",
+            cookie: login.Cookie,
+            ip: "127.0.0.1",
+            extraHeaders: new Dictionary<string, string> { ["X-Forwarded-For"] = "198.51.100.7" }));
+        Assert.Equal(200, trusted.StatusCode);
+
+        var untrusted = await harness.Handler.HandleAsync(harness.Request(
+            "GET",
+            "/api/snapshot",
+            cookie: login.Cookie,
+            ip: "203.0.113.9",
+            extraHeaders: new Dictionary<string, string> { ["X-Forwarded-For"] = "198.51.100.7" }));
+        Assert.Equal(200, untrusted.StatusCode);
+
+        var audit = harness.Audit.Read(20);
+        Assert.Contains(audit, entry => entry.Action == "snapshot.view" && entry.Ip == "198.51.100.7");
+        Assert.Contains(audit, entry => entry.Action == "snapshot.view" && entry.Ip == "203.0.113.9");
+    }
+}

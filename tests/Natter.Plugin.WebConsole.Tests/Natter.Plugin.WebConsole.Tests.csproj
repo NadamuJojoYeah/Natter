@@ -1,0 +1,42 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <RootNamespace>Natter.Plugin.WebConsole.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="coverlet.collector">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../plugins/Natter.Plugin.WebConsole/Natter.Plugin.WebConsole.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="../../plugins/Natter.Plugin.WebConsole/wwwroot/**"
+          Link="plugin-assets/%(RecursiveDir)%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../plugins/Natter.Plugin.WebConsole/plugin.json"
+          Link="plugin-package/plugin.json"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../plugins/Natter.Plugin.WebConsole/config.schema.json"
+          Link="plugin-package/config.schema.json"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../plugins/Natter.Plugin.WebConsole/config.sample.json"
+          Link="plugin-package/config.sample.json"
+          CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

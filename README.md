@@ -246,6 +246,8 @@ Android 产物位于 `artifacts/android/`。示例构建使用默认调试签名
 - [P4 Tier 1 产品化](docs/P4_TIER1_PRODUCTIZATION.md)：Discord 命令 UX、memory 用户入口、DeepSeek 稳定性、serve 部署/备份/24h soak 与发布闸门。
 - [P5 Agent Task Runtime](docs/P5_AGENT_TASK_RUNTIME.md)：AgentTask、TaskStore、Worker、Tools、取消/超时/重启恢复与安全边界。
 - [WebConsole 插件设计](docs/WEBCONSOLE_PLUGIN_DESIGN.md)：只读诊断、配置编辑、受限命令终端、认证/反向代理与 ASP.NET Core 加载风险。
+- [WebConsole 插件使用](docs/WEBCONSOLE_PLUGIN.md)：staging、配置、反向代理、排障与已知限制。
+- [WebConsole 宿主契约缺口](docs/WEBCONSOLE_HOST_API_GAP.md)：G1–G10（admin kind/contribution、IAdmin*、日志、脱敏、ALC）与临时适配。
 - [依赖与类型演进策略](docs/DEPENDENCY_EVOLUTION_POLICY.md)：依赖检查/升级周期、net10→net12 LTS、插件 ABI、C# union/closed hierarchy 与 Result 边界。
 - [插件开发](docs/PLUGINS.md)：清单、适配器覆盖、CLI 命令、生命周期、嵌入模式。
 - [插件规范（NPS v1）](docs/PLUGIN_SPEC.md)：manifest、contribution、依赖图、Host API、配置/秘密、权限与激活回滚。
