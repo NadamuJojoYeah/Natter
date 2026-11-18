@@ -1,9 +1,10 @@
 # Natter WebConsole 插件使用说明
 
-> **状态**：Phase 1（只读诊断） · 2026-11-18  
-> **定位**：面向运维的 loopback Web 控制台；不修改 core，不默认启用。  
-> **设计**：[WEBCONSOLE_PLUGIN_DESIGN.md](WEBCONSOLE_PLUGIN_DESIGN.md)  
+> **状态**：Phase 1（只读诊断） · 2026-11-18
+> **定位**：面向运维的 loopback Web 控制台；不修改 core，不默认启用。
+> **设计**：[WEBCONSOLE_PLUGIN_DESIGN.md](WEBCONSOLE_PLUGIN_DESIGN.md)
 > **宿主契约缺口**：[WEBCONSOLE_HOST_API_GAP.md](WEBCONSOLE_HOST_API_GAP.md)
+> **验收测试计划**：[WebConsole 插件验收测试计划](testing/2026-11-18-webconsole-acceptance.md)
 
 ---
 
@@ -96,7 +97,7 @@ plugins/natter.plugin.webconsole/
 要点：
 
 - `token` 只接受 `${secret:WEBCONSOLE_TOKEN}`；secret 由宿主 secret provider 提供（环境变量或密钥库）；
-- 没有 `WEBCONSOLE_TOKEN` → 插件激活失败（`webconsole.token-missing`），不会启动无认证控制台；
+- 没有 `WEBCONSOLE_TOKEN` → 插件激活失败（实际可能是 `phase=config code=missing-secret`，与 `webconsole.token-missing` 语义等价），不会启动无认证控制台；
 - `bind` 必须是 loopback（`127.0.0.1`、`::1`、`localhost`）；其他值 → `webconsole.bind-not-loopback`；
 - `hostHealthUrl` 必须是 loopback URL；指向 `natter serve --health-port <port>` 的 `/health`；
 - `publicBaseUrl` 仅在通过反向代理暴露时设置（用于 cookie `Secure`、Origin 校验）。
@@ -216,8 +217,8 @@ natter-admin.example.com {
 
 | 现象 | 错误码 | 处理 |
 | --- | --- | --- |
-| 插件 Failed，缺 secret | `webconsole.token-missing` | 配置 `WEBCONSOLE_TOKEN` |
-| 插件 Failed，端口占用 | `webconsole.port-in-use` | 改 `port` 或停掉占用进程 |
+| 插件 Failed，缺 secret | `missing-secret`（等价 `webconsole.token-missing`） | 配置 `WEBCONSOLE_TOKEN` |
+| 端口占用 | 可能自动进入 external 模式并记录 warning；以启动日志/`web status` 为准 | 改 `port` 或停掉占用进程 |
 | 插件 Failed，绑定非法 | `webconsole.bind-not-loopback` | 改回 `127.0.0.1` |
 | 插件 Failed，静态资源缺失 | `webconsole.static-assets-missing` | 重新 staging，确认 `wwwroot/` 完整 |
 | 页面 health 灰显 | `host.health.unavailable` | 启动 `serve --health-port` 并核对 `hostHealthUrl` |
@@ -229,6 +230,9 @@ natter-admin.example.com {
 ---
 
 ## 10. 已知限制
+
+- `readOnly=true` 时即使 `allowCommandConsole=true`，命令控制台仍保持禁用；需要同时 `readOnly=false`。
+- 方法不允许通常返回 403（配置/策略层），不是 405。
 
 - 无 ASP.NET Core：Phase 1 用 `HttpListener`，不支持 HTTP/2/WebSocket；
 - 无宿主日志读取端口：`/logs` 只展示审计；

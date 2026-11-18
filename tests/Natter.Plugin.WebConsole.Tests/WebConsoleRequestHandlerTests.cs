@@ -352,6 +352,20 @@ public sealed class WebConsoleRequestHandlerTests
     }
 
     [Fact]
+    public async Task Config_validate_rejects_path_traversal_ids()
+    {
+        using var harness = WebConsoleHarness.Create();
+        var login = await harness.LoginAsync();
+        var body = JsonSerializer.Serialize(new { content = "{}" });
+
+        var response = await harness.Handler.HandleAsync(harness.Request(
+            "POST", "/api/config/../etc/passwd/validate", body: body, cookie: login.Cookie, csrf: login.Csrf));
+
+        Assert.Equal(400, response.StatusCode);
+        Assert.Equal("config.id_invalid", LoginResult.Json(response).GetProperty("error").GetProperty("code").GetString());
+    }
+
+    [Fact]
     public async Task Config_validate_flags_plaintext_secret_literals()
     {
         using var harness = WebConsoleHarness.Create();
