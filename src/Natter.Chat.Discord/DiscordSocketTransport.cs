@@ -399,6 +399,17 @@ public sealed class DiscordSocketTransport : IDiscordTransport, IDisposable
                     case "memory":
                         builder.AddOption("limit", ApplicationCommandOptionType.Integer, "Maximum items", isRequired: false);
                         break;
+                    case "task":
+                        builder.AddOption("prompt", ApplicationCommandOptionType.String, "Task prompt", isRequired: true);
+                        break;
+                    case "status":
+                        builder.AddOption("task", ApplicationCommandOptionType.String, "Task id", isRequired: true);
+                        break;
+                    case "tasks":
+                        break;
+                    case "cancel":
+                        builder.AddOption("task", ApplicationCommandOptionType.String, "Task id", isRequired: true);
+                        break;
                     case "reset":
                         break;
                     default:

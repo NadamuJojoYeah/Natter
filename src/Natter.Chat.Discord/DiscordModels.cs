@@ -60,6 +60,10 @@ public sealed class DiscordOptions
         ["forget"] = true,
         ["memory"] = true,
         ["reset"] = true,
+        ["task"] = true,
+        ["status"] = true,
+        ["tasks"] = true,
+        ["cancel"] = true,
     };
 
     public int InteractionTtlSeconds { get; set; } = 900;

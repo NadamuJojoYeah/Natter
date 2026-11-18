@@ -18,7 +18,9 @@ public sealed class ChatCommandRouter(
     IConversationStore conversations,
     ChatCommandFactory commands,
     IContextComponentCatalog? components = null,
-    IProfileMemoryStoreResolver? memoryResolver = null) : IChatCommandRouter
+    IProfileMemoryStoreResolver? memoryResolver = null,
+    ITaskStore? tasks = null,
+    ITaskDispatcher? taskDispatcher = null) : IChatCommandRouter
 {
     private static readonly string[] Help =
     [
@@ -27,6 +29,10 @@ public sealed class ChatCommandRouter(
         "/forget target:<id|text>",
         "/memory [limit]",
         "/reset",
+        "/task prompt:<text>",
+        "/status task:<id>",
+        "/tasks",
+        "/cancel task:<id>",
     ];
 
     public async ValueTask<ChatCommand?> TryHandleAsync(
@@ -40,6 +46,10 @@ public sealed class ChatCommandRouter(
         return interaction.Command.Trim().ToLowerInvariant() switch
         {
             "ask" => null,
+            "task" => await CreateTaskAsync(chatEvent, interaction, cancellationToken).ConfigureAwait(false),
+            "status" => await StatusAsync(chatEvent, interaction, cancellationToken).ConfigureAwait(false),
+            "tasks" => await ListTasksAsync(chatEvent, interaction, cancellationToken).ConfigureAwait(false),
+            "cancel" => await CancelTaskAsync(chatEvent, interaction, cancellationToken).ConfigureAwait(false),
             "remember" => await RememberAsync(chatEvent, interaction, cancellationToken).ConfigureAwait(false),
             "forget" => await ForgetAsync(chatEvent, interaction, cancellationToken).ConfigureAwait(false),
             "memory" => await ListAsync(chatEvent, interaction, cancellationToken).ConfigureAwait(false),
@@ -163,6 +173,92 @@ public sealed class ChatCommandRouter(
         await summaries.InvalidateAsync(userKey, "reset", cancellationToken).ConfigureAwait(false);
         return Reply(chatEvent, interaction, "Conversation reset.", ephemeral: true);
     }
+
+    private async ValueTask<ChatCommand> CreateTaskAsync(
+        InteractionCreatedEvent chatEvent,
+        Interaction interaction,
+        CancellationToken cancellationToken)
+    {
+        if (tasks is null || taskDispatcher is null)
+            return Reply(chatEvent, interaction, "Task runtime is not available.", ephemeral: true);
+        var prompt = Option(interaction, "prompt") ?? Option(interaction, "text");
+        if (string.IsNullOrWhiteSpace(prompt))
+            return Reply(chatEvent, interaction, "Usage: /task prompt:<text>", ephemeral: true);
+
+        var key = new ConversationKey(
+            chatEvent.Source.Key,
+            interaction.Conversation.Id,
+            interaction.Conversation.GuildId,
+            interaction.User.Id);
+        var task = new AgentTask
+        {
+            TaskId = "task_" + Guid.NewGuid().ToString("N")[..16],
+            SessionId = InMemoryConversationStore.SessionId(key),
+            Source = chatEvent.Source,
+            ConversationId = interaction.Conversation.Id,
+            GuildId = interaction.Conversation.GuildId,
+            ActorId = interaction.User.Id,
+            Prompt = prompt.Trim(),
+            Status = AgentTaskStatus.Pending,
+        };
+        await tasks.CreateAsync(task, cancellationToken).ConfigureAwait(false);
+        await taskDispatcher.EnqueueAsync(task, cancellationToken).ConfigureAwait(false);
+        return Reply(chatEvent, interaction, $"Task accepted: {task.TaskId}", ephemeral: true);
+    }
+
+    private async ValueTask<ChatCommand> StatusAsync(
+        InteractionCreatedEvent chatEvent,
+        Interaction interaction,
+        CancellationToken cancellationToken)
+    {
+        if (tasks is null)
+            return Reply(chatEvent, interaction, "Task runtime is not available.", ephemeral: true);
+        var id = Option(interaction, "task") ?? Option(interaction, "taskid") ?? interaction.Values?.FirstOrDefault();
+        if (string.IsNullOrWhiteSpace(id))
+            return Reply(chatEvent, interaction, "Usage: /status task:<task-id>", ephemeral: true);
+        var task = await tasks.GetAsync(id, cancellationToken).ConfigureAwait(false);
+        return task is null
+            ? Reply(chatEvent, interaction, "Task not found.", ephemeral: true)
+            : Reply(chatEvent, interaction,
+                $"{task.TaskId} {task.Status} v{task.Version}"
+                + (string.IsNullOrWhiteSpace(task.ResultText) ? string.Empty : $"\n{Truncate(task.ResultText, 500)}"),
+                ephemeral: true);
+    }
+
+    private async ValueTask<ChatCommand> ListTasksAsync(
+        InteractionCreatedEvent chatEvent,
+        Interaction interaction,
+        CancellationToken cancellationToken)
+    {
+        if (tasks is null)
+            return Reply(chatEvent, interaction, "Task runtime is not available.", ephemeral: true);
+        var key = new ConversationKey(
+            chatEvent.Source.Key,
+            interaction.Conversation.Id,
+            interaction.Conversation.GuildId,
+            interaction.User.Id);
+        var active = await tasks.ListActiveAsync(InMemoryConversationStore.SessionId(key), cancellationToken).ConfigureAwait(false);
+        return Reply(chatEvent, interaction,
+            active.Count == 0 ? "No active tasks." : string.Join("\n", active.Select(task => $"{task.TaskId} {task.Status}")),
+            ephemeral: true);
+    }
+
+    private async ValueTask<ChatCommand> CancelTaskAsync(
+        InteractionCreatedEvent chatEvent,
+        Interaction interaction,
+        CancellationToken cancellationToken)
+    {
+        if (tasks is null || taskDispatcher is null)
+            return Reply(chatEvent, interaction, "Task runtime is not available.", ephemeral: true);
+        var id = Option(interaction, "task") ?? Option(interaction, "taskid") ?? interaction.Values?.FirstOrDefault();
+        if (string.IsNullOrWhiteSpace(id))
+            return Reply(chatEvent, interaction, "Usage: /cancel task:<task-id>", ephemeral: true);
+        var cancelled = await taskDispatcher.RequestCancelAsync(id, interaction.User.Id, cancellationToken).ConfigureAwait(false);
+        return Reply(chatEvent, interaction, cancelled ? "Cancel requested." : "Task not found, completed, or not owned by you.", ephemeral: true);
+    }
+
+    private static string Truncate(string value, int max)
+        => value.Length <= max ? value : value[..max] + "...";
 
     private IMemoryStore Store(InteractionCreatedEvent chatEvent, Interaction interaction)
     {

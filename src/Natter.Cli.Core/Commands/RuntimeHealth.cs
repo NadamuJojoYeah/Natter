@@ -22,6 +22,7 @@ public static class RuntimeHealth
         IConversationStore conversations,
         IPluginCatalog plugins,
         HostRuntimeClock clock,
+        TaskMetrics taskMetrics,
         CancellationToken cancellationToken = default)
     {
         var conversationCount = await conversations.CountAsync(cancellationToken).ConfigureAwait(false);
@@ -87,7 +88,8 @@ public static class RuntimeHealth
             new RuntimeHealthPlugins(
                 plugins.Plugins.Count(plugin => plugin.State == PluginState.Activated),
                 failedPlugins.Length,
-                failedPlugins));
+                failedPlugins),
+            taskMetrics.Snapshot());
     }
 }
 
@@ -100,7 +102,8 @@ public sealed record RuntimeHealthSnapshot(
     int Conversations,
     IReadOnlyList<RuntimeHealthUpstream> Upstreams,
     IReadOnlyList<RuntimeHealthProvider> Providers,
-    RuntimeHealthPlugins Plugins);
+    RuntimeHealthPlugins Plugins,
+    TaskMetricsSnapshot Tasks);
 
 public sealed record RuntimeHealthUpstream(
     string Source,

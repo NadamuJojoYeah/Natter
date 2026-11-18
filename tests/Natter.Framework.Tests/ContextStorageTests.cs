@@ -45,7 +45,7 @@ public sealed class ContextStorageTests
     }
 
     [Fact]
-    public async Task Schema_user_version_is_migrated_to_two()
+    public async Task Schema_user_version_is_migrated_to_three()
     {
         using var temp = new TempDirectory();
         var db = Path.Combine(temp.Path, "natter.db");
@@ -54,7 +54,7 @@ public sealed class ContextStorageTests
         connection.Open();
         using var command = connection.CreateCommand();
         command.CommandText = "PRAGMA user_version;";
-        Assert.Equal(2, Convert.ToInt32(command.ExecuteScalar()));
+        Assert.Equal(3, Convert.ToInt32(command.ExecuteScalar()));
     }
 
     [Fact]

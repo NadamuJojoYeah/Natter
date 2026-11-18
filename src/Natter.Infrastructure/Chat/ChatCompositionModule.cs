@@ -92,6 +92,26 @@ public sealed class ChatCompositionModule : ICompositionModule
         services.AddSingleton<Natter.Application.Chat.IProfileResolver, Natter.Application.Chat.ProfileResolver>();
         services.AddSingleton<Natter.Application.Chat.IProfileMemoryStoreResolver, Natter.Application.Chat.ProfileMemoryStoreResolver>();
         services.AddSingleton<Natter.Application.Chat.HostRuntimeClock>();
+        services.AddSingleton<Natter.Application.Chat.TaskMetrics>();
+        services.AddSingleton<Natter.Application.Chat.ITaskStore>(_ =>
+            string.IsNullOrWhiteSpace(context.Options.StateDirectory)
+                ? new Natter.Application.Chat.InMemoryTaskStore()
+                : new SqliteTaskStore(Path.Combine(Path.GetFullPath(context.Options.StateDirectory), "natter.db")));
+        services.AddSingleton<Natter.Application.Chat.ITool, Natter.Application.Chat.ClockTool>();
+        services.AddSingleton<Natter.Application.Chat.IToolPolicy, Natter.Application.Chat.ReadOnlyToolPolicy>();
+        services.AddSingleton<Natter.Application.Chat.ITaskWorker>(provider =>
+            new Natter.Application.Chat.DefaultTaskWorker(
+                provider.GetServices<Natter.Application.Chat.ITool>(),
+                provider.GetRequiredService<Natter.Application.Chat.IToolPolicy>()));
+        services.AddSingleton<Natter.Application.Chat.ITaskDispatcher>(provider =>
+            new Natter.Application.Chat.TaskDispatcher(
+                provider.GetRequiredService<Natter.Application.Chat.ITaskStore>(),
+                provider.GetRequiredService<Natter.Application.Chat.ITaskWorker>(),
+                provider.GetRequiredService<Natter.Application.Chat.IProfileResolver>(),
+                provider.GetRequiredService<Natter.Application.Chat.IRuntimeProfileStore>(),
+                provider.GetRequiredService<IChatCommandDispatcher>(),
+                provider.GetRequiredService<ChatCommandFactory>(),
+                provider.GetRequiredService<Natter.Application.Chat.TaskMetrics>()));
         services.AddSingleton<Natter.Application.Chat.IChatCommandRouter>(provider =>
             new Natter.Application.Chat.ChatCommandRouter(
                 provider.GetRequiredService<Natter.Application.Chat.IMemoryStore>(),

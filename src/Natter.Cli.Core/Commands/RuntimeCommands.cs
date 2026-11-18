@@ -13,7 +13,8 @@ public sealed class ServeCommand(
     IChatResponderRegistry responders,
     IConversationStore conversations,
     IPluginCatalog plugins,
-    HostRuntimeClock clock) : ICliCommandHandler
+    HostRuntimeClock clock,
+    TaskMetrics taskMetrics) : ICliCommandHandler
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -111,7 +112,8 @@ public sealed class ServeCommand(
             responders,
             conversations,
             plugins,
-            clock).ConfigureAwait(false));
+            clock,
+            taskMetrics).ConfigureAwait(false));
     }
 }
 
@@ -122,7 +124,8 @@ public sealed class HealthCommand(
     IChatResponderRegistry responders,
     IConversationStore conversations,
     IPluginCatalog plugins,
-    HostRuntimeClock clock) : ICliCommandHandler
+    HostRuntimeClock clock,
+    TaskMetrics taskMetrics) : ICliCommandHandler
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -139,6 +142,7 @@ public sealed class HealthCommand(
             conversations,
             plugins,
             clock,
+            taskMetrics,
             cancellationToken).ConfigureAwait(false);
         if (invocation.HasFlag("offline"))
             snapshot = snapshot with { Status = "offline" };
@@ -157,6 +161,7 @@ public sealed class HealthCommand(
         invocation.Console.Out.WriteLine($"sampledAt: {snapshot.SampledAt:O}");
         invocation.Console.Out.WriteLine($"profiles: {snapshot.Profiles}");
         invocation.Console.Out.WriteLine($"conversations: {snapshot.Conversations}");
+        invocation.Console.Out.WriteLine($"activeTasks: {snapshot.Tasks.Active}");
         foreach (var upstream in snapshot.Upstreams)
             invocation.Console.Out.WriteLine($"upstream {upstream.Source} connected={upstream.Connected}");
         foreach (var provider in snapshot.Providers)
