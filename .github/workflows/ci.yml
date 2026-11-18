@@ -46,6 +46,7 @@ jobs:
           dotnet restore src/Natter.Cli/Natter.Cli.csproj
           dotnet restore tests/Natter.Framework.Tests/Natter.Framework.Tests.csproj
           dotnet restore tests/Natter.Live.Tests/Natter.Live.Tests.csproj
+          dotnet restore tests/Natter.Plugin.WebConsole.Tests/Natter.Plugin.WebConsole.Tests.csproj
 
       - name: Build CLI
         run: dotnet build src/Natter.Cli/Natter.Cli.csproj -c Release --no-restore
@@ -70,6 +71,16 @@ jobs:
           dotnet test tests/Natter.Live.Tests/Natter.Live.Tests.csproj \
             -c Release --no-build \
             --logger "trx;LogFileName=live-skip.trx" \
+            --results-directory TestResults
+
+      - name: Build WebConsole plugin tests
+        run: dotnet build tests/Natter.Plugin.WebConsole.Tests/Natter.Plugin.WebConsole.Tests.csproj -c Release --no-restore
+
+      - name: Run WebConsole plugin tests
+        run: |
+          dotnet test tests/Natter.Plugin.WebConsole.Tests/Natter.Plugin.WebConsole.Tests.csproj \
+            -c Release --no-build \
+            --logger "trx;LogFileName=webconsole.trx" \
             --results-directory TestResults
 
       - name: Dependency vulnerability scan
