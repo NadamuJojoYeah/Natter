@@ -81,6 +81,9 @@
 
 ## 5. 相关文档
 
+- [P5 + WebConsole 联合处置记录](2026-11-18-p5-webconsole-response.md)：P5 schema 阻塞、WebConsole 3 Medium 与复测闸门
+- [P5 Agent Task Runtime 验收测试计划](2026-11-18-p5-acceptance.md)：/task、租约、取消、重启恢复、工具 allowlist、健康指标
+- [WebConsole 插件验收测试计划](2026-11-18-webconsole-acceptance.md)：Phase 1 只读控制台、Phase 2/3 策略与 501 降级、认证/审计/代理
 - [P4.5 修复验证（测试交接）](2026-11-17-p4-5-test-verification.md)：代理、health/offline、Tier1-only、OBS-007 边界
 - [P3 Context & Memory 验收测试计划](P3_ACCEPTANCE.md)：prompt/context/memory、SQLite 迁移、remember/forget、真实召回与隔离
 - [P2 Runtime & Profile 验收测试计划](P2_ACCEPTANCE.md)：serve、profiles、SQLite 会话、health、Tier 1/Tier 2 与并发验收

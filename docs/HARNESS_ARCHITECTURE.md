@@ -709,6 +709,8 @@ providerRequestId
 
 ### Phase 4：Task Worker
 
+> P5 的实现规格见 [P5 Agent Task Runtime](P5_AGENT_TASK_RUNTIME.md)。
+
 - `AgentTask`；
 - worker runtime；
 - 工具白名单；

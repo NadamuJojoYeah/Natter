@@ -1,8 +1,9 @@
 # WebConsole Phase 2/3 插件侧就绪与运维硬化（2026-11-18）
 
-> **对象**：`plugins/Natter.Plugin.WebConsole`  
-> **上一轮**：[Phase 1 实现与验收](2026-11-18-webconsole-p1.md)  
-> **设计**：[WEBCONSOLE_PLUGIN_DESIGN.md](../WEBCONSOLE_PLUGIN_DESIGN.md) · **缺口**：[WEBCONSOLE_HOST_API_GAP.md](../WEBCONSOLE_HOST_API_GAP.md)  
+> **对象**：`plugins/Natter.Plugin.WebConsole`
+> **上一轮**：[Phase 1 实现与验收](2026-11-18-webconsole-p1.md)
+> **设计**：[WEBCONSOLE_PLUGIN_DESIGN.md](../WEBCONSOLE_PLUGIN_DESIGN.md) · **缺口**：[WEBCONSOLE_HOST_API_GAP.md](../WEBCONSOLE_HOST_API_GAP.md)
+> **验收计划**：[WebConsole 插件验收测试计划](2026-11-18-webconsole-acceptance.md)
 > **结论**：在不修改 `src/`、不绕过宿主契约的前提下，补齐配置校验/ETag/diff、命令 allowlist/截断/脱敏、审计权限、HEAD/转发协议与 `external` 模式；写入与执行仍按 G5/G6 返回 501。
 
 ## 0. 元数据
@@ -78,7 +79,7 @@ $ node tests/Natter.Plugin.WebConsole.Tests/ui-smoke.mjs
 
 ## 3. 真实宿主验证
 
-Staging：`artifacts/webconsole-e2e/plugins/natter.plugin.webconsole`（`readOnly=false`、`allowConfigWrite=true`、`allowCommandConsole=true`、allowlist=`health/plugins list/upstreams`）。  
+Staging：`artifacts/webconsole-e2e/plugins/natter.plugin.webconsole`（`readOnly=false`、`allowConfigWrite=true`、`allowCommandConsole=true`、allowlist=`health/plugins list/upstreams`）。
 宿主：`natter serve --duration 60 --health-port 5199`。
 
 ### 3.1 配置校验
