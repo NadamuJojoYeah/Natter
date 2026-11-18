@@ -24,7 +24,7 @@ Natter 只交付**框架能力**：端口契约、组合根、插件加载、DI 
 - **Context/Memory**：host prompt/context/memory pipeline、SQLite `summaries`/`memory_items`、确定性摘要、显式 `remember`/`forget`、scope 隔离。
 - **P4 Tier 1 UX**：Discord `/ask` `/remember` `/forget` `/memory` `/reset`，sample `memory.store` 插件，deploy/backup 示例。
 - **P5 Task Runtime**：AgentTask / SQLite task store / TaskDispatcher / clock tool / `/task` `/status` `/tasks` `/cancel`，lease/cancel/timeout 与 health task metrics。
-- **测试**：253 个框架级测试覆盖聚合事件、Rx 总线、DI 管道、解析器、插件加载、CLI、NLMP 一致性与 NPS v1 插件内核；另有可选的 live 套件对真实 Discord 与 DeepSeek API 做分层联调（见 [真实 API 联调测试方案](docs/LIVE_TEST_PLAN.md)）。
+- **测试**：254 个框架级测试覆盖聚合事件、Rx 总线、DI 管道、解析器、插件加载、CLI、NLMP 一致性与 NPS v1 插件内核；另有可选的 live 套件对真实 Discord 与 DeepSeek API 做分层联调（见 [真实 API 联调测试方案](docs/LIVE_TEST_PLAN.md)）。
 
 ## 架构
 

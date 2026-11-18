@@ -542,7 +542,7 @@ errorCode
 | AI-backed worker | 已实现（复用 ProfileAware responder；无 provider 时降级 deterministic clock worker） | `AiTaskWorker.cs` |
 | 真实 Tier1/Tier2 task | 未执行 | — |
 
-测试：`Natter.Framework.Tests` **253/253**；AI worker 复用 ProfileAware，无 provider 时走 clock tool fallback。
+测试：`Natter.Framework.Tests` **254/254**；AI worker 复用 ProfileAware，无 provider 时走 clock tool fallback。
 
 ## 15. 验收标准
 

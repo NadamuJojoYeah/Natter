@@ -111,6 +111,23 @@ public sealed class TaskRuntimeTests
     }
 
     [Fact]
+    public async Task Ai_worker_uses_the_host_responder_and_never_sends_directly()
+    {
+        var services = new Microsoft.Extensions.DependencyInjection.ServiceCollection()
+            .AddSingleton<IChatResponder>(new EchoResponder())
+            .BuildServiceProvider();
+        var worker = new AiTaskWorker(services, [new ClockTool()], new ReadOnlyToolPolicy());
+        var source = Source.Create("discord", "discord", "bot");
+        var task = NewTask(source);
+        var result = await worker.ExecuteAsync(task, new TaskExecutionContext(
+            new RuntimeProfile { Id = "p", Ai = new ProfileAi { Provider = "p#r" } },
+            new Conversation("c1", ConversationKind.Direct),
+            [], 3, 8000, TimeSpan.FromSeconds(5)));
+        Assert.True(result.Ok);
+        Assert.Equal("ai answer", result.Text);
+    }
+
+    [Fact]
     public async Task Http_tool_enforces_allowlist_and_network_policy()
     {
         using var http = new HttpClient(new RecordingHttpMessageHandler((_, _) => DeepSeekTestData.Json("ok")));
@@ -212,4 +229,16 @@ public sealed class TaskRuntimeTests
             return ValueTask.FromResult(ChatAck.Success(command));
         }
     }
+    private sealed class EchoResponder : IChatResponder
+    {
+        public ValueTask<ChatCommand?> RespondAsync(ChatEvent chatEvent, CancellationToken cancellationToken = default)
+            => ValueTask.FromResult<ChatCommand?>(new MessageSendCommand
+            {
+                Id = "cmd:echo",
+                Source = chatEvent.Source,
+                IssuedAt = DateTimeOffset.UtcNow,
+                Payload = new MessageSendPayload(new Conversation("c1", ConversationKind.Direct), new Content("ai answer")),
+            });
+    }
+
 }
