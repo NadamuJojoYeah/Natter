@@ -101,7 +101,8 @@ public sealed class ChatCompositionModule : ICompositionModule
         services.AddSingleton<Natter.Application.Chat.ITool, Natter.Application.Chat.TextTransformTool>();
         services.AddSingleton<Natter.Application.Chat.IToolPolicy, Natter.Application.Chat.ReadOnlyToolPolicy>();
         services.AddSingleton<Natter.Application.Chat.ITaskWorker>(provider =>
-            new Natter.Application.Chat.DefaultTaskWorker(
+            new Natter.Application.Chat.AiTaskWorker(
+                provider,
                 provider.GetServices<Natter.Application.Chat.ITool>(),
                 provider.GetRequiredService<Natter.Application.Chat.IToolPolicy>()));
         services.AddSingleton<Natter.Abstractions.Plugins.IPluginLifecycle, Natter.Application.Chat.TaskRecoveryLifecycle>();
