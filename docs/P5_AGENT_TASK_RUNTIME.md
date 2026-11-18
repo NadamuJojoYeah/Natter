@@ -538,8 +538,8 @@ errorCode
 | `/task` `/status` `/tasks` `/cancel` | 已实现并注册 Discord slash schema | `ChatCommandRouter` / `DiscordSocketTransport` |
 | health task metrics | 已实现 created/completed/failed/cancelled/active | `RuntimeHealth` |
 | 重启恢复 | Pending 重新入队、过期 Running 标记 Expired、30s lease watchdog | `TaskRecoveryLifecycle.cs` |
-| 工具 | clock / text-transform / http-fetch（allowlist + 网络策略） | `Tools` |
-| AI-backed worker | 已实现（复用 ProfileAware responder；无 provider 时降级 deterministic clock worker） | `AiTaskWorker.cs` |
+| 工具 | clock / text-transform / http-fetch（`NATTER_HTTP_FETCH_HOSTS` allowlist + 网络策略） | `Tools` |
+| AI-backed worker | 已实现（复用 ProfileAware responder；无 provider 时降级 deterministic clock worker；task conversation 隔离） | `AiTaskWorker.cs` |
 | 真实 Tier1/Tier2 task | 未执行 | — |
 
 测试：`Natter.Framework.Tests` **254/254**；AI worker 复用 ProfileAware，无 provider 时走 clock tool fallback。

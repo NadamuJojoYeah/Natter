@@ -17,7 +17,8 @@
 - 备份用 `scripts/natter-backup.sh`，恢复必须停服务。
 - 健康检查优先 loopback `/health`；无服务时用 `natter health --offline --json`（不启动 upstream/gateway）。
 - 多用户并发/多 guild 权限矩阵尚未完整验证，按“小范围部署”对待。
-- P5 task runtime 使用 ProfileAware AI worker；无 provider 时降级 deterministic clock worker；Pending 任务在 host 重启时重新入队，过期 Running lease 标记 Expired。
+- P5 task runtime 使用 ProfileAware AI worker；task 使用独立 conversation 上下文；无 provider 时降级 deterministic clock worker；Pending 任务在 host 重启时重新入队，过期 Running lease 标记 Expired。
+- `http-fetch` 需要 `NATTER_HTTP_FETCH_HOSTS`（逗号分隔 allowlist）且 profile `policy.allowNetworkTools=true`。
 
 ---
 
