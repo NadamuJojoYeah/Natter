@@ -1,10 +1,11 @@
 # P5 Agent Task Runtime & Tools — Development Spec
 
-> **状态**：P5.0–P5.2 foundation implemented（AgentTask/SQLite store、TaskDispatcher、clock tool、/task/status/tasks/cancel、lease/cancel/timeout、health task metrics；AI/tool 扩展与真实 Tier1 仍待后续）  
-> **日期**：2026-11-17  
-> **前置**：P4 功能 Go；P4.5 Conditional Pass（运维项并行收口）  
-> **目标**：在现有 chat harness 上增加可持久化、可取消、可恢复的 AgentTask 与 Tool 执行面；普通聊天仍走低延迟 ChatResponder。  
+> **状态**：P5.0–P5.2 foundation implemented（AgentTask/SQLite store、TaskDispatcher、clock tool、/task/status/tasks/cancel、lease/cancel/timeout、health task metrics；AI/tool 扩展与真实 Tier1 仍待后续）
+> **日期**：2026-11-17
+> **前置**：P4 功能 Go；P4.5 Conditional Pass（运维项并行收口）
+> **目标**：在现有 chat harness 上增加可持久化、可取消、可恢复的 AgentTask 与 Tool 执行面；普通聊天仍走低延迟 ChatResponder。
 > **关联**：[Harness 架构](HARNESS_ARCHITECTURE.md)、[P4 Tier 1 产品化](P4_TIER1_PRODUCTIZATION.md)、[Context & Memory](P3_CONTEXT_MEMORY.md)、[运维手册](OPERATIONS_RUNBOOK.md)
+> **验收计划**：[P5 验收测试计划](testing/2026-11-18-p5-acceptance.md)
 
 ---
 
@@ -542,7 +543,7 @@ errorCode
 | AI-backed worker | 已实现（复用 ProfileAware responder；无 provider 时降级 deterministic clock worker；task conversation 隔离） | `AiTaskWorker.cs` |
 | 真实 Tier1/Tier2 task | 未执行 | — |
 
-测试：`Natter.Framework.Tests` **254/254**；AI worker 复用 ProfileAware，无 provider 时走 clock tool fallback。
+测试：`Natter.Framework.Tests` **263/263**；AI worker 复用 ProfileAware，无 provider 时走 clock tool fallback。
 
 ## 15. 验收标准
 
