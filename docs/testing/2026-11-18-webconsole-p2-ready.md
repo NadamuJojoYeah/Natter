@@ -9,7 +9,7 @@
 
 | 字段 | 值 |
 | --- | --- |
-| 测试时间 | 2026-11-18 10:37–10:45（Asia/Shanghai） |
+| 测试时间 | 2026-11-18 10:37–10:52（Asia/Shanghai） |
 | 基线 | 上一轮 `2c7953d`；本轮功能提交 `349f21f`；测试提交 `c96a452` |
 | 工作区 | 仅本插件/测试/文档改动；`src/`、`samples/` 无 diff；其他会话的 P4.5/P5 改动未触碰 |
 | 环境 | Arch Linux `arch-x64`、.NET SDK 10.0.114、Microsoft.NETCore.App 10.0.14 |
@@ -189,3 +189,37 @@ $ natter ... web status --json
 - Phase 2/3 的“纯逻辑 + HTTP 接线”已经完成，且不违反“宿主契约缺失只写文档”的约束；
 - 真正落盘与执行仍必须等 `IAdminConfigStore` / `IAdminCommandRunner`（G5/G6）；
 - 下一步：宿主播接后增加适配器与端到端写/执行测试；再补 viewer 角色、审计轮转与 CI 纳管。
+
+---
+
+## 7. CI 与可复现 E2E
+
+`.github/workflows/ci.yml` 新增：
+
+```text
+dotnet restore tests/Natter.Plugin.WebConsole.Tests/...
+dotnet build   tests/Natter.Plugin.WebConsole.Tests/... -c Release --no-restore
+dotnet test    tests/Natter.Plugin.WebConsole.Tests/... -c Release --no-build
+```
+
+本地 Release 复核：
+
+```text
+$ dotnet test tests/Natter.Plugin.WebConsole.Tests/... -c Release
+Passed! - Failed: 0, Passed: 123, Skipped: 0, Total: 123
+```
+
+可复现脚本：
+
+```text
+$ ./scripts/webconsole-e2e.sh
+== auth ==
+== config validation ==
+== command policy ==
+== snapshot / audit / HEAD ==
+== external mode ==
+PASS: WebConsole E2E matrix
+  console=http://127.0.0.1:5187 health=http://127.0.0.1:5199/health
+```
+
+脚本使用一次性 token、`artifacts/webconsole-e2e` 工作目录与 loopback 端口，退出时清理宿主进程；断言覆盖 401/200、config 400/501、command 403/501、audit check 与 external 模式。

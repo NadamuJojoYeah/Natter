@@ -67,6 +67,12 @@ plugins/natter.plugin.webconsole/
 
 脚本只做复制，不改宿主配置。
 
+可复现 E2E（一次性 token、临时 state、loopback 端口）：
+
+```bash
+./scripts/webconsole-e2e.sh
+```
+
 ---
 
 ## 4. 配置
