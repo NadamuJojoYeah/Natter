@@ -537,11 +537,12 @@ errorCode
 | Tool 契约/策略 | 已实现只读 clock tool + ReadOnlyToolPolicy | `Tools` |
 | `/task` `/status` `/tasks` `/cancel` | 已实现并注册 Discord slash schema | `ChatCommandRouter` / `DiscordSocketTransport` |
 | health task metrics | 已实现 created/completed/failed/cancelled/active | `RuntimeHealth` |
-| 重启恢复 | 未实现（Pending/Running 扫描） | — |
-| AI-backed worker / http-fetch | 未实现（当前 deterministic clock worker） | — |
+| 重启恢复 | 已实现 Pending 重新入队、过期 Running 标记 Expired | `TaskRecoveryLifecycle.cs` |
+| 工具 | clock / text-transform / http-fetch（allowlist + 网络策略） | `Tools` |
+| AI-backed worker | 未实现（当前 deterministic clock worker） | — |
 | 真实 Tier1/Tier2 task | 未执行 | — |
 
-测试：`Natter.Framework.Tests` **251/251**。
+测试：`Natter.Framework.Tests` **253/253**。
 
 ## 15. 验收标准
 
