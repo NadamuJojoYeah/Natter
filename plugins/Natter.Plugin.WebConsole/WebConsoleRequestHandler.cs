@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using Natter.Plugin.Abstractions;
 
@@ -101,7 +102,8 @@ public sealed class WebConsoleRequestHandler
             return Error(403, "request.origin_denied", "Origin is not allowed.");
         }
 
-        if (string.Equals(request.Method, "GET", StringComparison.Ordinal)
+        if ((string.Equals(request.Method, "GET", StringComparison.Ordinal)
+             || string.Equals(request.Method, "HEAD", StringComparison.Ordinal))
             && _assets.TryGet(request.Path, out var asset))
         {
             return asset;
@@ -190,10 +192,13 @@ public sealed class WebConsoleRequestHandler
 
             case "commands":
                 return HandleCommands(request, startedAt);
+
+            case "commands/validate":
+                return HandleCommandValidate(request, startedAt);
         }
 
         if (route.StartsWith("config/", StringComparison.Ordinal))
-            return HandleConfigWrite(request, route["config/".Length..], startedAt);
+            return HandleConfigRoute(request, route["config/".Length..], startedAt);
 
         return Error(404, "route.not_found", "Route not found.");
     }
@@ -240,7 +245,7 @@ public sealed class WebConsoleRequestHandler
                     new { authenticated = false },
                     new Dictionary<string, string>
                     {
-                        ["Set-Cookie"] = WebConsoleCookies.BuildExpiredCookie(_origins.RequiresSecureCookie || request.IsHttps),
+                        ["Set-Cookie"] = WebConsoleCookies.BuildExpiredCookie(IsSecureRequest(request)),
                     });
             }
 
@@ -296,7 +301,7 @@ public sealed class WebConsoleRequestHandler
 
         _throttle.Reset(client);
         var session = _sessions.Create(WebConsoleRole.Admin, TimeSpan.FromMinutes(_options.SessionMinutes));
-        var secureCookie = _origins.RequiresSecureCookie || request.IsHttps;
+        var secureCookie = IsSecureRequest(request);
 
         Audit(request, "auth.login", "ok", startedAt, user: RoleName(session.Role));
 
@@ -345,6 +350,40 @@ public sealed class WebConsoleRequestHandler
         return WebConsoleHttpResponse.Json(200, selector(snapshot));
     }
 
+    private WebConsoleHttpResponse HandleConfigRoute(
+        WebConsoleHttpRequest request,
+        string remainder,
+        DateTimeOffset startedAt)
+    {
+        var slash = remainder.LastIndexOf('/');
+        if (slash > 0 && string.Equals(remainder[(slash + 1)..], "validate", StringComparison.Ordinal))
+            return HandleConfigValidate(request, remainder[..slash], startedAt);
+
+        return HandleConfigWrite(request, remainder, startedAt);
+    }
+
+    private WebConsoleHttpResponse HandleConfigValidate(
+        WebConsoleHttpRequest request,
+        string documentId,
+        DateTimeOffset startedAt)
+    {
+        RequireMethod(request, "POST");
+
+        if (!WebConsoleConfigEditPolicy.IsAllowedId(documentId))
+            return Error(400, "config.id_invalid", "Config id must be 'profiles' or 'plugin:<plugin-id>'.");
+
+        if (BodyTooLarge(request, WebConsoleDefaults.MaxAdminBodyBytes))
+            return Error(413, "config.request_too_large", "Config body is too large.");
+
+        if (!TryParseConfigEditBody(request.Body, out var content, out _, out var parseError))
+            return Error(400, "config.invalid_request", parseError ?? "Config body must be JSON with a content field.");
+
+        var validation = WebConsoleConfigEditPolicy.Validate(documentId, content);
+        Audit(request, "config.validate", validation.Valid ? "ok" : "invalid", startedAt, documentId);
+
+        return WebConsoleHttpResponse.Json(200, new { id = documentId, validation });
+    }
+
     private WebConsoleHttpResponse HandleConfigWrite(
         WebConsoleHttpRequest request,
         string documentId,
@@ -353,13 +392,37 @@ public sealed class WebConsoleRequestHandler
         if (!string.Equals(request.Method, "POST", StringComparison.Ordinal))
             return Error(405, "method.not_allowed", "Method not allowed.");
 
-        if (!IsAllowedConfigId(documentId))
+        if (!WebConsoleConfigEditPolicy.IsAllowedId(documentId))
             return Error(400, "config.id_invalid", "Config id must be 'profiles' or 'plugin:<plugin-id>'.");
 
         if (_options.ReadOnly || !_options.AllowConfigWrite)
         {
             Audit(request, "config.write", "denied", startedAt, documentId);
             return Error(403, "config.write_disabled", "Config writing is disabled by plugin configuration.");
+        }
+
+        if (BodyTooLarge(request, WebConsoleDefaults.MaxAdminBodyBytes))
+            return Error(413, "config.request_too_large", "Config body is too large.");
+
+        if (!TryParseConfigEditBody(request.Body, out var content, out var etag, out var parseError))
+            return Error(400, "config.invalid_request", parseError ?? "Config body must be JSON with a content field.");
+
+        var validation = WebConsoleConfigEditPolicy.Validate(documentId, content);
+        if (!validation.Valid)
+        {
+            Audit(request, "config.write", "invalid", startedAt, documentId);
+            return WebConsoleHttpResponse.Json(400, new
+            {
+                error = new
+                {
+                    code = "config.invalid",
+                    message = "Config content failed validation.",
+                    doc = WebConsoleGaps.AdminConfig.Doc,
+                },
+                id = documentId,
+                etag,
+                validation,
+            });
         }
 
         Audit(request, "config.write", "unavailable", startedAt, documentId);
@@ -381,32 +444,96 @@ public sealed class WebConsoleRequestHandler
             return Error(403, "command.disabled", "Command console is disabled by plugin configuration.");
         }
 
-        var command = string.Empty;
-        try
+        if (BodyTooLarge(request, WebConsoleDefaults.MaxCommandBodyBytes))
+            return Error(413, "command.request_too_large", "Command body is too large.");
+
+        if (!WebConsoleCommandPolicy.TryParseRequest(request.Body, out var commandRequest, out var parseError))
+            return Error(400, "command.invalid_request", parseError ?? "Invalid command request.");
+
+        var decision = WebConsoleCommandPolicy.Evaluate(commandRequest, _options.CommandAllowlist);
+        if (!decision.Allowed)
         {
-            using var document = JsonDocument.Parse(request.Body);
-            if (document.RootElement.ValueKind == JsonValueKind.Object
-                && document.RootElement.TryGetProperty("command", out var commandElement)
-                && commandElement.ValueKind == JsonValueKind.String)
-            {
-                command = commandElement.GetString() ?? string.Empty;
-            }
-        }
-        catch (JsonException)
-        {
-            return Error(400, "command.invalid_request", "Command body must be JSON with a command field.");
+            Audit(request, "command.run", "denied", startedAt, decision.Command);
+            return Error(403, decision.Code, decision.Message);
         }
 
-        if (string.IsNullOrWhiteSpace(command))
-            return Error(400, "command.invalid_request", "Command body must be JSON with a command field.");
-
-        Audit(request, "command.run", "unavailable", startedAt, command);
+        Audit(request, "command.run", "unavailable", startedAt, decision.Command);
         return Error(
             501,
             WebConsoleGaps.AdminCommand.Code,
             WebConsoleGaps.AdminCommand.Summary,
             WebConsoleGaps.AdminCommand.Doc);
     }
+
+    private WebConsoleHttpResponse HandleCommandValidate(WebConsoleHttpRequest request, DateTimeOffset startedAt)
+    {
+        RequireMethod(request, "POST");
+
+        if (!_options.AllowCommandConsole || _options.ReadOnly)
+        {
+            Audit(request, "command.validate", "denied", startedAt);
+            return Error(403, "command.disabled", "Command console is disabled by plugin configuration.");
+        }
+
+        if (BodyTooLarge(request, WebConsoleDefaults.MaxCommandBodyBytes))
+            return Error(413, "command.request_too_large", "Command body is too large.");
+
+        if (!WebConsoleCommandPolicy.TryParseRequest(request.Body, out var commandRequest, out var parseError))
+            return Error(400, "command.invalid_request", parseError ?? "Invalid command request.");
+
+        var decision = WebConsoleCommandPolicy.Evaluate(commandRequest, _options.CommandAllowlist);
+        Audit(request, "command.validate", decision.Allowed ? "ok" : "denied", startedAt, decision.Command);
+
+        return WebConsoleHttpResponse.Json(200, new { decision });
+    }
+
+    private static bool TryParseConfigEditBody(
+        string body,
+        out string content,
+        out string? etag,
+        out string? error)
+    {
+        content = string.Empty;
+        etag = null;
+        error = null;
+
+        try
+        {
+            using var document = JsonDocument.Parse(body);
+            var root = document.RootElement;
+
+            if (root.ValueKind != JsonValueKind.Object
+                || !root.TryGetProperty("content", out var contentElement)
+                || contentElement.ValueKind != JsonValueKind.String)
+            {
+                error = "Config body must be a JSON object with a content field.";
+                return false;
+            }
+
+            content = contentElement.GetString() ?? string.Empty;
+
+            if (root.TryGetProperty("etag", out var etagElement))
+            {
+                if (etagElement.ValueKind is not (JsonValueKind.String or JsonValueKind.Null))
+                {
+                    error = "etag must be a string or null.";
+                    return false;
+                }
+
+                etag = etagElement.GetString();
+            }
+
+            return true;
+        }
+        catch (JsonException exception)
+        {
+            error = $"Config body is not valid JSON: {exception.Message}";
+            return false;
+        }
+    }
+
+    private static bool BodyTooLarge(WebConsoleHttpRequest request, int limit)
+        => Encoding.UTF8.GetByteCount(request.Body) > limit;
 
     private WebConsoleSession? ResolveSession(WebConsoleHttpRequest request)
         => _sessions.Find(WebConsoleCookies.ReadCookie(GetHeader(request, "Cookie"), WebConsoleDefaults.SessionCookieName));
@@ -447,18 +574,16 @@ public sealed class WebConsoleRequestHandler
             _clock.GetUtcNow() - startedAt);
     }
 
-    private static bool IsAllowedConfigId(string id)
+    private bool IsSecureRequest(WebConsoleHttpRequest request)
     {
-        if (string.Equals(id, "profiles", StringComparison.Ordinal))
+        if (request.IsHttps)
             return true;
 
-        if (!id.StartsWith("plugin:", StringComparison.Ordinal))
+        var remote = WebConsoleNetwork.NormalizeAddress(request.RemoteAddress) ?? request.RemoteAddress;
+        if (!WebConsoleNetwork.IsInAnyCidr(remote, _options.TrustedProxies))
             return false;
 
-        var pluginId = id["plugin:".Length..];
-        return pluginId.Length is > 0 and <= 128
-               && pluginId.All(character => char.IsLetterOrDigit(character)
-                                            || character is '.' or '_' or '-');
+        return string.Equals(GetHeader(request, "X-Forwarded-Proto"), "https", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsSafeMethod(string method)

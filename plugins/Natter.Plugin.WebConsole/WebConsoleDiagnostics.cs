@@ -103,11 +103,17 @@ public sealed class WebConsoleDiagnostics
         var now = _clock.GetUtcNow();
         var status = _serverStatus.Current;
 
+        var auditWritable = _audit.CanWrite(out var auditError);
+
         var checks = new List<WebConsoleHealthCheck>
         {
-            new("server", string.Equals(status.State, "listening", StringComparison.Ordinal) ? "ok" : "degraded", status.Url ?? status.ErrorCode),
+            new(
+                "server",
+                status.State is "listening" or "external" ? "ok" : "degraded",
+                status.State == "external" ? $"external instance {status.Url}" : status.Url ?? status.ErrorCode),
             new("token", _tokens.IsUsable ? "ok" : "error", _tokens.Problem),
             new("static-assets", "ok", $"{_assets.Files.Count} whitelisted assets"),
+            new("audit", auditWritable ? "ok" : "error", auditError),
             new("host.health", host.Health.Available ? "ok" : "degraded", host.Health.GapCode ?? host.Health.Reason),
             new("host.plugins", host.Plugins.Available ? "ok" : "degraded", host.Plugins.Data?.Source ?? host.Plugins.GapCode),
         };

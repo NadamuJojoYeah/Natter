@@ -43,6 +43,8 @@ public static class WebConsoleDefaults
     public const int MaxLogLines = 500;
     public const int MaxRequestBodyBytes = 64 * 1024;
     public const int MaxLoginBodyBytes = 4 * 1024;
+    public const int MaxAdminBodyBytes = 256 * 1024 + 4 * 1024;
+    public const int MaxCommandBodyBytes = 8 * 1024;
     public const int MinTokenLength = 24;
     public const string SessionCookieName = "natter_webconsole";
     public const string CsrfHeaderName = "X-WebConsole-CSRF";
@@ -124,6 +126,28 @@ public static class WebConsoleOptionsValidator
                 "/maxLogLines",
                 "webconsole.max-log-lines-invalid",
                 "maxLogLines must be between 1 and 10000."));
+        }
+
+        if (options.CommandAllowlist.Count > 64)
+        {
+            issues.Add(new WebConsoleOptionIssue(
+                "/commandAllowlist",
+                "webconsole.command-allowlist-invalid",
+                "commandAllowlist must contain at most 64 entries."));
+        }
+
+        foreach (var entry in options.CommandAllowlist)
+        {
+            var normalized = WebConsoleCommandPolicy.NormalizeCommand(entry);
+            if (normalized.Length == 0
+                || normalized.Length > WebConsoleCommandPolicy.MaxCommandLength
+                || entry.Any(char.IsControl))
+            {
+                issues.Add(new WebConsoleOptionIssue(
+                    "/commandAllowlist",
+                    "webconsole.command-allowlist-invalid",
+                    $"commandAllowlist entry '{entry}' is empty, too long or contains control characters."));
+            }
         }
 
         foreach (var proxy in options.TrustedProxies)

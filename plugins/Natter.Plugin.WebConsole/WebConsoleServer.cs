@@ -44,6 +44,8 @@ public sealed record WebConsoleServerStatus(string State, string? Url, string? E
 
     public static WebConsoleServerStatus Listening(string url) => new("listening", url);
 
+    public static WebConsoleServerStatus External(string url) => new("external", url);
+
     public static WebConsoleServerStatus Failed(string code, string error) => new("failed", null, code, error);
 }
 
@@ -273,7 +275,8 @@ public sealed class WebConsoleServer : IAsyncDisposable
             timeout.CancelAfter(TimeSpan.FromSeconds(15));
 
             var response = await _handler.HandleAsync(request, timeout.Token).ConfigureAwait(false);
-            await WriteResponseAsync(context, response, cancellationToken).ConfigureAwait(false);
+            var isHead = string.Equals(context.Request.HttpMethod, "HEAD", StringComparison.Ordinal);
+            await WriteResponseAsync(context, response, isHead, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -334,7 +337,11 @@ public sealed class WebConsoleServer : IAsyncDisposable
             request.IsSecureConnection);
     }
 
-    private static async Task WriteResponseAsync(HttpListenerContext context, WebConsoleHttpResponse response, CancellationToken cancellationToken)
+    private static async Task WriteResponseAsync(
+        HttpListenerContext context,
+        WebConsoleHttpResponse response,
+        bool isHead,
+        CancellationToken cancellationToken)
     {
         context.Response.StatusCode = response.StatusCode;
         context.Response.ContentType = response.ContentType;
@@ -349,7 +356,9 @@ public sealed class WebConsoleServer : IAsyncDisposable
             context.Response.Headers[header.Key] = header.Value;
         }
 
-        await context.Response.OutputStream.WriteAsync(response.Body, cancellationToken).ConfigureAwait(false);
+        if (!isHead)
+            await context.Response.OutputStream.WriteAsync(response.Body, cancellationToken).ConfigureAwait(false);
+
         context.Response.Close();
     }
 
@@ -384,7 +393,7 @@ public sealed class WebConsoleServer : IAsyncDisposable
         }
     }
 
-    private static string BuildUrl(WebConsoleOptions options)
+    public static string BuildUrl(WebConsoleOptions options)
     {
         return string.Equals(options.Bind, "localhost", StringComparison.OrdinalIgnoreCase)
             ? $"http://localhost:{options.Port}"

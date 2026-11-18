@@ -33,10 +33,41 @@ public sealed class WebConsoleAuditStore : IDisposable
         ArgumentException.ThrowIfNullOrWhiteSpace(directory);
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
         Directory.CreateDirectory(directory);
+        TrySetDirectoryPermissions(directory);
         _path = System.IO.Path.Combine(directory, WebConsoleDefaults.AuditFileName);
     }
 
     public string FilePath => _path;
+
+    /// <summary>True when the audit file can still be appended; surfaced as a health check.</summary>
+    public bool CanWrite(out string? error)
+    {
+        if (_disabled)
+        {
+            error = "disabled after a previous write failure";
+            return false;
+        }
+
+        try
+        {
+            lock (_gate)
+            {
+                using var stream = new FileStream(
+                    _path,
+                    FileMode.Append,
+                    FileAccess.Write,
+                    FileShare.ReadWrite | FileShare.Delete);
+            }
+
+            error = null;
+            return true;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            error = exception.GetType().Name;
+            return false;
+        }
+    }
 
     public void Write(string action, string? user, string? ip, string? target, string result, TimeSpan duration)
     {
@@ -60,6 +91,7 @@ public sealed class WebConsoleAuditStore : IDisposable
             {
                 RotateIfNeeded();
                 File.AppendAllText(_path, line);
+                TrySetFilePermissions(_path);
             }
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
@@ -129,6 +161,37 @@ public sealed class WebConsoleAuditStore : IDisposable
 
         var archived = _path + ".1";
         File.Move(_path, archived, overwrite: true);
+    }
+
+    private static void TrySetDirectoryPermissions(string directory)
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        try
+        {
+            File.SetUnixFileMode(
+                directory,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+        {
+            // Best-effort: the host may mount the plugin directory read-only.
+        }
+    }
+
+    private static void TrySetFilePermissions(string path)
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        try
+        {
+            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+        {
+        }
     }
 
     public void Dispose()

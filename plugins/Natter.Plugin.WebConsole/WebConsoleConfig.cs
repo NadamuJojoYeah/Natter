@@ -79,12 +79,15 @@ public static class WebConsoleRedaction
         return (JsonSerializer.SerializeToElement(node), redacted);
     }
 
+    public static string RedactSecrets(string? value)
+        => string.IsNullOrEmpty(value) ? value ?? string.Empty : SensitiveValuePattern.Replace(value, "[redacted]");
+
     public static string SanitizeText(string? value, int maxLength = 300)
     {
         if (string.IsNullOrEmpty(value))
             return value ?? string.Empty;
 
-        var sanitized = SensitiveValuePattern.Replace(value, "[redacted]");
+        var sanitized = RedactSecrets(value);
         return sanitized.Length <= maxLength ? sanitized : sanitized[..maxLength] + "…";
     }
 

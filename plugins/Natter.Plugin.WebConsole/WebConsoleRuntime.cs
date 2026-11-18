@@ -1,3 +1,4 @@
+using System.Net;
 using System.Text.Json;
 using Natter.Plugin.Abstractions;
 
@@ -104,22 +105,54 @@ public sealed class WebConsoleRuntime : IAsyncDisposable
             _log);
 
         _server = new WebConsoleServer(_options, handler, _status, _log);
-        await _server.StartAsync(cancellationToken).ConfigureAwait(false);
-        _started = true;
 
-        _audit.Write("plugin.start", "system", null, _server.Url, "ok", TimeSpan.Zero);
+        try
+        {
+            await _server.StartAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (WebConsoleStartupException exception) when (exception.Code == "webconsole.port-in-use")
+        {
+            if (!await WebConsoleExternalProbe.IsExistingConsoleAsync(_options, cancellationToken).ConfigureAwait(false))
+            {
+                CleanUpAfterFailedStart();
+                throw;
+            }
+
+            _server = null;
+            _status.Set(WebConsoleServerStatus.External(WebConsoleServer.BuildUrl(_options)));
+            _log.Warning(
+                $"webconsole port is already served by another instance; running in external mode: {WebConsoleServer.BuildUrl(_options)}");
+        }
+        catch
+        {
+            CleanUpAfterFailedStart();
+            throw;
+        }
+
+        _started = true;
+        var url = _server?.Url ?? _status.Current.Url ?? WebConsoleServer.BuildUrl(_options);
+
+        _audit.Write("plugin.start", "system", null, url, "ok", TimeSpan.Zero);
         _log.Information(
-            $"webconsole ready: url={_server.Url} health={_options.HostHealthUrl} audit={_audit.FilePath}");
+            $"webconsole ready: url={url} health={_options.HostHealthUrl} audit={_audit.FilePath}");
+    }
+
+    private void CleanUpAfterFailedStart()
+    {
+        _server = null;
+        _healthPort?.Dispose();
+        _healthPort = null;
+        _audit?.Dispose();
+        _audit = null;
     }
 
     public async Task StopAsync(CancellationToken cancellationToken = default)
     {
-        if (!_started)
-            return;
-
+        var wasStarted = _started;
         _started = false;
 
-        _audit?.Write("plugin.stop", "system", null, null, "ok", TimeSpan.Zero);
+        if (wasStarted)
+            _audit?.Write("plugin.stop", "system", null, null, "ok", TimeSpan.Zero);
 
         try
         {
@@ -143,6 +176,9 @@ public sealed class WebConsoleRuntime : IAsyncDisposable
 
         _healthPort?.Dispose();
         _healthPort = null;
+
+        if (wasStarted)
+            _status.Set(WebConsoleServerStatus.Stopped);
     }
 
     public string DescribeStatus(bool json)
@@ -235,5 +271,48 @@ public static class WebConsolePluginPaths
         }
 
         return directory;
+    }
+}
+
+/// <summary>
+/// Detects an already-running WebConsole on the configured port so <c>web status</c> keeps working
+/// while the operator's host owns the listener. Only the plugin's own session endpoint is accepted.
+/// </summary>
+public static class WebConsoleExternalProbe
+{
+    public static async Task<bool> IsExistingConsoleAsync(
+        WebConsoleOptions options,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            using var handler = new SocketsHttpHandler
+            {
+                UseProxy = false,
+                AllowAutoRedirect = false,
+            };
+
+            using var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(1) };
+            var url = WebConsoleServer.BuildUrl(options) + "/api/session";
+
+            using var response = await client.GetAsync(url, cancellationToken).ConfigureAwait(false);
+            if (response.StatusCode is not (HttpStatusCode.OK or HttpStatusCode.Unauthorized))
+                return false;
+
+            var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            using var document = JsonDocument.Parse(body);
+
+            return document.RootElement.ValueKind == JsonValueKind.Object
+                   && document.RootElement.TryGetProperty("authenticated", out var authenticated)
+                   && authenticated.ValueKind is JsonValueKind.True or JsonValueKind.False;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            return false;
+        }
     }
 }
