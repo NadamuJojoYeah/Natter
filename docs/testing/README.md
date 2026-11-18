@@ -76,6 +76,7 @@
 | 2026-11-15 | [P4 验收处置记录](2026-11-15-p4-acceptance-response.md) | Schema、profile store、fail-closed、单实例、clipped 输出 | 待修复：1 High + 2 Medium + 2 观测 |
 | 2026-11-16 | [首次部署测试（Tier 1）](2026-11-16-first-deployment-test.md) | `OPERATIONS_RUNBOOK.md` §1–§11：发布、配置/secret、health、单实例、备份/恢复、优雅停止、采样、T+13h 巡检 | **通过（有条件）**：18 用例 17 通过；2 个代理阻塞缺陷 + 5 个观测 + 2 个环境限制；T+13h 断连经重启恢复 |
 | 2026-11-17 | [首次部署处置记录](2026-11-16-first-ops-deploy-response.md) | 代理/超时、health 语义、CLI 巡检、静默断连、uptime、systemd/soak | 待修复：2 阻塞 + 5 OBS + 2 环境项 |
+| 2026-11-18 | [WebConsole Phase 1 实现与验证](2026-11-18-webconsole-p1.md) | 插件加载/认证/health 桥接/审计/UI/staging | **通过**：68/68 单测、真实宿主与 HTTP 矩阵通过；G1–G9 显式降级；1 BUG 已修复 |
 
 ## 5. 相关文档
 

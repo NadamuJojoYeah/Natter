@@ -8,6 +8,19 @@
 
 ---
 
+## 0. 元数据
+
+| 字段 | 值 |
+| --- | --- |
+| 测试时间 | 2026-11-18 10:09–10:38（Asia/Shanghai） |
+| 基线 | 功能提交 `989062b`；记录提交随本文件归档 |
+| 工作区 | 含其他会话的 P4.5/P5 未提交改动，本插件未触碰 |
+| 环境 | Arch Linux `arch-x64`、.NET SDK 10.0.114、Microsoft.NETCore.App 10.0.14 |
+| 被测 | `plugins/Natter.Plugin.WebConsole`（NPS v1，file plugin） |
+| 不测 | 公网反向代理、真实 Discord/DingTalk 上游、24h soak、浏览器 dashboard 自动登录 |
+
+---
+
 ## 1. 范围与约束
 
 - 交付独立插件目录 `plugins/Natter.Plugin.WebConsole`，不进入 core；
@@ -283,3 +296,49 @@ curl -s -i http://127.0.0.1:5090/ | head -20
 3. viewer 角色与 session 持久化（可选）；
 4. Kestrel 迁移（宿主 ASP.NET Core 共享就绪后）；
 5. CI 纳入 `tests/Natter.Plugin.WebConsole.Tests`。
+
+
+---
+
+## 13. 问题登记
+
+### BUG-001 · dashboard 渲染中断（开发侧已修复）
+
+- **发现时间**：2026-11-18 10:31
+- **严重度**：高（登录后白屏）
+- **影响**：dashboard 无法显示 checks/upstreams/plugins/config/audit
+- **复现**：修复前运行 `node tests/Natter.Plugin.WebConsole.Tests/ui-smoke.mjs`，抛出 `checks.replaceChildren is not a function` / `statusLine is not defined`
+- **证据**：smoke 首次执行堆栈；修复后输出 `ui smoke ok`
+- **处置**：统一 `ui.*` 引用；`renderChecks` 改为操作 `<ul>` 元素；config 改用 `textContent`
+- **回归**：68/68 单测 + smoke 通过
+
+### OBS-001 · 无 upstream 时宿主 health.status=unknown
+
+- **发现时间**：2026-11-18 10:26
+- **影响**：控制台 health 卡片显示 `unknown`，checks 仍为 ok
+- **说明**：沿用 `RuntimeHealth` 既有语义，非插件缺陷
+- **建议**：配置 upstream 或接受 unknown
+
+### OBS-002 · plugins 明细缺失（G4）
+
+- **发现时间**：2026-11-18 10:26
+- **影响**：`/api/plugins` 只有计数与失败项，无 graph/contributions/permissions
+- **说明**：`IPluginRuntimeDiagnostics` 未注入插件 provider，缺口文档 G4 已登记
+- **建议**：宿主播接后插件无需改 UI
+
+### ENV-001 · 工作区并行改动
+
+- **发现时间**：2026-11-18 10:09
+- **影响**：提交需按路径挑选，避免带入其他会话的 P4.5/P5 改动
+- **处置**：每步只 `git add` 本插件/文档路径
+
+---
+
+## 14. 变更记录
+
+| 时间 | 变更 |
+| --- | --- |
+| 10:09–10:20 | 读设计/NPS/CLI health 文档，锁定缺口与数据源 |
+| 10:20–10:28 | 插件骨架、认证、服务器、UI、单测 68/68 |
+| 10:28–10:33 | 真实宿主加载、serve + curl 矩阵、审计、登录页截图、UI smoke |
+| 10:33–10:40 | 文档、slnx、staging 脚本、分步提交 |
