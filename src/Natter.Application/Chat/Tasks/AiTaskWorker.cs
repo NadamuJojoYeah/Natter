@@ -23,9 +23,16 @@ public sealed class AiTaskWorker(
     {
         try
         {
+            // Task context is its own conversation: AI responder history and summary stay
+            // isolated from the user-visible chat session.
+            var taskConversation = new Conversation(
+                $"{context.SessionConversation.Id}#task:{task.TaskId}",
+                context.SessionConversation.Kind,
+                context.SessionConversation.GuildId,
+                context.SessionConversation.Title);
             var message = new Message(
                 task.TaskId,
-                context.SessionConversation,
+                taskConversation,
                 new User(task.ActorId ?? "task", "Task User"),
                 new Content(task.Prompt),
                 DateTimeOffset.UtcNow);

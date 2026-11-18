@@ -99,6 +99,15 @@ public sealed class ChatCompositionModule : ICompositionModule
                 : new SqliteTaskStore(Path.Combine(Path.GetFullPath(context.Options.StateDirectory), "natter.db")));
         services.AddSingleton<Natter.Application.Chat.ITool, Natter.Application.Chat.ClockTool>();
         services.AddSingleton<Natter.Application.Chat.ITool, Natter.Application.Chat.TextTransformTool>();
+        services.AddSingleton<HttpClient>(_ => new HttpClient { Timeout = TimeSpan.FromSeconds(20) });
+        services.AddSingleton<Natter.Application.Chat.ITool>(provider =>
+        {
+            var hosts = (Environment.GetEnvironmentVariable("NATTER_HTTP_FETCH_HOSTS") ?? string.Empty)
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            return new Natter.Application.Chat.HttpFetchTool(
+                provider.GetRequiredService<HttpClient>(), hosts);
+        });
         services.AddSingleton<Natter.Application.Chat.IToolPolicy, Natter.Application.Chat.ReadOnlyToolPolicy>();
         services.AddSingleton<Natter.Application.Chat.ITaskWorker>(provider =>
             new Natter.Application.Chat.AiTaskWorker(

@@ -113,8 +113,9 @@ public sealed class TaskRuntimeTests
     [Fact]
     public async Task Ai_worker_uses_the_host_responder_and_never_sends_directly()
     {
+        var responder = new EchoResponder();
         var services = new Microsoft.Extensions.DependencyInjection.ServiceCollection()
-            .AddSingleton<IChatResponder>(new EchoResponder())
+            .AddSingleton<IChatResponder>(responder)
             .BuildServiceProvider();
         var worker = new AiTaskWorker(services, [new ClockTool()], new ReadOnlyToolPolicy());
         var source = Source.Create("discord", "discord", "bot");
@@ -125,6 +126,7 @@ public sealed class TaskRuntimeTests
             [], 3, 8000, TimeSpan.FromSeconds(5)));
         Assert.True(result.Ok);
         Assert.Equal("ai answer", result.Text);
+        Assert.Contains("#task:", responder.ConversationId);
     }
 
     [Fact]
@@ -231,14 +233,21 @@ public sealed class TaskRuntimeTests
     }
     private sealed class EchoResponder : IChatResponder
     {
+        public string? ConversationId { get; private set; }
+
         public ValueTask<ChatCommand?> RespondAsync(ChatEvent chatEvent, CancellationToken cancellationToken = default)
-            => ValueTask.FromResult<ChatCommand?>(new MessageSendCommand
+        {
+            ConversationId = chatEvent is MessageCreatedEvent message
+                ? message.Payload.Message.Conversation.Id
+                : null;
+            return ValueTask.FromResult<ChatCommand?>(new MessageSendCommand
             {
                 Id = "cmd:echo",
                 Source = chatEvent.Source,
                 IssuedAt = DateTimeOffset.UtcNow,
                 Payload = new MessageSendPayload(new Conversation("c1", ConversationKind.Direct), new Content("ai answer")),
             });
+        }
     }
 
 }
