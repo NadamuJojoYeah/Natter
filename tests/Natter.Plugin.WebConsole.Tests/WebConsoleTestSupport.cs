@@ -71,6 +71,17 @@ internal sealed class FakeRuntimeDiagnostics : IPluginRuntimeDiagnostics
         => new(pluginId, true, []);
 }
 
+internal sealed class FakePluginSecrets(string token) : IPluginSecrets
+{
+    public string GetRequired(string name)
+        => name == WebConsoleDefaults.TokenSecretName
+            ? token
+            : throw new PluginSecretException($"Unexpected secret '{name}'.");
+
+    public string? Get(string name)
+        => name == WebConsoleDefaults.TokenSecretName ? token : null;
+}
+
 internal sealed class StaticJsonHandler(string json) : HttpMessageHandler
 {
     public int Calls { get; private set; }
@@ -212,12 +223,15 @@ internal sealed class WebConsoleHarness : IDisposable
         return new WebConsoleHttpRequest(method, path, query, headers, body ?? string.Empty, ip, false);
     }
 
-    public async Task<LoginResult> LoginAsync(string? token = null)
+    public async Task<LoginResult> LoginAsync(
+        string? token = null,
+        IReadOnlyDictionary<string, string>? extraHeaders = null)
     {
         var response = await Handler.HandleAsync(Request(
             "POST",
             "/api/session",
-            JsonSerializer.Serialize(new { token = token ?? Token })));
+            JsonSerializer.Serialize(new { token = token ?? Token }),
+            extraHeaders: extraHeaders));
 
         var cookie = response.Headers.TryGetValue("Set-Cookie", out var setCookie)
             ? setCookie.Split(';')[0]

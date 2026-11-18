@@ -151,7 +151,11 @@ public sealed class WebConsoleRequestHandlerTests
         });
         var writableLogin = await writable.LoginAsync();
         var gap = await writable.Handler.HandleAsync(writable.Request(
-            "POST", "/api/config/plugin:natter.plugin.webconsole", body: "{}", cookie: writableLogin.Cookie, csrf: writableLogin.Csrf));
+            "POST",
+            "/api/config/plugin:natter.plugin.webconsole",
+            body: JsonSerializer.Serialize(new { content = "{}" }),
+            cookie: writableLogin.Cookie,
+            csrf: writableLogin.Csrf));
 
         Assert.Equal(501, gap.StatusCode);
         Assert.Equal("host.admin_config.unavailable", LoginResult.Json(gap).GetProperty("error").GetProperty("code").GetString());
@@ -190,10 +194,15 @@ public sealed class WebConsoleRequestHandlerTests
             Port = 5090,
             ReadOnly = false,
             AllowCommandConsole = true,
+            CommandAllowlist = ["health"],
         });
         var enabledLogin = await enabled.LoginAsync();
         var gap = await enabled.Handler.HandleAsync(enabled.Request(
-            "POST", "/api/commands", body: "{\"command\":\"health --json\"}", cookie: enabledLogin.Cookie, csrf: enabledLogin.Csrf));
+            "POST",
+            "/api/commands",
+            body: JsonSerializer.Serialize(new { command = "health", args = new[] { "--json" } }),
+            cookie: enabledLogin.Cookie,
+            csrf: enabledLogin.Csrf));
 
         Assert.Equal(501, gap.StatusCode);
         Assert.Equal("host.admin_command.unavailable", LoginResult.Json(gap).GetProperty("error").GetProperty("code").GetString());
@@ -314,5 +323,187 @@ public sealed class WebConsoleRequestHandlerTests
         var audit = harness.Audit.Read(20);
         Assert.Contains(audit, entry => entry.Action == "snapshot.view" && entry.Ip == "198.51.100.7");
         Assert.Contains(audit, entry => entry.Action == "snapshot.view" && entry.Ip == "203.0.113.9");
+    }
+
+    [Fact]
+    public async Task Config_validate_requires_csrf_and_reports_policy_issues()
+    {
+        using var harness = WebConsoleHarness.Create();
+        var login = await harness.LoginAsync();
+        var validBody = JsonSerializer.Serialize(new { content = "{\"a\":1}" });
+
+        var withoutCsrf = await harness.Handler.HandleAsync(harness.Request(
+            "POST", "/api/config/profiles/validate", body: validBody, cookie: login.Cookie));
+        Assert.Equal(403, withoutCsrf.StatusCode);
+
+        var valid = await harness.Handler.HandleAsync(harness.Request(
+            "POST", "/api/config/profiles/validate", body: validBody, cookie: login.Cookie, csrf: login.Csrf));
+        Assert.Equal(200, valid.StatusCode);
+        Assert.True(LoginResult.Json(valid).GetProperty("validation").GetProperty("valid").GetBoolean());
+
+        var invalidBody = JsonSerializer.Serialize(new { content = "{oops}" });
+        var invalid = await harness.Handler.HandleAsync(harness.Request(
+            "POST", "/api/config/profiles/validate", body: invalidBody, cookie: login.Cookie, csrf: login.Csrf));
+        var validation = LoginResult.Json(invalid).GetProperty("validation");
+        Assert.False(validation.GetProperty("valid").GetBoolean());
+        Assert.Contains(
+            validation.GetProperty("issues").EnumerateArray(),
+            issue => issue.GetProperty("code").GetString() == "config.invalid_json");
+    }
+
+    [Fact]
+    public async Task Config_validate_flags_plaintext_secret_literals()
+    {
+        using var harness = WebConsoleHarness.Create();
+        var login = await harness.LoginAsync();
+        var body = JsonSerializer.Serialize(new { content = "{\"token\":\"plain-value\"}" });
+
+        var response = await harness.Handler.HandleAsync(harness.Request(
+            "POST", "/api/config/profiles/validate", body: body, cookie: login.Cookie, csrf: login.Csrf));
+
+        var validation = LoginResult.Json(response).GetProperty("validation");
+        Assert.True(validation.GetProperty("containsSecretLiteral").GetBoolean());
+        Assert.False(validation.GetProperty("valid").GetBoolean());
+    }
+
+    [Fact]
+    public async Task Config_validate_rejects_oversized_body()
+    {
+        using var harness = WebConsoleHarness.Create();
+        var login = await harness.LoginAsync();
+        var body = JsonSerializer.Serialize(new
+        {
+            content = "{\"padding\":\"" + new string('a', WebConsoleConfigEditPolicy.MaxContentBytes + 16 * 1024) + "\"}",
+        });
+
+        var response = await harness.Handler.HandleAsync(harness.Request(
+            "POST", "/api/config/profiles/validate", body: body, cookie: login.Cookie, csrf: login.Csrf));
+
+        Assert.Equal(413, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Config_write_validates_before_reporting_host_gap()
+    {
+        using var harness = WebConsoleHarness.Create(new WebConsoleOptions
+        {
+            Port = 5090,
+            ReadOnly = false,
+            AllowConfigWrite = true,
+        });
+        var login = await harness.LoginAsync();
+
+        var invalidBody = JsonSerializer.Serialize(new { content = "{oops}" });
+        var invalid = await harness.Handler.HandleAsync(harness.Request(
+            "POST", "/api/config/profiles", body: invalidBody, cookie: login.Cookie, csrf: login.Csrf));
+        Assert.Equal(400, invalid.StatusCode);
+        Assert.Equal("config.invalid",
+            LoginResult.Json(invalid).GetProperty("error").GetProperty("code").GetString());
+
+        var validBody = JsonSerializer.Serialize(new { content = "{}" });
+        var valid = await harness.Handler.HandleAsync(harness.Request(
+            "POST", "/api/config/profiles", body: validBody, cookie: login.Cookie, csrf: login.Csrf));
+        Assert.Equal(501, valid.StatusCode);
+        Assert.Equal("host.admin_config.unavailable",
+            LoginResult.Json(valid).GetProperty("error").GetProperty("code").GetString());
+    }
+
+    [Fact]
+    public async Task Command_validate_honors_allowlist()
+    {
+        using var harness = WebConsoleHarness.Create(new WebConsoleOptions
+        {
+            Port = 5090,
+            ReadOnly = false,
+            AllowCommandConsole = true,
+            CommandAllowlist = ["health", "plugins list"],
+        });
+        var login = await harness.LoginAsync();
+
+        var allowedBody = JsonSerializer.Serialize(new { command = "plugins   list", args = new[] { "--detail" } });
+        var allowed = await harness.Handler.HandleAsync(harness.Request(
+            "POST", "/api/commands/validate", body: allowedBody, cookie: login.Cookie, csrf: login.Csrf));
+        var allowedDecision = LoginResult.Json(allowed).GetProperty("decision");
+        Assert.True(allowedDecision.GetProperty("allowed").GetBoolean());
+        Assert.Equal("plugins list", allowedDecision.GetProperty("command").GetString());
+
+        var deniedBody = JsonSerializer.Serialize(new { command = "rm", args = new[] { "-rf" } });
+        var denied = await harness.Handler.HandleAsync(harness.Request(
+            "POST", "/api/commands/validate", body: deniedBody, cookie: login.Cookie, csrf: login.Csrf));
+        var deniedDecision = LoginResult.Json(denied).GetProperty("decision");
+        Assert.False(deniedDecision.GetProperty("allowed").GetBoolean());
+        Assert.Equal("command.not_allowed", deniedDecision.GetProperty("code").GetString());
+    }
+
+    [Fact]
+    public async Task Command_run_rejects_non_allowlisted_before_reporting_gap()
+    {
+        using var harness = WebConsoleHarness.Create(new WebConsoleOptions
+        {
+            Port = 5090,
+            ReadOnly = false,
+            AllowCommandConsole = true,
+            CommandAllowlist = ["health"],
+        });
+        var login = await harness.LoginAsync();
+
+        var denied = await harness.Handler.HandleAsync(harness.Request(
+            "POST", "/api/commands",
+            body: JsonSerializer.Serialize(new { command = "rm" }),
+            cookie: login.Cookie,
+            csrf: login.Csrf));
+        Assert.Equal(403, denied.StatusCode);
+        Assert.Equal("command.not_allowed",
+            LoginResult.Json(denied).GetProperty("error").GetProperty("code").GetString());
+
+        var allowed = await harness.Handler.HandleAsync(harness.Request(
+            "POST", "/api/commands",
+            body: JsonSerializer.Serialize(new { command = "health", args = new[] { "--json" } }),
+            cookie: login.Cookie,
+            csrf: login.Csrf));
+        Assert.Equal(501, allowed.StatusCode);
+        Assert.Equal("host.admin_command.unavailable",
+            LoginResult.Json(allowed).GetProperty("error").GetProperty("code").GetString());
+    }
+
+    [Fact]
+    public async Task Command_body_size_is_limited()
+    {
+        using var harness = WebConsoleHarness.Create(new WebConsoleOptions
+        {
+            Port = 5090,
+            ReadOnly = false,
+            AllowCommandConsole = true,
+            CommandAllowlist = ["health"],
+        });
+        var login = await harness.LoginAsync();
+        var body = JsonSerializer.Serialize(new { command = "health", args = new string('a', WebConsoleDefaults.MaxCommandBodyBytes) });
+
+        var response = await harness.Handler.HandleAsync(harness.Request(
+            "POST", "/api/commands", body: body, cookie: login.Cookie, csrf: login.Csrf));
+
+        Assert.Equal(413, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Trusted_forwarded_proto_marks_session_cookie_secure()
+    {
+        using var trusted = WebConsoleHarness.Create();
+        var secure = await trusted.LoginAsync(extraHeaders: new Dictionary<string, string>
+        {
+            ["X-Forwarded-Proto"] = "https",
+        });
+        Assert.Contains("Secure", secure.Response.Headers["Set-Cookie"]);
+
+        using var untrusted = WebConsoleHarness.Create();
+        var insecure = await untrusted.Handler.HandleAsync(untrusted.Request(
+            "POST",
+            "/api/session",
+            body: JsonSerializer.Serialize(new { token = WebConsoleHarness.Token }),
+            ip: "203.0.113.9",
+            extraHeaders: new Dictionary<string, string> { ["X-Forwarded-Proto"] = "https" }));
+
+        Assert.Equal(200, insecure.StatusCode);
+        Assert.DoesNotContain("Secure", insecure.Headers["Set-Cookie"]);
     }
 }

@@ -88,6 +88,32 @@ public sealed class WebConsoleOptionsTests
         Assert.Contains(issues, issue => issue.Code == "webconsole.port-invalid");
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData("health\nrm")]
+    public void Invalid_command_allowlist_entries_are_rejected(string entry)
+    {
+        var issues = WebConsoleOptionsValidator.Validate(new WebConsoleOptions
+        {
+            CommandAllowlist = [entry],
+            Port = 5090,
+        });
+
+        Assert.Contains(issues, issue => issue.Code == "webconsole.command-allowlist-invalid");
+    }
+
+    [Fact]
+    public void Oversized_command_allowlist_entry_is_rejected()
+    {
+        var issues = WebConsoleOptionsValidator.Validate(new WebConsoleOptions
+        {
+            CommandAllowlist = [new string('a', WebConsoleCommandPolicy.MaxCommandLength + 1)],
+            Port = 5090,
+        });
+
+        Assert.Contains(issues, issue => issue.Code == "webconsole.command-allowlist-invalid");
+    }
+
     [Fact]
     public void Invalid_trusted_proxy_is_rejected()
     {

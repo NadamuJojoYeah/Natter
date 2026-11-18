@@ -82,6 +82,7 @@ const snapshot = {
     { name: "server", status: "ok", detail: "http://127.0.0.1:5090" },
     { name: "token", status: "ok", detail: null },
     { name: "static-assets", status: "ok", detail: "3 whitelisted assets" },
+    { name: "audit", status: "ok", detail: null },
     { name: "host.health", status: "ok", detail: null },
     { name: "host.plugins", status: "degraded", detail: "host.plugin_diagnostics.unavailable" },
   ],
@@ -249,7 +250,7 @@ assert(elements.get("dashboard").hidden === false, "dashboard should be visible"
 assert(elements.get("login").hidden === true, "login should be hidden after authentication");
 assert(statusLine.textContent.startsWith("health=degraded"), "status line should show degraded health");
 assert(statusLine.className.includes("degraded"), "status class should be degraded");
-assert(checks.length === 5, `expected 5 checks, got ${checks.length}`);
+assert(checks.length === 6, `expected 6 checks, got ${checks.length}`);
 assert(upstreams.length === 1, "upstream section should contain a table");
 assert(elements.get("profiles").children.length === 1, "profiles section should contain a table");
 assert(elements.get("plugins").children.length >= 3, "plugins section should render counts, failures and nodes");

@@ -35,6 +35,11 @@ public sealed class WebConsoleServerTests
                 + "connect-src 'self'; font-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
                 Assert.Single(index.Headers.GetValues("Content-Security-Policy")));
 
+            var head = await client.SendAsync(new HttpRequestMessage(HttpMethod.Head, baseUrl + "/"));
+            Assert.Equal(HttpStatusCode.OK, head.StatusCode);
+            Assert.Empty(await head.Content.ReadAsByteArrayAsync());
+            Assert.True(head.Content.Headers.ContentLength > 0);
+
             var login = await client.PostAsync(
                 baseUrl + "/api/session",
                 new StringContent(
