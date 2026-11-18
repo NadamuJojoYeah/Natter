@@ -14,7 +14,7 @@ public sealed class InMemoryTaskStore : ITaskStore
         lock (_gate)
         {
             _tasks[task.TaskId] = task;
-            AddEvent(task.TaskId, "created", new { task.Prompt });
+            AddEvent(task.TaskId, "created", new { });
             return ValueTask.FromResult(task);
         }
     }

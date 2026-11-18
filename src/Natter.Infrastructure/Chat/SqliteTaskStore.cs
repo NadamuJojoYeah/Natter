@@ -25,7 +25,7 @@ public sealed class SqliteTaskStore : ITaskStore
             """;
         AddParameters(command, task);
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
-        await AddEventAsync(connection, task.TaskId, "created", new { task.Prompt }, cancellationToken).ConfigureAwait(false);
+        await AddEventAsync(connection, task.TaskId, "created", new { }, cancellationToken).ConfigureAwait(false);
         return task;
     }
 
