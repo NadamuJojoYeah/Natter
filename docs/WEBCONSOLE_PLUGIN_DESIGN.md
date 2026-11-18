@@ -1,6 +1,6 @@
 # Natter WebConsole Plugin Design
 
-> **状态**：Accepted design · Phase 1 baseline delivered（2026-11-18，验收见 [测试记录](testing/2026-11-18-webconsole-p1.md)）  
+> **状态**：Accepted design · Phase 1 delivered；Phase 2/3 插件侧校验/策略已就绪（2026-11-18）  
 > **日期**：2026-11-17（设计）/ 2026-11-18（实现决策）  
 > **定位**：Natter 的独立运维/调试插件，提供 Web 诊断、配置编辑和受限命令终端；不进入 core，不默认启用。  
 > **关联**：[NPS v1](PLUGIN_SPEC.md)、[运维手册](OPERATIONS_RUNBOOK.md)、[Harness 架构](HARNESS_ARCHITECTURE.md)、[P5 Agent Runtime](P5_AGENT_TASK_RUNTIME.md)、[宿主契约缺口与适配](WEBCONSOLE_HOST_API_GAP.md)、[插件使用说明](WEBCONSOLE_PLUGIN.md)
@@ -348,6 +348,33 @@ plugin:<pluginId>
 
 不允许 `../`、绝对路径、secret 文件。
 
+### 8.4 Phase 2 插件侧就绪（宿主端口缺失时的行为）
+
+宿主 `IAdminConfigStore` 未交付前，插件提供**无写入**的校验链路：
+
+```http
+POST /api/config/{id}/validate   # auth + CSRF
+{"content": "<JSON 文本>"}
+→ 200 {"id":"profiles","validation":{"valid":true,"eTag":"sha256:…","sizeBytes":13,
+        "containsSecretLiteral":false,"issues":[]}}
+```
+
+`POST /api/config/{id}` 先跑同一校验：
+
+- 无效 → `400 config.invalid`（附 issues/ETag）；
+- 有效但宿主端口缺失 → `501 host.admin_config.unavailable`；
+- 写入关闭 → `403 config.write_disabled`。
+
+校验规则（`WebConsoleConfigEditPolicy`，纯函数）：
+
+- id 白名单 `profiles` / `plugin:<id>`；
+- ≤256 KiB；root 必须 object/array；NUL/控制字符拒绝；
+- 明文 secret（`sk-*`、`Bearer`、PEM、`"token":"明文"`）拒绝，`${secret:NAME}` 允许；
+- ETag = `sha256(content)`；
+- 行级 diff（LCS 有界），预览 ≤200 行 / 32 KiB。
+
+宿主接入后，`ReadAsync/ValidateAsync/SaveAsync` 可直接复用该策略；备份、写锁、原子替换仍由宿主负责。
+
 ---
 
 ## 9. Phase 3：受限命令终端
@@ -401,6 +428,27 @@ ttyd/Wetty/SSH sidecar
 ```
 
 WebConsole 只提供链接和提示，不代理 shell。
+
+### 9.3 Phase 3 插件侧就绪（宿主 runner 缺失时的行为）
+
+```http
+POST /api/commands/validate       # auth + CSRF
+{"command":"plugins list","args":["--detail"]}
+→ 200 {"decision":{"allowed":true,"code":"command.allowed","command":"plugins list","args":["--detail"]}}
+```
+
+`POST /api/commands` 的执行顺序：
+
+1. 控制台关闭 → `403 command.disabled`；
+2. 非 allowlist / 参数非法 → `403 command.not_allowed` / `command.invalid`；
+3. 通过策略但无 `IAdminCommandRunner` → `501 host.admin_command.unavailable`。
+
+策略（`WebConsoleCommandPolicy`，纯函数）：
+
+- 命令归一化后与 `commandAllowlist` 精确匹配；≤128 字符；控制字符拒绝；
+- 参数 ≤8 个、每个 ≤128 字符，argv 数组传递，不做 shell 拼接；
+- 输出 ≤64 KiB（stdout/stderr 共享预算），截断标记 + token 脱敏；
+- 超时由宿主 runner 负责（插件只传 CancellationToken）。
 
 ---
 
@@ -537,17 +585,18 @@ time, user, ip, action, target, result, duration
 
 ### Phase 2：配置编辑
 
-- `IAdminConfigStore`；
-- schema/diff/backup/lock；
-- 只允许 profiles/plugin config；
-- 重启提示。
+- [x] 插件侧 id/大小/JSON/secret literal 校验 + ETag + 有界 diff（`/api/config/{id}/validate`）；
+- [x] 无效内容在写入前 `400`，有效内容在宿主缺失时 `501`；
+- [ ] `IAdminConfigStore` 读取/保存/备份/写锁/原子替换（宿主）；
+- [x] 只允许 profiles/plugin config；
+- [ ] 重启提示（宿主返回 reload hint 后接入）。
 
 ### Phase 3：受限命令
 
-- `IAdminCommandRunner`；
-- allowlist；
-- 审计；
-- 输出脱敏。
+- [x] 插件侧 allowlist/参数/控制字符/输出截断与脱敏（`/api/commands/validate`）；
+- [x] 拒绝路径审计（`command.run` denied）；
+- [ ] `IAdminCommandRunner` 执行、超时与结果回传（宿主）；
+- [x] 不拼 shell / 不启动子进程。
 
 ### Phase 4：可选 sidecar
 
@@ -609,7 +658,7 @@ Phase 1 状态见 §18；未达成项都对应 [缺口文档](WEBCONSOLE_HOST_AP
 | 审计 | `WebConsoleAudit.cs` | JSONL，字段 `time/user/ip/action/target/result/durationMs` |
 | 静态 UI | `wwwroot/` | 无外部依赖，CSP `default-src 'none'` |
 | CLI | `WebConsoleCommands.cs` | `web status [--json]`，与 HTTP 快照同源 |
-| 配置编辑 | `WebConsoleRequestHandler.cs` | 未注入 `IAdminConfigStore` 时返回 501（G5） |
-| 命令终端 | `WebConsoleRequestHandler.cs` | 未注入 `IAdminCommandRunner` 时返回 501（G6） |
+| 配置编辑 | `WebConsoleConfigEdit.cs`、`WebConsoleRequestHandler.cs` | 校验/ETag/diff 已就绪；写入在 G5 缺失时 501 |
+| 命令终端 | `WebConsoleCommandPolicy.cs`、`WebConsoleRequestHandler.cs` | allowlist/截断/脱敏已就绪；执行在 G6 缺失时 501 |
 
 测试与运行记录：[2026-11-18 WebConsole Phase 1](testing/2026-11-18-webconsole-p1.md)。

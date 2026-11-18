@@ -15,8 +15,8 @@
 | G2 | contribution `admin.ui` / `admin.api` / `admin.command` | `PluginContributionTypes` 与 manifest 校验只认 8 种 v1 类型 | 无管理面贡献点 | 不声明管理贡献；在 `ActivateAsync` 启动 loopback 服务，CLI 只贡献 `cli.command` |
 | G3 | `IAdminDiagnostics` / `AdminSnapshot` / `AdminLogEntry` | 不存在 | 插件拿不到宿主聚合快照 | 插件内定义 `IWebConsoleHostPort`，数据源走已存在的 `serve --health-port` `/health` |
 | G4 | `IPluginRuntimeDiagnostics` 桥接 | 接口存在，宿主 DI 已注册；**未注入插件 provider** | 插件无法读取 plugin graph/contributions/permissions | 插件 provider 里 `GetService<IPluginRuntimeDiagnostics>()`，为空则 `/plugins` 降级为 health 里的计数/失败项 |
-| G5 | `IAdminConfigStore` | 不存在 | 配置编辑无路径白名单、schema/diff/backup/lock/ETag | Phase 2 端点在未注入端口时返回 `501 admin_api_unavailable`，UI 只读 |
-| G6 | `IAdminCommandRunner` | 不存在；CLI 无执行治理权限词 | 受限命令终端无法安全执行 | Phase 3 端点返回 `501`，`commandAllowlist` 仅做配置校验 |
+| G5 | `IAdminConfigStore` | 不存在 | 配置编辑无路径白名单、schema/diff/backup/lock/ETag | 插件侧校验/ETag/diff 已就绪（`validate` 端点）；写入仍 `501 host.admin_config.unavailable` |
+| G6 | `IAdminCommandRunner` | 不存在；CLI 无执行治理权限词 | 受限命令终端无法安全执行 | 插件侧 allowlist/参数/输出策略已就绪（`validate` 端点）；执行仍 `501 host.admin_command.unavailable` |
 | G7 | ASP.NET Core 宿主管线 | host `runtimeconfig` 只有 `Microsoft.NETCore.App`；`PluginLoadContext` 不共享 `Microsoft.AspNetCore.*` | Kestrel/ASP.NET Core 无法从插件 ALC 加载 | Phase 1 用 BCL `HttpListener`（`WebConsoleServer`），不加 `FrameworkReference` |
 | G8 | 宿主日志 tail API | `IPluginLog` 只写；无读取端口 | `/logs` 无法取宿主日志 | `/logs` 返回 `unavailable`；`/api/audit` 返回插件审计记录 |
 | G9 | 统一脱敏服务 | `RuntimeHealth.Sanitize` 是 CLI 内部静态方法，非公开契约 | 插件不能复用宿主脱敏 | 插件内 `WebConsoleRedaction`，规则与宿主保持一致并单测 |
@@ -168,6 +168,34 @@ read → edit → validate schema → diff → backup → lock → write → rel
 
 提议契约为设计文档 §8.3 的 `IAdminConfigStore`，补充一条：返回的 `AdminConfigDocument` 必须带 `Etag` 与 `LastModified`，保存必须原子替换（`File.Move(overwrite: true)`）。
 
+### 4.1 插件侧已就绪（不依赖宿主）
+
+`WebConsoleConfigEditPolicy` 是纯函数，不读写文件：
+
+| 能力 | 规则 |
+| --- | --- |
+| 文档 ID | 仅 `profiles`、`plugin:<plugin-id>`（`[a-z0-9._-]`，≤128） |
+| 大小 | ≤256 KiB（UTF-8） |
+| JSON | 允许注释/尾逗号；root 必须是 object/array；NUL 拒绝 |
+| secret | 拒绝 `sk-*`、`ak-*`、`Bearer …`、PEM 私钥、`"token":"明文"` 等；`${secret:NAME}` 允许 |
+| ETag | `sha256:<hex>`，基于完整 content |
+| diff | 行级 LCS；≤250k 单元；预览 ≤200 行/32 KiB，超限标记 truncated |
+
+HTTP 接线：
+
+```http
+POST /api/config/{id}/validate
+X-WebConsole-CSRF: <session csrf>
+{"content": "{...}"}
+
+200 {"id":"profiles","validation":{"valid":false,"eTag":"sha256:…","sizeBytes":13,
+     "containsSecretLiteral":false,"issues":[{"pointer":"$","code":"config.invalid_json","message":"…"}]}}
+```
+
+`POST /api/config/{id}` 在宿主 store 缺失时仍执行同一校验：无效 → `400 config.invalid`，有效 → `501 host.admin_config.unavailable`。
+
+宿主实现 `IAdminConfigStore` 后，插件只需把 `ReadAsync/ValidateAsync/SaveAsync` 适配到本策略的 ETag/validation，写锁、备份、原子替换仍由宿主负责。
+
 ---
 
 ## 5. G6：受限命令终端
@@ -183,6 +211,29 @@ read → edit → validate schema → diff → backup → lock → write → rel
 `allowCommandConsole` 与 `commandAllowlist` 只做配置校验和 UI 展示。等 `IAdminCommandRunner`（设计 §9.1）落地后，命令白名单映射到宿主注册的 CLI 命令，插件只做 HTTP → runner 的转发和审计。
 
 提议补充权限词：`admin.command.execute`，并在宿主侧对每条命令做 allowlist + 参数 schema，而不是在插件里做字符串匹配。
+
+### 5.1 插件侧已就绪（不依赖宿主）
+
+`WebConsoleCommandPolicy` 是纯函数，不启动进程、不拼 shell：
+
+| 能力 | 规则 |
+| --- | --- |
+| 命令 | 去首尾/折叠空白；≤128 字符；控制字符拒绝；必须与 `commandAllowlist` 精确匹配 |
+| 参数 | ≤8 个；每个 ≤128 字符；控制字符拒绝；以 argv 数组传递，不做字符串拼接 |
+| 输出 | 总量 ≤64 KiB；stdout/stderr 共享预算；截断标记；`sk-*`/`Bearer` 脱敏 |
+| 超时 | 由宿主 `IAdminCommandRunner` 负责（插件只传 CancellationToken） |
+
+HTTP 接线：
+
+```http
+POST /api/commands/validate
+X-WebConsole-CSRF: <session csrf>
+{"command":"plugins list","args":["--detail"]}
+
+200 {"decision":{"allowed":true,"code":"command.allowed","command":"plugins list","args":["--detail"]}}
+```
+
+`POST /api/commands`：控制台关闭 → 403；不在 allowlist → 403 `command.not_allowed`；通过策略 → `501 host.admin_command.unavailable`（等待 runner）。
 
 ---
 
@@ -254,3 +305,4 @@ read → edit → validate schema → diff → backup → lock → write → rel
 | 日期 | 变更 |
 | --- | --- |
 | 2026-11-18 | 初版：登记 G1–G10，确定 health endpoint 为 Phase 1 数据源，确定 HttpListener 过渡实现 |
+| 2026-11-18 | Phase 2/3 插件侧：配置校验/ETag/diff、命令 allowlist/截断与 validate 端点；写入/执行仍待宿主 |

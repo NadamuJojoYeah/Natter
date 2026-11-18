@@ -134,6 +134,10 @@ natter web status
 natter web status --json
 ```
 
+> 若控制台端口已被正在运行的宿主占用，插件进入 `external` 模式：
+> 不重复绑定端口，只探测 `GET /api/session` 确认对端是本插件，然后保持 `web status` 可用。
+> 日志会输出 `running in external mode`，`server.state=external`。
+
 ---
 
 ## 6. 反向代理
@@ -163,7 +167,31 @@ natter-admin.example.com {
 
 ---
 
-## 7. 安全边界
+## 7. HTTP 端点
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/` `/app.js` `/app.css` | 静态白名单；支持 HEAD |
+| GET | `/api/session` | 登录状态 + CSRF |
+| POST | `/api/session` | 登录（token） |
+| DELETE | `/api/session` | 登出（CSRF） |
+| GET | `/api/snapshot` | 聚合快照（health/plugins/upstreams/profiles/config/audit） |
+| GET | `/api/health` `/api/plugins` `/api/upstreams` `/api/profiles` | 单区块 |
+| GET | `/api/logs` | 宿主日志（缺口）+ 审计 |
+| GET | `/api/audit` | 审计 tail |
+| GET | `/api/config` | 插件配置脱敏预览 |
+| POST | `/api/config/{id}/validate` | 配置文本校验（无写入） |
+| POST | `/api/config/{id}` | 保存：无效 400；有效但宿主 store 缺失 501 |
+| POST | `/api/commands/validate` | 命令 allowlist 判定（无执行） |
+| POST | `/api/commands` | 执行：拒绝 403；宿主 runner 缺失 501 |
+
+`id` 只接受 `profiles` 或 `plugin:<plugin-id>`；所有 POST/DELETE 需要 `X-WebConsole-CSRF`。
+
+配置校验会拒绝明文 secret（`sk-*`、`Bearer`、PEM、`"token":"明文"`），只允许 `${secret:NAME}` 引用；命令策略要求命令精确匹配 `commandAllowlist`，参数 ≤8 个、每个 ≤128 字符。
+
+---
+
+## 8. 安全边界
 
 - 默认只绑定 loopback；
 - token 只从 secret provider 读取，日志/HTML/JSON/审计都不出现明文；
@@ -172,11 +200,13 @@ natter-admin.example.com {
 - 静态资源白名单 + CSP `default-src 'none'`，无任意文件读取；
 - 不执行 shell、不拼命令行、不启动子进程；
 - 审计只记录摘要，不记录 token、secret、prompt/memory 正文或完整命令输出；
-- Phase 2/3 在宿主管理 API 缺失时 501，不提供“临时替代路径”。
+- 审计目录 0700、文件 0600（Unix，best-effort）；只读挂载时 health 的 `audit` 检查变为 `error`；
+- 反向代理下只信任 `trustedProxies` 的 `X-Forwarded-For` / `X-Forwarded-Proto`；后者为 `https` 时会话 cookie 加 `Secure`；
+- Phase 2/3 的校验端点不写文件、不执行命令；真正写入/执行在宿主 API 缺失时 501，不提供“临时替代路径”。
 
 ---
 
-## 8. 故障排查
+## 9. 故障排查
 
 | 现象 | 错误码 | 处理 |
 | --- | --- | --- |
@@ -192,11 +222,13 @@ natter-admin.example.com {
 
 ---
 
-## 9. 已知限制
+## 10. 已知限制
 
 - 无 ASP.NET Core：Phase 1 用 `HttpListener`，不支持 HTTP/2/WebSocket；
 - 无宿主日志读取端口：`/logs` 只展示审计；
 - 无插件明细：`IPluginRuntimeDiagnostics` 未注入插件 provider；
-- 无配置写/命令执行：等待宿主管理 API；
+- 配置编辑只有校验/ETag/diff（`validate` 端点）；保存与备份等待 `IAdminConfigStore`；
+- 命令终端只有 allowlist/策略判定（`validate` 端点）；执行与超时等待 `IAdminCommandRunner`；
+- `external` 模式只做探测，不代理另一个实例的请求；
 - 单 token / 单角色（admin）；viewer 角色与多用户未实现；
 - 会话只存内存，插件重启后需要重新登录。
