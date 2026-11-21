@@ -38,6 +38,18 @@ public sealed record WebConsoleSelf(
 
 public sealed record WebConsoleLogEntry(DateTimeOffset Timestamp, string Level, string Source, string Message);
 
+/// <summary>Phase 2/3 availability as seen by the plugin (host contracts are permission-gated).</summary>
+public sealed record WebConsoleAdminStatus(
+    bool ConfigStoreAvailable,
+    bool ConfigWriteEnabled,
+    string? ConfigGapCode,
+    bool CommandRunnerAvailable,
+    bool CommandEnabled,
+    string? CommandGapCode,
+    IReadOnlyList<string> CommandAllowlist,
+    int CommandTimeoutSeconds,
+    bool LogReaderAvailable);
+
 public sealed record WebConsoleSnapshot(
     DateTimeOffset GeneratedAt,
     WebConsoleSelf Self,
@@ -48,6 +60,7 @@ public sealed record WebConsoleSnapshot(
     WebConsoleSection<IReadOnlyList<WebConsoleProfile>> Profiles,
     WebConsoleSection<IReadOnlyList<WebConsoleLogEntry>> Logs,
     WebConsoleConfigPreview Config,
+    WebConsoleAdminStatus Admin,
     IReadOnlyList<WebConsoleGap> Gaps,
     IReadOnlyList<WebConsoleAuditEntry> Audit);
 
@@ -61,6 +74,7 @@ public sealed class WebConsoleDiagnostics
     private readonly WebConsoleOptions _options;
     private readonly WebConsoleConfigPreview _config;
     private readonly IWebConsoleHostPort _hostPort;
+    private readonly WebConsoleAdminGateway _admin;
     private readonly WebConsoleServerStatusHolder _serverStatus;
     private readonly WebConsoleAuditStore _audit;
     private readonly WebConsoleTokenAuthenticator _tokens;
@@ -73,6 +87,7 @@ public sealed class WebConsoleDiagnostics
         WebConsoleOptions options,
         WebConsoleConfigPreview config,
         IWebConsoleHostPort hostPort,
+        WebConsoleAdminGateway admin,
         WebConsoleServerStatusHolder serverStatus,
         WebConsoleAuditStore audit,
         WebConsoleTokenAuthenticator tokens,
@@ -83,6 +98,7 @@ public sealed class WebConsoleDiagnostics
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _config = config ?? throw new ArgumentNullException(nameof(config));
         _hostPort = hostPort ?? throw new ArgumentNullException(nameof(hostPort));
+        _admin = admin ?? throw new ArgumentNullException(nameof(admin));
         _serverStatus = serverStatus ?? throw new ArgumentNullException(nameof(serverStatus));
         _audit = audit ?? throw new ArgumentNullException(nameof(audit));
         _tokens = tokens ?? throw new ArgumentNullException(nameof(tokens));
@@ -91,7 +107,10 @@ public sealed class WebConsoleDiagnostics
         _startedAt = clock.GetUtcNow();
     }
 
-    public WebConsoleConfigPreview ConfigPreview => _config;
+    /// <summary>Config preview with the live Phase 2 write gap resolved from the admin surface.</summary>
+    public WebConsoleConfigPreview ConfigPreview => _config with { WriteGapCode = BuildAdminStatus().ConfigGapCode };
+
+    public WebConsoleAdminStatus AdminStatus => BuildAdminStatus();
 
     public IReadOnlyList<WebConsoleGap> Gaps => BuildGaps([]);
 
@@ -102,6 +121,10 @@ public sealed class WebConsoleDiagnostics
         var host = await _hostPort.ReadAsync(cancellationToken).ConfigureAwait(false);
         var now = _clock.GetUtcNow();
         var status = _serverStatus.Current;
+        var admin = BuildAdminStatus();
+        var logs = await _admin
+            .ReadLogsAsync(Math.Clamp(auditLimit <= 0 ? 50 : auditLimit, 1, Math.Max(1, _options.MaxLogLines)), cancellationToken)
+            .ConfigureAwait(false);
 
         var auditWritable = _audit.CanWrite(out var auditError);
 
@@ -116,6 +139,9 @@ public sealed class WebConsoleDiagnostics
             new("audit", auditWritable ? "ok" : "error", auditError),
             new("host.health", host.Health.Available ? "ok" : "degraded", host.Health.GapCode ?? host.Health.Reason),
             new("host.plugins", host.Plugins.Available ? "ok" : "degraded", host.Plugins.Data?.Source ?? host.Plugins.GapCode),
+            new("host.admin_config", admin.ConfigStoreAvailable ? "ok" : "degraded", admin.ConfigGapCode ?? "available"),
+            new("host.admin_command", admin.CommandRunnerAvailable ? "ok" : "degraded", admin.CommandGapCode ?? "available"),
+            new("host.logs", logs.Available ? "ok" : "degraded", logs.GapCode ?? $"{logs.Data?.Count ?? 0} entries"),
         };
 
         var overall = checks.Any(check => check.Status == "error")
@@ -154,17 +180,60 @@ public sealed class WebConsoleDiagnostics
             host.Plugins,
             host.Upstreams,
             host.Profiles,
-            WebConsoleSection<IReadOnlyList<WebConsoleLogEntry>>.Unavailable(
-                WebConsoleGaps.HostLogs.Code,
-                WebConsoleGaps.HostLogs.Summary,
-                WebConsoleGaps.HostLogs.Doc),
-            _config,
-            BuildGaps(host.Gaps),
+            logs,
+            ConfigPreview,
+            admin,
+            BuildGaps(host.Gaps, host),
             _audit.Read(auditLimit));
     }
 
-    private static IReadOnlyList<WebConsoleGap> BuildGaps(IReadOnlyList<WebConsoleGap> hostGaps)
-        => WebConsoleGaps.All.Concat(hostGaps).DistinctBy(gap => gap.Code).ToArray();
+    private WebConsoleAdminStatus BuildAdminStatus()
+    {
+        var surface = _admin.Surface;
+        var writeEnabled = !_options.ReadOnly && _options.AllowConfigWrite;
+        var commandEnabled = !_options.ReadOnly && _options.AllowCommandConsole;
+
+        return new WebConsoleAdminStatus(
+            surface.HasConfigStore,
+            writeEnabled,
+            writeEnabled
+                ? (surface.HasConfigStore ? null : WebConsoleGaps.AdminConfig.Code)
+                : "webconsole.write_disabled",
+            surface.HasCommandRunner,
+            commandEnabled,
+            commandEnabled
+                ? (surface.HasCommandRunner ? null : WebConsoleGaps.AdminCommand.Code)
+                : "webconsole.command_disabled",
+            _options.CommandAllowlist,
+            _options.CommandTimeoutSeconds,
+            surface.HasLogReader);
+    }
+
+    /// <summary>
+    /// Gaps are "what the host still cannot do". Once a host contract is bridged the matching gap
+    /// disappears from the console instead of being reported forever.
+    /// </summary>
+    private IReadOnlyList<WebConsoleGap> BuildGaps(
+        IReadOnlyList<WebConsoleGap> hostGaps,
+        WebConsoleHostSnapshot? host = null)
+    {
+        var satisfied = new HashSet<string>(StringComparer.Ordinal);
+
+        if (_admin.Surface.HasConfigStore)
+            satisfied.Add(WebConsoleGaps.AdminConfig.Code);
+        if (_admin.Surface.HasCommandRunner)
+            satisfied.Add(WebConsoleGaps.AdminCommand.Code);
+        if (_admin.Surface.HasLogReader)
+            satisfied.Add(WebConsoleGaps.HostLogs.Code);
+        if (host?.Plugins.Available == true)
+            satisfied.Add(WebConsoleGaps.PluginRuntimeDiagnostics.Code);
+
+        return WebConsoleGaps.All
+            .Concat(hostGaps)
+            .DistinctBy(gap => gap.Code)
+            .Where(gap => !satisfied.Contains(gap.Code))
+            .ToArray();
+    }
 
     public static string Serialize(WebConsoleSnapshot snapshot)
         => JsonSerializer.Serialize(snapshot, WebConsoleJson.Options);

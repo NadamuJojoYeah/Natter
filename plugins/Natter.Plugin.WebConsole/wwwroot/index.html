@@ -64,6 +64,37 @@
         <pre id="config"></pre>
       </article>
       <article class="panel wide">
+        <h2>配置编辑（Phase 2）</h2>
+        <div id="config-editor">
+          <div class="editor-bar">
+            <label for="config-doc">文档</label>
+            <select id="config-doc"></select>
+            <button id="config-load" type="button">加载</button>
+            <button id="config-validate" type="button">校验</button>
+            <button id="config-save" type="button">保存</button>
+          </div>
+          <p id="config-status" class="muted" role="status"></p>
+          <textarea id="config-text" spellcheck="false" rows="12"></textarea>
+          <pre id="config-diff"></pre>
+          <h3>可恢复快照</h3>
+          <div id="config-undo"></div>
+        </div>
+      </article>
+      <article class="panel wide">
+        <h2>受限命令（Phase 3）</h2>
+        <div id="command-console">
+          <div class="editor-bar">
+            <label for="command-name">命令</label>
+            <input id="command-name" type="text" autocomplete="off" placeholder="health">
+            <label for="command-args">参数</label>
+            <input id="command-args" type="text" autocomplete="off" placeholder="--json">
+            <button id="command-run" type="button">运行</button>
+          </div>
+          <p id="command-status" class="muted" role="status"></p>
+          <pre id="command-output"></pre>
+        </div>
+      </article>
+      <article class="panel wide">
         <h2>审计</h2>
         <div id="audit"></div>
       </article>

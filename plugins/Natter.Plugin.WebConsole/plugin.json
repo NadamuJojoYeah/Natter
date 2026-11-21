@@ -16,7 +16,10 @@
   "permissions": [
     "network",
     "secrets:WEBCONSOLE_TOKEN",
-    "cli.commands"
+    "cli.commands",
+    "admin.read",
+    "admin.config.write",
+    "admin.command.execute"
   ],
   "secrets": [
     { "name": "WEBCONSOLE_TOKEN", "required": true }
@@ -26,5 +29,5 @@
     { "type": "cli.command", "id": "web.status" }
   ],
   "platforms": ["windows", "linux", "macos"],
-  "capabilities": ["admin:diagnostics", "cli:web.status"]
+  "capabilities": ["admin:diagnostics", "admin:config", "admin:commands", "cli:web.status"]
 }

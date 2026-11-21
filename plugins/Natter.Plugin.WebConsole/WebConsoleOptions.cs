@@ -24,6 +24,9 @@ public sealed class WebConsoleOptions
 
     public IReadOnlyList<string> CommandAllowlist { get; init; } = [];
 
+    /// <summary>Plugin-side budget for one command; the host runner enforces its own timeout too.</summary>
+    public int CommandTimeoutSeconds { get; init; } = WebConsoleDefaults.CommandTimeoutSeconds;
+
     public int SessionMinutes { get; init; } = WebConsoleDefaults.SessionMinutes;
 
     public int MaxLogLines { get; init; } = WebConsoleDefaults.MaxLogLines;
@@ -45,6 +48,7 @@ public static class WebConsoleDefaults
     public const int MaxLoginBodyBytes = 4 * 1024;
     public const int MaxAdminBodyBytes = 256 * 1024 + 4 * 1024;
     public const int MaxCommandBodyBytes = 8 * 1024;
+    public const int CommandTimeoutSeconds = 10;
     public const int MinTokenLength = 24;
     public const string SessionCookieName = "natter_webconsole";
     public const string CsrfHeaderName = "X-WebConsole-CSRF";
@@ -159,6 +163,14 @@ public static class WebConsoleOptionsValidator
                     "webconsole.trusted-proxy-invalid",
                     $"trustedProxies entry '{proxy}' is not an IP address or CIDR."));
             }
+        }
+
+        if (options.CommandTimeoutSeconds is < 1 or > 10)
+        {
+            issues.Add(new WebConsoleOptionIssue(
+                "/commandTimeoutSeconds",
+                "webconsole.command-timeout-invalid",
+                "commandTimeoutSeconds must be between 1 and 10 so the console can answer before the HTTP timeout."));
         }
 
         if (options.AllowConfigWrite && options.ReadOnly)

@@ -31,6 +31,7 @@ public sealed class WebConsoleRequestHandler
     private readonly WebConsoleLoginThrottle _throttle;
     private readonly WebConsoleOriginPolicy _origins;
     private readonly WebConsoleDiagnostics _diagnostics;
+    private readonly WebConsoleAdminGateway _admin;
     private readonly WebConsoleAuditStore _audit;
     private readonly WebConsoleStaticAssets _assets;
     private readonly TimeProvider _clock;
@@ -43,6 +44,7 @@ public sealed class WebConsoleRequestHandler
         WebConsoleLoginThrottle throttle,
         WebConsoleOriginPolicy origins,
         WebConsoleDiagnostics diagnostics,
+        WebConsoleAdminGateway admin,
         WebConsoleAuditStore audit,
         WebConsoleStaticAssets assets,
         TimeProvider clock,
@@ -54,6 +56,7 @@ public sealed class WebConsoleRequestHandler
         _throttle = throttle ?? throw new ArgumentNullException(nameof(throttle));
         _origins = origins ?? throw new ArgumentNullException(nameof(origins));
         _diagnostics = diagnostics ?? throw new ArgumentNullException(nameof(diagnostics));
+        _admin = admin ?? throw new ArgumentNullException(nameof(admin));
         _audit = audit ?? throw new ArgumentNullException(nameof(audit));
         _assets = assets ?? throw new ArgumentNullException(nameof(assets));
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
@@ -186,19 +189,63 @@ public sealed class WebConsoleRequestHandler
             }
 
             case "config":
+            {
                 RequireMethod(request, "GET");
                 Audit(request, "config.view", "ok", startedAt);
-                return WebConsoleHttpResponse.Json(200, _diagnostics.ConfigPreview);
+
+                var preview = _diagnostics.ConfigPreview;
+                var admin = _diagnostics.AdminStatus;
+                var documents = await _admin.ListDocumentsAsync(cancellationToken).ConfigureAwait(false);
+
+                return WebConsoleHttpResponse.Json(200, new
+                {
+                    preview.Source,
+                    preview.SchemaPath,
+                    preview.WriteEnabled,
+                    preview.WriteGapCode,
+                    preview.Values,
+                    preview.Redacted,
+                    admin = new
+                    {
+                        configStoreAvailable = admin.ConfigStoreAvailable,
+                        commandRunnerAvailable = admin.CommandRunnerAvailable,
+                        logReaderAvailable = admin.LogReaderAvailable,
+                    },
+                    documents,
+                });
+            }
+
+            case "admin":
+            {
+                RequireMethod(request, "GET");
+                Audit(request, "admin.status", "ok", startedAt);
+                return WebConsoleHttpResponse.Json(200, _diagnostics.AdminStatus);
+            }
+
+            case "admin/documents":
+            {
+                RequireMethod(request, "GET");
+                if (!_admin.Surface.HasConfigStore)
+                {
+                    Audit(request, "config.documents", "unavailable", startedAt);
+                    return Failure(WebConsoleAdminFailures.ConfigUnavailable);
+                }
+
+                var documents = await _admin.ListDocumentsAsync(cancellationToken).ConfigureAwait(false);
+                Audit(request, "config.documents", "ok", startedAt, $"count={documents.Count}");
+                return WebConsoleHttpResponse.Json(200, new { documents });
+            }
 
             case "commands":
-                return HandleCommands(request, startedAt);
+                return await HandleCommandsAsync(request, startedAt, cancellationToken).ConfigureAwait(false);
 
             case "commands/validate":
                 return HandleCommandValidate(request, startedAt);
         }
 
         if (route.StartsWith("config/", StringComparison.Ordinal))
-            return HandleConfigRoute(request, route["config/".Length..], startedAt);
+            return await HandleConfigRouteAsync(request, route["config/".Length..], startedAt, cancellationToken)
+                .ConfigureAwait(false);
 
         return Error(404, "route.not_found", "Route not found.");
     }
@@ -350,48 +397,120 @@ public sealed class WebConsoleRequestHandler
         return WebConsoleHttpResponse.Json(200, selector(snapshot));
     }
 
-    private WebConsoleHttpResponse HandleConfigRoute(
+    private async ValueTask<WebConsoleHttpResponse> HandleConfigRouteAsync(
         WebConsoleHttpRequest request,
         string remainder,
-        DateTimeOffset startedAt)
+        DateTimeOffset startedAt,
+        CancellationToken cancellationToken)
     {
+        // Only known sub-resources are split off; anything else stays part of the id so a
+        // path-like id is rejected by the whitelist (400) instead of looking like a missing route.
         var slash = remainder.LastIndexOf('/');
-        if (slash > 0 && string.Equals(remainder[(slash + 1)..], "validate", StringComparison.Ordinal))
-            return HandleConfigValidate(request, remainder[..slash], startedAt);
+        var last = slash > 0 ? remainder[(slash + 1)..] : null;
+        var verb = last is "validate" or "undo" or "rollback" ? last : null;
+        var documentId = verb is null ? remainder : remainder[..slash];
 
-        return HandleConfigWrite(request, remainder, startedAt);
+        if (string.Equals(verb, "validate", StringComparison.Ordinal))
+            return await HandleConfigValidateAsync(request, documentId, startedAt, cancellationToken)
+                .ConfigureAwait(false);
+
+        if (string.Equals(verb, "undo", StringComparison.Ordinal))
+        {
+            RequireMethod(request, "GET");
+            return HandleConfigUndoList(request, documentId, startedAt);
+        }
+
+        if (string.Equals(verb, "rollback", StringComparison.Ordinal))
+            return await HandleConfigRollbackAsync(request, documentId, startedAt, cancellationToken)
+                .ConfigureAwait(false);
+
+        return request.Method switch
+        {
+            "GET" => await HandleConfigReadAsync(request, documentId, startedAt, cancellationToken).ConfigureAwait(false),
+            "POST" => await HandleConfigSaveAsync(request, documentId, startedAt, cancellationToken).ConfigureAwait(false),
+            _ => Error(405, "method.not_allowed", "Method not allowed."),
+        };
     }
 
-    private WebConsoleHttpResponse HandleConfigValidate(
+    private async ValueTask<WebConsoleHttpResponse> HandleConfigReadAsync(
+        WebConsoleHttpRequest request,
+        string documentId,
+        DateTimeOffset startedAt,
+        CancellationToken cancellationToken)
+    {
+        if (!WebConsoleConfigEditPolicy.IsAllowedId(documentId))
+            return Error(400, "config.id_invalid", "Config id must be 'profiles' or 'plugin:<plugin-id>'.");
+
+        if (!_admin.Surface.HasConfigStore)
+        {
+            Audit(request, "config.read", "unavailable", startedAt, documentId);
+            return Failure(WebConsoleAdminFailures.ConfigUnavailable);
+        }
+
+        var result = await _admin.ReadAsync(documentId, cancellationToken).ConfigureAwait(false);
+        if (!result.Ok)
+        {
+            Audit(request, "config.read", "denied", startedAt, documentId);
+            return Failure(result.Failure!);
+        }
+
+        Audit(request, "config.read", "ok", startedAt, documentId);
+        return WebConsoleHttpResponse.Json(200, result.Value!);
+    }
+
+    private WebConsoleHttpResponse HandleConfigUndoList(
         WebConsoleHttpRequest request,
         string documentId,
         DateTimeOffset startedAt)
+    {
+        if (!WebConsoleConfigEditPolicy.IsAllowedId(documentId))
+            return Error(400, "config.id_invalid", "Config id must be 'profiles' or 'plugin:<plugin-id>'.");
+
+        var entries = _admin.ListUndo(documentId);
+        Audit(request, "config.undo.list", "ok", startedAt, $"{documentId} count={entries.Count}");
+        return WebConsoleHttpResponse.Json(200, new { id = documentId, entries });
+    }
+
+    private async ValueTask<WebConsoleHttpResponse> HandleConfigRollbackAsync(
+        WebConsoleHttpRequest request,
+        string documentId,
+        DateTimeOffset startedAt,
+        CancellationToken cancellationToken)
     {
         RequireMethod(request, "POST");
 
         if (!WebConsoleConfigEditPolicy.IsAllowedId(documentId))
             return Error(400, "config.id_invalid", "Config id must be 'profiles' or 'plugin:<plugin-id>'.");
 
+        if (_options.ReadOnly || !_options.AllowConfigWrite)
+        {
+            Audit(request, "config.rollback", "denied", startedAt, documentId);
+            return Error(403, "config.write_disabled", "Config writing is disabled by plugin configuration.");
+        }
+
         if (BodyTooLarge(request, WebConsoleDefaults.MaxAdminBodyBytes))
             return Error(413, "config.request_too_large", "Config body is too large.");
 
-        if (!TryParseConfigEditBody(request.Body, out var content, out _, out var parseError))
-            return Error(400, "config.invalid_request", parseError ?? "Config body must be JSON with a content field.");
+        if (!TryParseRollbackBody(request.Body, out var etag, out var undoId, out var parseError))
+            return Error(400, "config.invalid_request", parseError ?? "Rollback body must be JSON with an optional etag.");
 
-        var validation = WebConsoleConfigEditPolicy.Validate(documentId, content);
-        Audit(request, "config.validate", validation.Valid ? "ok" : "invalid", startedAt, documentId);
+        var result = await _admin.RollbackAsync(documentId, etag, undoId, cancellationToken).ConfigureAwait(false);
+        if (!result.Ok)
+        {
+            Audit(request, "config.rollback", result.Failure!.StatusCode == 501 ? "unavailable" : "denied", startedAt, documentId);
+            return Failure(result.Failure);
+        }
 
-        return WebConsoleHttpResponse.Json(200, new { id = documentId, validation });
+        Audit(request, "config.rollback", "ok", startedAt, documentId);
+        return WebConsoleHttpResponse.Json(200, new { id = documentId, saved = result.Value! });
     }
 
-    private WebConsoleHttpResponse HandleConfigWrite(
+    private async ValueTask<WebConsoleHttpResponse> HandleConfigSaveAsync(
         WebConsoleHttpRequest request,
         string documentId,
-        DateTimeOffset startedAt)
+        DateTimeOffset startedAt,
+        CancellationToken cancellationToken)
     {
-        if (!string.Equals(request.Method, "POST", StringComparison.Ordinal))
-            return Error(405, "method.not_allowed", "Method not allowed.");
-
         if (!WebConsoleConfigEditPolicy.IsAllowedId(documentId))
             return Error(400, "config.id_invalid", "Config id must be 'profiles' or 'plugin:<plugin-id>'.");
 
@@ -407,6 +526,7 @@ public sealed class WebConsoleRequestHandler
         if (!TryParseConfigEditBody(request.Body, out var content, out var etag, out var parseError))
             return Error(400, "config.invalid_request", parseError ?? "Config body must be JSON with a content field.");
 
+        // Plugin-side policy runs first so the documented 400 contract holds even without a host store.
         var validation = WebConsoleConfigEditPolicy.Validate(documentId, content);
         if (!validation.Valid)
         {
@@ -425,16 +545,165 @@ public sealed class WebConsoleRequestHandler
             });
         }
 
-        Audit(request, "config.write", "unavailable", startedAt, documentId);
-        return Error(
-            501,
-            WebConsoleGaps.AdminConfig.Code,
-            WebConsoleGaps.AdminConfig.Summary,
-            WebConsoleGaps.AdminConfig.Doc);
+        if (!_admin.Surface.HasConfigStore)
+        {
+            Audit(request, "config.write", "unavailable", startedAt, documentId);
+            return Failure(WebConsoleAdminFailures.ConfigUnavailable);
+        }
+
+        var result = await _admin.SaveAsync(documentId, content, etag, cancellationToken).ConfigureAwait(false);
+        if (!result.Ok)
+        {
+            Audit(
+                request,
+                "config.write",
+                result.Failure!.StatusCode == 501 ? "unavailable" : "denied",
+                startedAt,
+                documentId);
+            return Failure(result.Failure);
+        }
+
+        Audit(request, "config.write", "ok", startedAt, documentId);
+        return WebConsoleHttpResponse.Json(200, result.Value!);
     }
 
-    private WebConsoleHttpResponse HandleCommands(WebConsoleHttpRequest request, DateTimeOffset startedAt)
+    private static bool TryParseRollbackBody(string body, out string? etag, out string? undoId, out string? error)
     {
+        etag = null;
+        undoId = null;
+        error = null;
+
+        if (string.IsNullOrWhiteSpace(body))
+            return true;
+
+        try
+        {
+            using var document = JsonDocument.Parse(body);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+            {
+                error = "Rollback body must be a JSON object.";
+                return false;
+            }
+
+            if (root.TryGetProperty("etag", out var etagElement))
+            {
+                if (etagElement.ValueKind is not (JsonValueKind.String or JsonValueKind.Null))
+                {
+                    error = "etag must be a string or null.";
+                    return false;
+                }
+
+                etag = etagElement.GetString();
+            }
+
+            if (root.TryGetProperty("undoId", out var undoElement))
+            {
+                if (undoElement.ValueKind is not (JsonValueKind.String or JsonValueKind.Null))
+                {
+                    error = "undoId must be a string or null.";
+                    return false;
+                }
+
+                undoId = undoElement.GetString();
+            }
+
+            return true;
+        }
+        catch (JsonException exception)
+        {
+            error = $"Rollback body is not valid JSON: {exception.Message}";
+            return false;
+        }
+    }
+
+    private async ValueTask<WebConsoleHttpResponse> HandleConfigValidateAsync(
+        WebConsoleHttpRequest request,
+        string documentId,
+        DateTimeOffset startedAt,
+        CancellationToken cancellationToken)
+    {
+        RequireMethod(request, "POST");
+
+        if (!WebConsoleConfigEditPolicy.IsAllowedId(documentId))
+            return Error(400, "config.id_invalid", "Config id must be 'profiles' or 'plugin:<plugin-id>'.");
+
+        if (BodyTooLarge(request, WebConsoleDefaults.MaxAdminBodyBytes))
+            return Error(413, "config.request_too_large", "Config body is too large.");
+
+        if (!TryParseConfigEditBody(request.Body, out var content, out _, out var parseError))
+            return Error(400, "config.invalid_request", parseError ?? "Config body must be JSON with a content field.");
+
+        // Host validation adds schema checks, the bounded diff against the stored document and the
+        // reload/restart hint. Without a store the plugin policy still answers (Phase 1 contract).
+        if (_admin.Surface.HasConfigStore)
+        {
+            var hostResult = await _admin.ValidateAsync(documentId, content, cancellationToken).ConfigureAwait(false);
+            if (hostResult.Ok && hostResult.Value is { } host)
+            {
+                Audit(request, "config.validate", host.Valid ? "ok" : "invalid", startedAt, documentId);
+                return WebConsoleHttpResponse.Json(200, new
+                {
+                    id = documentId,
+                    validation = new
+                    {
+                        host.Valid,
+                        host.ETag,
+                        host.SizeBytes,
+                        host.ContainsSecretLiteral,
+                        host.Issues,
+                        host.Code,
+                        host.Source,
+                        host.ReloadHint,
+                        host.RestartRequired,
+                        host.Diff,
+                    },
+                });
+            }
+        }
+
+        var validation = WebConsoleConfigEditPolicy.Validate(documentId, content);
+        Audit(request, "config.validate", validation.Valid ? "ok" : "invalid", startedAt, documentId);
+
+        return WebConsoleHttpResponse.Json(200, new
+        {
+            id = documentId,
+            validation = new
+            {
+                validation.Valid,
+                validation.ETag,
+                validation.SizeBytes,
+                validation.ContainsSecretLiteral,
+                validation.Issues,
+                Code = validation.Valid ? "config.valid" : "config.invalid",
+                Source = "plugin",
+                ReloadHint = "none",
+                RestartRequired = false,
+                Diff = (object?)null,
+            },
+        });
+    }
+
+    private async ValueTask<WebConsoleHttpResponse> HandleCommandsAsync(
+        WebConsoleHttpRequest request,
+        DateTimeOffset startedAt,
+        CancellationToken cancellationToken)
+    {
+        if (string.Equals(request.Method, "GET", StringComparison.Ordinal))
+        {
+            var status = _diagnostics.AdminStatus;
+            Audit(request, "command.status", "ok", startedAt);
+            return WebConsoleHttpResponse.Json(200, new
+            {
+                enabled = status.CommandEnabled,
+                readOnly = _options.ReadOnly,
+                runnerAvailable = status.CommandRunnerAvailable,
+                gapCode = status.CommandGapCode,
+                allowlist = status.CommandAllowlist,
+                timeoutSeconds = status.CommandTimeoutSeconds,
+            });
+        }
+
         if (!string.Equals(request.Method, "POST", StringComparison.Ordinal))
             return Error(405, "method.not_allowed", "Method not allowed.");
 
@@ -457,12 +726,32 @@ public sealed class WebConsoleRequestHandler
             return Error(403, decision.Code, decision.Message);
         }
 
-        Audit(request, "command.run", "unavailable", startedAt, decision.Command);
-        return Error(
-            501,
-            WebConsoleGaps.AdminCommand.Code,
-            WebConsoleGaps.AdminCommand.Summary,
-            WebConsoleGaps.AdminCommand.Doc);
+        if (!_admin.Surface.HasCommandRunner)
+        {
+            Audit(request, "command.run", "unavailable", startedAt, decision.Command);
+            return Failure(WebConsoleAdminFailures.CommandUnavailable);
+        }
+
+        var result = await _admin
+            .RunAsync(decision.Command, decision.Args, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (result.Value is { } output)
+        {
+            var outcome = result.Ok
+                ? (output.ExitCode == 0 ? "ok" : "failed")
+                : output.TimedOut ? "timeout" : "denied";
+            Audit(request, "command.run", outcome, startedAt, decision.Command);
+        }
+        else
+        {
+            Audit(request, "command.run", "error", startedAt, decision.Command);
+        }
+
+        if (!result.Ok)
+            return Failure(result.Failure!, result.Value);
+
+        return WebConsoleHttpResponse.Json(200, result.Value!);
     }
 
     private WebConsoleHttpResponse HandleCommandValidate(WebConsoleHttpRequest request, DateTimeOffset startedAt)
@@ -645,6 +934,20 @@ public sealed class WebConsoleRequestHandler
                 message,
                 doc = doc ?? WebConsoleDefaults.DefaultDocumentationFile,
             },
+        });
+
+    /// <summary>Maps a gateway failure to the documented error envelope, keeping any partial result.</summary>
+    private static WebConsoleHttpResponse Failure(WebConsoleAdminFailure failure, object? result = null)
+        => WebConsoleHttpResponse.Json(failure.StatusCode, new
+        {
+            error = new
+            {
+                code = failure.Code,
+                message = failure.Message,
+                doc = failure.Documentation,
+            },
+            detail = failure.Detail,
+            result,
         });
 
     private static string RoleName(WebConsoleRole role)

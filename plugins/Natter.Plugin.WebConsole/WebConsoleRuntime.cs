@@ -42,6 +42,9 @@ public sealed class WebConsoleRuntime : IAsyncDisposable
 
     public bool TokenConfigured { get; private set; }
 
+    /// <summary>Host admin contracts resolved at activation; empty when no <c>admin.*</c> permission.</summary>
+    public WebConsoleAdminSurface AdminSurface { get; private set; } = WebConsoleAdminSurface.Empty;
+
     public string? AuditPath => _audit?.FilePath;
 
     public async Task StartAsync(IPluginSecrets secrets, IServiceProvider provider, CancellationToken cancellationToken = default)
@@ -81,11 +84,14 @@ public sealed class WebConsoleRuntime : IAsyncDisposable
 
         _sessions = new WebConsoleSessionStore(_clock);
         var origins = new WebConsoleOriginPolicy(_options.PublicBaseUrl, _options.Port);
+        var surface = WebConsoleAdminSurface.FromServices(provider);
+        var admin = new WebConsoleAdminGateway(surface, _options, _clock);
         var diagnostics = new WebConsoleDiagnostics(
             _identity,
             _options,
             _config,
             hostPort,
+            admin,
             _status,
             _audit,
             authenticator,
@@ -99,10 +105,13 @@ public sealed class WebConsoleRuntime : IAsyncDisposable
             new WebConsoleLoginThrottle(_clock),
             origins,
             diagnostics,
+            admin,
             _audit,
             assets,
             _clock,
             _log);
+
+        AdminSurface = surface;
 
         _server = new WebConsoleServer(_options, handler, _status, _log);
 
@@ -202,6 +211,12 @@ public sealed class WebConsoleRuntime : IAsyncDisposable
             },
             tokenConfigured = TokenConfigured,
             hostHealthUrl = _options.HostHealthUrl,
+            admin = new
+            {
+                configStore = AdminSurface.DescribeConfig(),
+                commandRunner = AdminSurface.DescribeCommand(),
+                logReader = AdminSurface.HasLogReader ? "available" : WebConsoleGaps.HostLogs.Code,
+            },
             config = new
             {
                 bind = _options.Bind,
@@ -213,7 +228,7 @@ public sealed class WebConsoleRuntime : IAsyncDisposable
                 maxLogLines = _options.MaxLogLines,
             },
             auditPath = AuditPath,
-            gaps = WebConsoleGaps.All.Select(gap => new { code = gap.Code, area = gap.Area, doc = gap.Doc }),
+            gaps = ActiveGaps().Select(gap => new { code = gap.Code, area = gap.Area, doc = gap.Doc }),
         };
 
         if (json)
@@ -230,10 +245,26 @@ public sealed class WebConsoleRuntime : IAsyncDisposable
 
         lines.Add($"token: {(TokenConfigured ? "configured" : "missing")}");
         lines.Add($"health: {_options.HostHealthUrl}");
+        lines.Add($"admin: config={AdminSurface.DescribeConfig()} command={AdminSurface.DescribeCommand()}"
+                  + $" logs={(AdminSurface.HasLogReader ? "available" : WebConsoleGaps.HostLogs.Code)}");
         lines.Add($"audit: {AuditPath}");
-        lines.Add($"gaps: {string.Join(", ", WebConsoleGaps.All.Select(gap => gap.Code))}");
+        lines.Add($"gaps: {string.Join(", ", ActiveGaps().Select(gap => gap.Code))}");
 
         return string.Join(Environment.NewLine, lines);
+    }
+
+    /// <summary>Gaps that still apply to this deployment (bridged contracts are not reported).</summary>
+    public IReadOnlyList<WebConsoleGap> ActiveGaps()
+    {
+        var satisfied = new HashSet<string>(StringComparer.Ordinal);
+        if (AdminSurface.HasConfigStore)
+            satisfied.Add(WebConsoleGaps.AdminConfig.Code);
+        if (AdminSurface.HasCommandRunner)
+            satisfied.Add(WebConsoleGaps.AdminCommand.Code);
+        if (AdminSurface.HasLogReader)
+            satisfied.Add(WebConsoleGaps.HostLogs.Code);
+
+        return WebConsoleGaps.All.Where(gap => !satisfied.Contains(gap.Code)).ToArray();
     }
 
     public static string ResolveStaticRoot(string pluginDirectory)

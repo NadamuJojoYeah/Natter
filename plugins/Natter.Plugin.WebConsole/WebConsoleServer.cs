@@ -293,10 +293,23 @@ public sealed class WebConsoleServer : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Route-aware request body budget. Config documents are validated against a 256 KiB contract,
+    /// so the admin config routes need a larger transport cap than the rest of the API.
+    /// </summary>
+    public static int ResolveBodyLimit(string path)
+        => path.StartsWith("/api/config/", StringComparison.Ordinal)
+            ? WebConsoleDefaults.MaxAdminBodyBytes
+            : WebConsoleDefaults.MaxRequestBodyBytes;
+
     private static async Task<WebConsoleHttpRequest> BuildRequestAsync(HttpListenerContext context, CancellationToken cancellationToken)
     {
         var request = context.Request;
         var body = string.Empty;
+        var limit = ResolveBodyLimit(request.Url?.AbsolutePath ?? "/");
+        var reason = limit == WebConsoleDefaults.MaxAdminBodyBytes
+            ? $"{WebConsoleDefaults.MaxAdminBodyBytes / 1024} KiB"
+            : $"{limit / 1024} KiB";
 
         if (request.HasEntityBody)
         {
@@ -306,8 +319,8 @@ public sealed class WebConsoleServer : IAsyncDisposable
 
             while ((read = await request.InputStream.ReadAsync(chunk, cancellationToken).ConfigureAwait(false)) > 0)
             {
-                if (buffer.Length + read > WebConsoleDefaults.MaxRequestBodyBytes)
-                    throw new WebConsoleStartupException("webconsole.request-too-large", "Request body exceeds 64 KiB.");
+                if (buffer.Length + read > limit)
+                    throw new WebConsoleStartupException("webconsole.request-too-large", $"Request body exceeds {reason}.");
 
                 buffer.Write(chunk, 0, read);
             }
