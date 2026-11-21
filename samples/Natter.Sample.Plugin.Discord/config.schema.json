@@ -46,7 +46,11 @@
         "remember": { "type": "boolean" },
         "forget": { "type": "boolean" },
         "memory": { "type": "boolean" },
-        "reset": { "type": "boolean" }
+        "reset": { "type": "boolean" },
+        "task": { "type": "boolean" },
+        "status": { "type": "boolean" },
+        "tasks": { "type": "boolean" },
+        "cancel": { "type": "boolean" }
       }
     },
     "interactionTtlSeconds": { "type": "integer", "minimum": 1, "maximum": 900 },

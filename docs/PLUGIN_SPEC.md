@@ -6,6 +6,8 @@
 > **参考对象**：DSH 的插件图 / 配置 schema / 版本约束 / HMR 与插件管理；RimWorld 的 packageId / 依赖声明 / `loadAfter` / `loadBefore` / 版本兼容。  
 > **相关文档**：[NLMP 轻量消息协议](NLMP.md)、[当前插件开发指南](PLUGINS.md)、[架构设计](ARCHITECTURE.md)
 >
+> **WebConsole 插件**：设计见 [WebConsole Plugin Design](WEBCONSOLE_PLUGIN_DESIGN.md)。
+>
 > **实现说明**：Phase 1 已在 `Natter.Plugin.Abstractions` + `Natter.Infrastructure/Plugins/Nps` 中交付，示例插件已迁移到 NPS v1；Discord transport Phase 2 核心已交付；AI feature、插件市场与 out-of-process 宿主仍属路线图，见 §16 与 §18。
 
 ---

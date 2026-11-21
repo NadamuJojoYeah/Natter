@@ -12,7 +12,9 @@ public sealed class ServeCommand(
     IRuntimeProfileStore profiles,
     IChatResponderRegistry responders,
     IConversationStore conversations,
-    IPluginCatalog plugins) : ICliCommandHandler
+    IPluginCatalog plugins,
+    HostRuntimeClock clock,
+    TaskMetrics taskMetrics) : ICliCommandHandler
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -109,7 +111,9 @@ public sealed class ServeCommand(
             profiles,
             responders,
             conversations,
-            plugins).ConfigureAwait(false));
+            plugins,
+            clock,
+            taskMetrics).ConfigureAwait(false));
     }
 }
 
@@ -119,7 +123,9 @@ public sealed class HealthCommand(
     IRuntimeProfileStore profiles,
     IChatResponderRegistry responders,
     IConversationStore conversations,
-    IPluginCatalog plugins) : ICliCommandHandler
+    IPluginCatalog plugins,
+    HostRuntimeClock clock,
+    TaskMetrics taskMetrics) : ICliCommandHandler
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -135,7 +141,11 @@ public sealed class HealthCommand(
             responders,
             conversations,
             plugins,
+            clock,
+            taskMetrics,
             cancellationToken).ConfigureAwait(false);
+        if (invocation.HasFlag("offline"))
+            snapshot = snapshot with { Status = "offline" };
 
         if (invocation.HasFlag("json"))
         {
@@ -144,9 +154,14 @@ public sealed class HealthCommand(
         }
 
         invocation.Console.Out.WriteLine($"status: {snapshot.Status}");
+        if (invocation.HasFlag("offline"))
+            invocation.Console.Out.WriteLine("mode: offline (upstreams not started)");
         invocation.Console.Out.WriteLine($"uptimeSeconds: {snapshot.UptimeSeconds}");
+        invocation.Console.Out.WriteLine($"startedAt: {snapshot.StartedAt:O}");
+        invocation.Console.Out.WriteLine($"sampledAt: {snapshot.SampledAt:O}");
         invocation.Console.Out.WriteLine($"profiles: {snapshot.Profiles}");
         invocation.Console.Out.WriteLine($"conversations: {snapshot.Conversations}");
+        invocation.Console.Out.WriteLine($"activeTasks: {snapshot.Tasks.Active}");
         foreach (var upstream in snapshot.Upstreams)
             invocation.Console.Out.WriteLine($"upstream {upstream.Source} connected={upstream.Connected}");
         foreach (var provider in snapshot.Providers)

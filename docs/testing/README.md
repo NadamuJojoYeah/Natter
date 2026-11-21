@@ -68,10 +68,26 @@
 | 2026-11-15 | [P3 Context & Memory 验收（归档）](archive/2026-11-15-p3-acceptance.md) | prompt/context/memory、SQLite memory、remember/forget、真实召回 | **Closed · Go**：1 High + 2 Medium 修复复测；232/232；真实召回/删除/重启通过 |
 | 2026-11-15 | [P3 验收处置记录（归档）](archive/2026-11-15-p3-acceptance-response.md) | 共享删除、host contribution、export CLI、DM private、prompt injection、summary 更新 | **Closed · Go**（Archived） |
 | 2026-11-15 | [P4 Tier 1 产品化验收](2026-11-15-p4-acceptance.md) | 命令 UX、memory.store、备份/恢复、真实多轮、单实例 | **Go**：命令 5/5 真实通过、Tier2 smoke、239/239；24h soak 未执行 |
+| 2026-11-17 | [P4.5 修复验证](2026-11-17-p4-5-test-report.md) | 代理、health offline/时间戳、Tier1 诊断、P4 回归 | **环境受限**：245/245、代理单测 5/5、health 通过；Discord 网络阻断，真实链路未完成；1 Medium（DingTalk 时间戳） |
+| 2026-11-17 | [P4.5 联合处置记录](2026-11-17-p4-5-joint-response.md) | 测试/运维结果冲突、代理 gateway、DingTalk 时间戳、OBS-009~014 | **Conditional No-Go**：代理 WS 结果冲突待复现；DingTalk 时间戳/诊断/退出延迟待修 |
+| 2026-11-17 | [P4.5 联合复测计划](2026-11-17-p4-5-retest-plan.md) | 代理 90s 受控复现、duration、DingTalk health、sendFailures、systemd/Docker/24h | 复测后 Go/No-Go |
+| 2026-11-17 | [P4.5 复测报告（测试）](2026-11-17-p4-5-retest-report.md) | 代理 gateway、duration、DingTalk health、Tier1/offline | **Conditional Pass**：代理/duration/DingTalk connected 通过；P4 真人回归待补 |
+| 2026-11-17 | [P4.5 复测处置记录](2026-11-17-p4-5-retest-response.md) | phase/lastError/canceled/sendFailures 稳定性、P4 回归、运维收口 | **Conditional Pass**：代理冲突关闭；真人回归/运维项待完成 |
 | 2026-11-15 | [P4 验收处置记录](2026-11-15-p4-acceptance-response.md) | Schema、profile store、fail-closed、单实例、clipped 输出 | 待修复：1 High + 2 Medium + 2 观测 |
+| 2026-11-16 | [首次部署测试（Tier 1）](2026-11-16-first-deployment-test.md) | `OPERATIONS_RUNBOOK.md` §1–§11：发布、配置/secret、health、单实例、备份/恢复、优雅停止、采样、T+13h 巡检 | **通过（有条件）**：18 用例 17 通过；2 个代理阻塞缺陷 + 5 个观测 + 2 个环境限制；T+13h 断连经重启恢复 |
+| 2026-11-17 | [首次部署处置记录](2026-11-16-first-ops-deploy-response.md) | 代理/超时、health 语义、CLI 巡检、静默断连、uptime、systemd/soak | 待修复：2 阻塞 + 5 OBS + 2 环境项 |
+| 2026-11-18 | [WebConsole Phase 1 实现与验证](2026-11-18-webconsole-p1.md) | 插件加载/认证/health 桥接/审计/UI/staging | **通过**：68/68 单测、真实宿主与 HTTP 矩阵通过；G1–G9 显式降级；1 BUG 已修复 |
+| 2026-11-18 | [WebConsole Phase 2/3 就绪与硬化](2026-11-18-webconsole-p2-ready.md) | 配置校验/ETag/diff、命令 allowlist/截断、审计权限、HEAD/转发协议、external 模式、CI/E2E | **通过**：123/123（Debug+Release）、真实宿主矩阵、`webconsole-e2e.sh` PASS；写/执行仍待 G5/G6 |
+| 2026-11-18 | [P5 验收报告](2026-11-18-p5-acceptance-report.md) | /task 主链路、组件、工具契约、health、安全矩阵 | **Go（scope：/task）**：264/264；真实 `/task` 通过；`/status`/`/cancel` 待补 |
+| 2026-11-18 | [WebConsole 测试报告](2026-11-18-webconsole-test-report.md) | 认证/CSRF/静态/CSP/snapshot/配置校验/命令策略 | **Phase 1 Go**；Phase 2/3 仍 501；3 Medium 已关闭 |
+| 2026-11-21 | [P5 + WebConsole 修复复测](2026-11-18-p5-webconsole-retest.md) | schema、router wiring、真实 `/task`、WebConsole 3 Medium | **P5 Go（/task）**；**WebConsole Phase 1 Go**；Phase 2/3 仍 501 |
 
 ## 5. 相关文档
 
+- [P5 + WebConsole 联合处置记录](2026-11-18-p5-webconsole-response.md)：P5 schema 阻塞、WebConsole 3 Medium 与复测闸门
+- [P5 Agent Task Runtime 验收测试计划](2026-11-18-p5-acceptance.md)：/task、租约、取消、重启恢复、工具 allowlist、健康指标
+- [WebConsole 插件验收测试计划](2026-11-18-webconsole-acceptance.md)：Phase 1 只读控制台、Phase 2/3 策略与 501 降级、认证/审计/代理
+- [P4.5 修复验证（测试交接）](2026-11-17-p4-5-test-verification.md)：代理、health/offline、Tier1-only、OBS-007 边界
 - [P3 Context & Memory 验收测试计划](P3_ACCEPTANCE.md)：prompt/context/memory、SQLite 迁移、remember/forget、真实召回与隔离
 - [P2 Runtime & Profile 验收测试计划](P2_ACCEPTANCE.md)：serve、profiles、SQLite 会话、health、Tier 1/Tier 2 与并发验收
 - [测试资产清单与归档规则](ASSETS.md)：代码/脚本/文档/凭据的位置，正式与临时目录边界，清理与轮换清单

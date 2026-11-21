@@ -23,7 +23,8 @@ Natter 只交付**框架能力**：端口契约、组合根、插件加载、DI 
 - **Runtime/Profile**：`profiles.json` 显式 provider 路由、SQLite 会话、`serve`/`health`、`--config-dir`/`--state-dir`、Tier 1/2 启动策略。
 - **Context/Memory**：host prompt/context/memory pipeline、SQLite `summaries`/`memory_items`、确定性摘要、显式 `remember`/`forget`、scope 隔离。
 - **P4 Tier 1 UX**：Discord `/ask` `/remember` `/forget` `/memory` `/reset`，sample `memory.store` 插件，deploy/backup 示例。
-- **测试**：239 个框架级测试覆盖聚合事件、Rx 总线、DI 管道、解析器、插件加载、CLI、NLMP 一致性与 NPS v1 插件内核；另有可选的 live 套件对真实 Discord 与 DeepSeek API 做分层联调（见 [真实 API 联调测试方案](docs/LIVE_TEST_PLAN.md)）。
+- **P5 Task Runtime**：AgentTask / SQLite task store / TaskDispatcher / clock tool / `/task` `/status` `/tasks` `/cancel`，lease/cancel/timeout 与 health task metrics。
+- **测试**：264 个框架级测试覆盖聚合事件、Rx 总线、DI 管道、解析器、插件加载、CLI、NLMP 一致性与 NPS v1 插件内核；另有可选的 live 套件对真实 Discord 与 DeepSeek API 做分层联调（见 [真实 API 联调测试方案](docs/LIVE_TEST_PLAN.md)）。
 
 ## 架构
 
@@ -167,12 +168,16 @@ natter <command> [arguments] [options]
 | `dingtalk status [--json]` | 钉钉 Stream source/allowlist/连接状态 |
 | `spark status [--json]` | 星火 model/请求/错误/延迟/token |
 | `serve [--duration <s>] [--json]` | 长驻 host；加载 profile/upstream，等待取消或到时退出 |
-| `health [--json]` | upstream/profile/provider/plugin/会话健康快照 |
+| `health [--json] [--offline]` | upstream/profile/provider/plugin/会话健康快照；`--offline` 不启动 gateway |
 | `remember <text> [--scope]` | 显式、用户确认的长期记忆 | `remember "likes tea" --scope user --source ...` |
 | `forget <id|text>` | 删除显式记忆并失效 summary | `forget "likes tea"` |
 | `memory list [--limit]` | 查看当前 source/conversation/actor 可见记忆 | `memory list --json` |
 | `memory export [--output]` | 导出当前 scope memory（文件 0600） | `memory export --output memory.json` |
 | `memory import --file` | 导入并校验 scope/schema | `memory import --file memory.json` |
+| `/task prompt:<text>` | 创建 AgentTask（Discord slash） | `task` |
+| `/status task:<id>` | 查询任务状态 | `status` |
+| `/tasks` | 当前 session active task | `tasks` |
+| `/cancel task:<id>` | 取消创建者任务 | `cancel` |
 | `plugins list [--failed] [--json]` | 已加载/失败的插件 |
 | `plugins inspect <directory> [--json]` | 只探测插件目录，不注册 |
 | `demo [--name] [--amount] [--times] [--json]` | 聚合 → 仓储 → 领域事件 → Rx 全链路 |
@@ -239,6 +244,11 @@ Android 产物位于 `artifacts/android/`。示例构建使用默认调试签名
 - [P2 Runtime & Profile 开发文档](docs/P2_RUNTIME_PROFILE.md)：serve、profiles、provider 路由、SQLite 会话、health 与一等/二等公民策略。
 - [P3 Context & Memory 开发文档](docs/P3_CONTEXT_MEMORY.md)：Prompt/Context/Memory 契约、profile 扩展、SQLite 摘要/记忆、NPS contribution 与验收。
 - [P4 Tier 1 产品化](docs/P4_TIER1_PRODUCTIZATION.md)：Discord 命令 UX、memory 用户入口、DeepSeek 稳定性、serve 部署/备份/24h soak 与发布闸门。
+- [P5 Agent Task Runtime](docs/P5_AGENT_TASK_RUNTIME.md)：AgentTask、TaskStore、Worker、Tools、取消/超时/重启恢复与安全边界。
+- [P5 验收测试计划](docs/testing/2026-11-18-p5-acceptance.md)：/task、lease、重启幂等、工具 allowlist 与健康指标。
+- [WebConsole 插件设计](docs/WEBCONSOLE_PLUGIN_DESIGN.md)：只读诊断、配置编辑、受限命令终端、认证/反向代理与 ASP.NET Core 加载风险。
+- [WebConsole 插件使用](docs/WEBCONSOLE_PLUGIN.md)：staging、配置、反向代理、排障与已知限制。
+- [WebConsole 宿主契约缺口](docs/WEBCONSOLE_HOST_API_GAP.md)：G1–G10（admin kind/contribution、IAdmin*、日志、脱敏、ALC）与临时适配。
 - [依赖与类型演进策略](docs/DEPENDENCY_EVOLUTION_POLICY.md)：依赖检查/升级周期、net10→net12 LTS、插件 ABI、C# union/closed hierarchy 与 Result 边界。
 - [插件开发](docs/PLUGINS.md)：清单、适配器覆盖、CLI 命令、生命周期、嵌入模式。
 - [插件规范（NPS v1）](docs/PLUGIN_SPEC.md)：manifest、contribution、依赖图、Host API、配置/秘密、权限与激活回滚。
@@ -247,6 +257,8 @@ Android 产物位于 `artifacts/android/`。示例构建使用默认调试签名
 - [AI Provider 设计](docs/AI_PROVIDER_DESIGN.md)：Microsoft.Extensions.AI、IChatClient、DeepSeek 适配、thinking/reasoning 与 responder 设计。
 - [插件 Manifest Schema](docs/plugin.schema.json)：NPS v1 `plugin.json` 的机器可读 JSON Schema。
 - [发布指南](docs/PUBLISHING.md)：RID 矩阵、单文件、Android 签名与裁剪。
+- [运维手册](docs/OPERATIONS_RUNBOOK.md)：部署、secret/state、health、备份恢复、升级回滚与故障处理。
+- [P4.5 测试验证](docs/testing/2026-11-17-p4-5-test-verification.md) / [运维验证](docs/operations/2026-11-17-p4-5-ops-verification.md)：代理、health/offline、systemd/Docker、OBS-007 与 24h soak 交接。
 
 ## 定位与边界
 

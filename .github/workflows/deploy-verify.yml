@@ -1,0 +1,193 @@
+name: Deploy artifacts
+
+# Verifies what actually ships:
+#   * the Tier 1 image builds and contains the Discord/DeepSeek NPS plugins (not just the CLI);
+#   * the deployment/ops scripts are syntactically valid;
+#   * the passive-soak audit tooling parses a real sample file.
+#
+# Kept out of ci.yml on purpose: this job builds a container image (slow) and only matters when
+# deployment code, plugin staging, or ops scripts change.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "deploy/**"
+      - "scripts/**"
+      - "src/**"
+      - "samples/**"
+      - "build/**"
+      - "Directory.Build.props"
+      - "Directory.Packages.props"
+      - "global.json"
+      - ".github/workflows/deploy-verify.yml"
+  pull_request:
+    paths:
+      - "deploy/**"
+      - "scripts/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-verify-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_NOLOGO: "true"
+  DOTNET_CLI_TELEMETRY_OPTOUT: "true"
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: "true"
+
+jobs:
+  scripts:
+    name: Lint deploy & ops scripts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: shellcheck
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq shellcheck jq
+          # Explicit allowlist: this workflow owns the deployment/ops scripts added for P4.5.
+          # Older scripts/ entries are linted separately so a legacy warning cannot block the
+          # deploy verification of new code.
+          files=(
+            deploy/docker/verify-image.sh
+            deploy/systemd/install.sh
+            deploy/systemd/verify.sh
+            scripts/stage-tier1-plugins.sh
+            scripts/soak-sample.sh
+            scripts/ops-health-alert.sh
+            scripts/discord-egress-probe.sh
+            scripts/rotate-secret.sh
+          )
+          printf '%s\n' "${files[@]}"
+          shellcheck --severity=warning --format=gcc "${files[@]}"
+
+      - name: python syntax (soak audit)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile scripts/soak-report.py
+          echo "soak-report.py compiles"
+
+      - name: soak-report self-check on a synthetic run
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, datetime, pathlib
+
+          path = pathlib.Path("soak-fixture.jsonl")
+          start = datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)
+          lines = [json.dumps({
+              "soakStart": start.isoformat(), "intervalSeconds": 300,
+              "durationSeconds": 86400, "port": 5099,
+          })]
+          for i in range(24):  # 24 samples * 5 min = ~2h of a healthy host
+              at = start + datetime.timedelta(seconds=300 * i)
+              lines.append(json.dumps({
+                  "status": "healthy",
+                  "uptimeSeconds": 300 * i,
+                  "startedAt": start.isoformat(),
+                  "sampledAt": at.isoformat(),
+                  "upstreams": [{
+                      "source": "discord:discord:1", "connected": True,
+                      "reconnectCount": 0, "lastDisconnectAt": None,
+                      "lastError": None, "sendFailures": 0,
+                  }],
+                  "providers": [{"id": "natter.feature.ai.deepseek#deepseek",
+                                 "available": True, "supportTier": 1}],
+                  "plugins": {"activated": 4, "failed": 0, "failures": []},
+                  "conversations": 0,
+              }))
+          path.write_text("\n".join(lines) + "\n")
+          PY
+          python3 scripts/soak-report.py soak-fixture.jsonl --interval 300 --json > soak-report.json
+          python3 - <<'PY'
+          import json
+          report = json.load(open("soak-report.json"))
+          assert report["samples"] == 24, report["samples"]
+          assert report["result"] == "PASS", report
+          assert report["upstreams"]["discord"]["reconnects"] == 0
+          print("soak report PASS as expected")
+          PY
+
+  image:
+    name: Build Tier 1 image & verify plugins
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Show builder
+        run: docker version --format '{{.Server.Version}}'
+
+      - name: Build image (Tier 1)
+        run: |
+          docker build \
+            -f deploy/docker/Dockerfile \
+            -t natter:tier1-ci \
+            --build-arg TIER2=false \
+            .
+
+      - name: Image ships the Tier 1 plugins
+        run: |
+          set -euo pipefail
+          docker run --rm --entrypoint sh natter:tier1-ci -c 'ls -1 /app/plugins' | tee plugins.txt
+          grep -qx discord plugins.txt
+          grep -qx deepseek plugins.txt
+          grep -qx greetings plugins.txt
+          grep -qx metrics plugins.txt
+
+      - name: Plugin manifests are valid
+        run: |
+          set -euo pipefail
+          for plugin in discord deepseek; do
+            docker run --rm --entrypoint dotnet natter:tier1-ci \
+              /app/natter.dll plugins inspect "/app/plugins/${plugin}" | tee "inspect-${plugin}.txt"
+            grep -q 'valid          : True' "inspect-${plugin}.txt"
+          done
+
+      - name: Runtime contract (uid, read-only, healthcheck)
+        run: |
+          set -euo pipefail
+          user="$(docker run --rm --entrypoint id natter:tier1-ci | tr -d '\n')"
+          echo "$user"
+          echo "$user" | grep -q 'uid=10001'
+          docker inspect natter:tier1-ci --format '{{json .Config.Healthcheck}}' | tee healthcheck.json
+          grep -q '5099' healthcheck.json
+
+      - name: Container starts without config (fails closed, not crashes)
+        run: |
+          set -euo pipefail
+          docker run -d --name natter-smoke --read-only --tmpfs /tmp \
+            -e NATTER_CONFIG_DIR=/config -e NATTER_STATE_DIR=/state \
+            --tmpfs /state:uid=10001,gid=10001,mode=0700 \
+            natter:tier1-ci >/dev/null
+          sleep 12
+          status="$(docker inspect natter-smoke --format '{{.State.Status}}')"
+          echo "status=$status"
+          docker logs natter-smoke || true
+          docker rm -f natter-smoke >/dev/null
+          test "$status" = "running"
+
+      - name: Upload staging manifest
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: natter-image-verification
+          path: |
+            plugins.txt
+            inspect-discord.txt
+            inspect-deepseek.txt
+            healthcheck.json
+            soak-report.json
+          if-no-files-found: ignore

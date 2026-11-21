@@ -45,6 +45,62 @@ public sealed class ChatCommandRouterTests
     }
 
     [Fact]
+    public async Task Task_commands_create_list_status_and_cancel()
+    {
+        var store = new InMemoryTaskStore();
+        var dispatcher = new RecordingTaskDispatcher();
+        var router = new ChatCommandRouter(
+            new InMemoryMemoryStore(),
+            new InMemorySummaryStore(),
+            new InMemoryConversationStore(),
+            new ChatCommandFactory(new TestClock()),
+            tasks: store,
+            taskDispatcher: dispatcher);
+        var source = Source.Create("discord", "discord", "bot");
+        var conversation = new Conversation("c1", ConversationKind.Direct);
+        var user = new User("u1", "User");
+
+        var accepted = Assert.IsType<InteractionRespondCommand>(await router.TryHandleAsync(
+            Event(source, conversation, user, "task", new() { ["prompt"] = "do work" })));
+        Assert.Contains("Task accepted", accepted.Payload.Content.Text);
+        var task = (await store.ListActiveAsync(StoreSession(source, conversation, user))).Single();
+        Assert.Equal("do work", task.Prompt);
+        Assert.Single(dispatcher.Enqueued);
+
+        var listed = Assert.IsType<InteractionRespondCommand>(await router.TryHandleAsync(
+            Event(source, conversation, user, "tasks", new())));
+        Assert.Contains(task.TaskId, listed.Payload.Content.Text);
+
+        var status = Assert.IsType<InteractionRespondCommand>(await router.TryHandleAsync(
+            Event(source, conversation, user, "status", new() { ["task"] = task.TaskId })));
+        Assert.Contains("Pending", status.Payload.Content.Text);
+
+        var cancel = Assert.IsType<InteractionRespondCommand>(await router.TryHandleAsync(
+            Event(source, conversation, user, "cancel", new() { ["task"] = task.TaskId })));
+        Assert.Contains("Cancel", cancel.Payload.Content.Text);
+    }
+
+    private static string StoreSession(Source source, Conversation conversation, User user)
+        => InMemoryConversationStore.SessionId(new ConversationKey(source.Key, conversation.Id, conversation.GuildId, user.Id));
+
+    [Fact]
+    public async Task Host_composition_wires_task_runtime_into_router()
+    {
+        await using var host = await TestHost.CreateAsync();
+        var router = host.Get<IChatCommandRouter>();
+        var source = Source.Create("discord", "discord", "bot");
+        var conversation = new Conversation("c1", ConversationKind.Direct);
+        var user = new User("u1", "User");
+
+        var response = Assert.IsType<InteractionRespondCommand>(await router.TryHandleAsync(
+            Event(source, conversation, user, "task", new() { ["prompt"] = "host task" })));
+
+        Assert.Contains("Task accepted", response.Payload.Content.Text);
+        var taskId = response.Payload.Content.Text.Split(':', 2)[1].Trim();
+        Assert.NotNull(await host.Get<ITaskStore>().GetAsync(taskId));
+    }
+
+    [Fact]
     public async Task Ask_falls_through_to_ai_and_shared_scope_is_refused()
     {
         var clock = new TestClock();
@@ -117,4 +173,18 @@ public sealed class ChatCommandRouterTests
                 null,
                 "reply-token")),
         };
+    private sealed class RecordingTaskDispatcher : ITaskDispatcher
+    {
+        public List<AgentTask> Enqueued { get; } = [];
+
+        public ValueTask<string> EnqueueAsync(AgentTask task, CancellationToken cancellationToken = default)
+        {
+            Enqueued.Add(task);
+            return ValueTask.FromResult(task.TaskId);
+        }
+
+        public ValueTask<bool> RequestCancelAsync(string taskId, string actorId, CancellationToken cancellationToken = default)
+            => ValueTask.FromResult(true);
+    }
+
 }

@@ -1,3 +1,5 @@
+using System.Net;
+using System.Net.Sockets;
 using Microsoft.Extensions.DependencyInjection;
 using Natter.Abstractions.Composition;
 using Natter.Abstractions.Plugins;
@@ -16,6 +18,64 @@ namespace Natter.Infrastructure.Chat;
 public sealed class ChatCompositionModule : ICompositionModule
 {
     public string Name => "Framework.Chat";
+
+    /// <summary>
+    /// Hardened handler for <see cref="Natter.Application.Chat.HttpFetchTool"/>: no automatic
+    /// redirects and a connect-time address check so a hostname that resolves to a private address
+    /// after the tool-level check (DNS rebinding) is still refused.
+    /// </summary>
+    public static SocketsHttpHandler CreateHttpFetchHandler()
+        => new()
+        {
+            AllowAutoRedirect = false,
+            ConnectCallback = async (context, cancellationToken) =>
+            {
+                var endpoint = context.DnsEndPoint;
+                var targetHost = context.InitialRequestMessage.RequestUri?.DnsSafeHost;
+                // When an egress proxy is configured the callback receives the proxy endpoint, not
+                // the target; only direct connections are address-checked here.
+                var direct = string.IsNullOrEmpty(targetHost)
+                             || string.Equals(endpoint.Host, targetHost, StringComparison.OrdinalIgnoreCase);
+
+                IPAddress[] addresses;
+                if (IPAddress.TryParse(endpoint.Host, out var literal))
+                {
+                    addresses = [literal];
+                }
+                else
+                {
+                    addresses = await Dns.GetHostAddressesAsync(endpoint.Host, cancellationToken).ConfigureAwait(false);
+                }
+
+                if (direct)
+                {
+                    foreach (var address in addresses)
+                    {
+                        if (Natter.Application.Chat.HttpFetchTool.IsBlockedAddress(address))
+                        {
+                            throw new HttpRequestException(
+                                $"Refusing to connect to a private, loopback or metadata address for '{endpoint.Host}'.");
+                        }
+                    }
+                }
+
+                var candidate = addresses.FirstOrDefault();
+                if (candidate is null)
+                    throw new HttpRequestException($"No usable address for '{endpoint.Host}'.");
+
+                var socket = new Socket(SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
+                try
+                {
+                    await socket.ConnectAsync(new IPEndPoint(candidate, endpoint.Port), cancellationToken).ConfigureAwait(false);
+                    return new NetworkStream(socket, ownsSocket: true);
+                }
+                catch
+                {
+                    socket.Dispose();
+                    throw;
+                }
+            },
+        };
 
     public void Configure(IServiceCollection services, CompositionContext context)
     {
@@ -91,6 +151,45 @@ public sealed class ChatCompositionModule : ICompositionModule
                 context.Options.ProfileOverride));
         services.AddSingleton<Natter.Application.Chat.IProfileResolver, Natter.Application.Chat.ProfileResolver>();
         services.AddSingleton<Natter.Application.Chat.IProfileMemoryStoreResolver, Natter.Application.Chat.ProfileMemoryStoreResolver>();
+        services.AddSingleton<Natter.Application.Chat.HostRuntimeClock>();
+        services.AddSingleton<Natter.Application.Chat.TaskMetrics>();
+        services.AddSingleton<Natter.Application.Chat.ITaskStore>(_ =>
+            string.IsNullOrWhiteSpace(context.Options.StateDirectory)
+                ? new Natter.Application.Chat.InMemoryTaskStore()
+                : new SqliteTaskStore(Path.Combine(Path.GetFullPath(context.Options.StateDirectory), "natter.db")));
+        services.AddSingleton<Natter.Application.Chat.ITool, Natter.Application.Chat.ClockTool>();
+        services.AddSingleton<Natter.Application.Chat.ITool, Natter.Application.Chat.TextTransformTool>();
+        services.AddSingleton<HttpClient>(_ => new HttpClient { Timeout = TimeSpan.FromSeconds(20) });
+        services.AddSingleton<Natter.Application.Chat.ITool>(provider =>
+        {
+            var hosts = (Environment.GetEnvironmentVariable("NATTER_HTTP_FETCH_HOSTS") ?? string.Empty)
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            // OBS-P5F-4: the fetch tool gets its own hardened client. It never follows redirects and
+            // validates the address actually used for the socket connection (DNS rebinding defence),
+            // while the shared HttpClient used by AI providers keeps its existing behaviour.
+            var hardened = new HttpClient(CreateHttpFetchHandler(), disposeHandler: true)
+            {
+                Timeout = TimeSpan.FromSeconds(20),
+            };
+            return new Natter.Application.Chat.HttpFetchTool(hardened, hosts);
+        });
+        services.AddSingleton<Natter.Application.Chat.IToolPolicy, Natter.Application.Chat.ReadOnlyToolPolicy>();
+        services.AddSingleton<Natter.Application.Chat.ITaskWorker>(provider =>
+            new Natter.Application.Chat.AiTaskWorker(
+                provider,
+                provider.GetServices<Natter.Application.Chat.ITool>(),
+                provider.GetRequiredService<Natter.Application.Chat.IToolPolicy>()));
+        services.AddSingleton<Natter.Abstractions.Plugins.IPluginLifecycle, Natter.Application.Chat.TaskRecoveryLifecycle>();
+        services.AddSingleton<Natter.Application.Chat.ITaskDispatcher>(provider =>
+            new Natter.Application.Chat.TaskDispatcher(
+                provider.GetRequiredService<Natter.Application.Chat.ITaskStore>(),
+                provider.GetRequiredService<Natter.Application.Chat.ITaskWorker>(),
+                provider.GetRequiredService<Natter.Application.Chat.IProfileResolver>(),
+                provider.GetRequiredService<Natter.Application.Chat.IRuntimeProfileStore>(),
+                provider.GetRequiredService<IChatCommandDispatcher>(),
+                provider.GetRequiredService<ChatCommandFactory>(),
+                provider.GetRequiredService<Natter.Application.Chat.TaskMetrics>()));
         services.AddSingleton<Natter.Application.Chat.IChatCommandRouter>(provider =>
             new Natter.Application.Chat.ChatCommandRouter(
                 provider.GetRequiredService<Natter.Application.Chat.IMemoryStore>(),
@@ -98,7 +197,9 @@ public sealed class ChatCompositionModule : ICompositionModule
                 provider.GetRequiredService<Natter.Application.Chat.IConversationStore>(),
                 provider.GetRequiredService<ChatCommandFactory>(),
                 provider.GetRequiredService<Natter.Application.Chat.IContextComponentCatalog>(),
-                provider.GetRequiredService<Natter.Application.Chat.IProfileMemoryStoreResolver>()));
+                provider.GetRequiredService<Natter.Application.Chat.IProfileMemoryStoreResolver>(),
+                provider.GetRequiredService<Natter.Application.Chat.ITaskStore>(),
+                provider.GetRequiredService<Natter.Application.Chat.ITaskDispatcher>()));
         services.AddSingleton<Natter.Application.Chat.IChatResponder>(provider =>
             new Natter.Application.Chat.ProfileAwareChatResponder(
                 provider.GetRequiredService<Natter.Application.Chat.IChatResponderRegistry>(),

@@ -105,6 +105,8 @@ public sealed class ProfileHistory
 public sealed class ProfilePolicy
 {
     public bool Enabled { get; init; } = true;
+
+    public bool AllowNetworkTools { get; init; }
 }
 
 public interface IRuntimeProfileStore

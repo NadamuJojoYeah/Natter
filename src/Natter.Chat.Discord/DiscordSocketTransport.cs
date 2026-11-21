@@ -5,6 +5,8 @@ using System.Reactive.Subjects;
 using System.Text.Json;
 using Discord;
 using Discord.Net;
+using Discord.Net.Rest;
+using Discord.Net.WebSockets;
 using Discord.WebSocket;
 
 namespace Natter.Chat.Discord;
@@ -28,6 +30,10 @@ public sealed class DiscordSocketTransport : IDiscordTransport, IDisposable
     private bool _started;
     private bool _disposed;
     private int _commandsRegistered;
+    private string? _lastGatewayError;
+    private bool _proxyConfigured;
+    private bool _restCompleted;
+    private bool _gatewayStarted;
 
     public DiscordSocketTransport(DiscordOptions options, DiscordBotToken token)
     {
@@ -39,7 +45,19 @@ public sealed class DiscordSocketTransport : IDiscordTransport, IDisposable
             GatewayIntents = ParseIntents(options.Intents),
             MessageCacheSize = 100,
             AlwaysDownloadUsers = false,
+            // Slow egress (proxied links) must not be cut off before the ready window even starts.
+            ConnectionTimeout = (int)TimeSpan.FromSeconds(Math.Max(30, options.ReadyTimeoutSeconds)).TotalMilliseconds,
         };
+
+        // Discord.Net defaults ignore the process proxy: REST is created with useProxy: false and
+        // the gateway socket gets ClientWebSocketOptions.Proxy = null. Hand both legs the resolved
+        // proxy explicitly so REST (including GetBotGateway) and the gateway use the same route.
+        if (DiscordEgressProxy.FromEnvironment() is { } egressProxy)
+        {
+            config.RestClientProvider = DefaultRestClientProvider.Create(useProxy: true, webProxy: egressProxy);
+            config.WebSocketProvider = DefaultWebSocketProvider.Create(egressProxy);
+            _proxyConfigured = true;
+        }
 
         _client = new DiscordSocketClient(config);
         _synchronizedEvents = Subject.Synchronize(_events);
@@ -58,7 +76,9 @@ public sealed class DiscordSocketTransport : IDiscordTransport, IDisposable
             if (!_started)
             {
                 await _client.LoginAsync(TokenType.Bot, _token.Value).ConfigureAwait(false);
+                _restCompleted = true;
                 await _client.StartAsync().ConfigureAwait(false);
+                _gatewayStarted = true;
                 _started = true;
             }
 
@@ -67,7 +87,27 @@ public sealed class DiscordSocketTransport : IDiscordTransport, IDisposable
         }
         catch (TimeoutException ex)
         {
-            throw new TimeoutException("Discord gateway did not become ready before the configured timeout.", ex);
+            var actualPhase = _lastGatewayError is not null || !_restCompleted
+                ? (_restCompleted ? "ws_connect" : "rest_gateway")
+                : (_client.ConnectionState == ConnectionState.Connected ? "identify_ready" : "ws_connect");
+            throw new TimeoutException(
+                $"Discord gateway did not become ready during phase '{actualPhase}' within "
+                + $"{_options.ReadyTimeoutSeconds}s. lastDisconnectedError="
+                + $"{Sanitize(_lastGatewayError ?? "none")}; connectionState={_client.ConnectionState}; "
+                + $"proxy={_proxyConfigured}; restCompleted={_restCompleted}; gatewayStarted={_gatewayStarted}.",
+                ex);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            var actualPhase = !_restCompleted ? "rest_gateway" : "ws_connect";
+            throw new InvalidOperationException(
+                $"Discord connect failed during phase '{actualPhase}': {ex.GetType().Name}; "
+                + $"lastDisconnectedError={Sanitize(_lastGatewayError ?? "none")}; proxy={_proxyConfigured}.",
+                ex);
         }
     }
 
@@ -359,6 +399,17 @@ public sealed class DiscordSocketTransport : IDiscordTransport, IDisposable
                     case "memory":
                         builder.AddOption("limit", ApplicationCommandOptionType.Integer, "Maximum items", isRequired: false);
                         break;
+                    case "task":
+                        builder.AddOption("prompt", ApplicationCommandOptionType.String, "Task prompt", isRequired: true);
+                        break;
+                    case "status":
+                        builder.AddOption("task", ApplicationCommandOptionType.String, "Task id", isRequired: true);
+                        break;
+                    case "tasks":
+                        break;
+                    case "cancel":
+                        builder.AddOption("task", ApplicationCommandOptionType.String, "Task id", isRequired: true);
+                        break;
                     case "reset":
                         break;
                     default:
@@ -496,11 +547,12 @@ public sealed class DiscordSocketTransport : IDiscordTransport, IDisposable
 
     private Task OnDisconnectedAsync(Exception exception)
     {
+        _lastGatewayError = Sanitize(exception?.Message ?? "gateway disconnected without exception detail");
         Publish(new DiscordTransportEvent
         {
             Kind = DiscordTransportEventKind.Disconnected,
             ErrorCode = "gateway_disconnected",
-            ErrorMessage = exception.Message,
+            ErrorMessage = _lastGatewayError,
         });
 
         return Task.CompletedTask;
@@ -510,11 +562,12 @@ public sealed class DiscordSocketTransport : IDiscordTransport, IDisposable
     {
         if (message.Severity is LogSeverity.Error or LogSeverity.Critical)
         {
+            _lastGatewayError = Sanitize(message.Exception?.Message ?? message.Message);
             Publish(new DiscordTransportEvent
             {
                 Kind = DiscordTransportEventKind.Error,
                 ErrorCode = "gateway_log",
-                ErrorMessage = message.Exception?.Message ?? message.Message,
+                ErrorMessage = _lastGatewayError,
             });
         }
 
@@ -707,6 +760,13 @@ public sealed class DiscordSocketTransport : IDiscordTransport, IDisposable
 
     private void Publish(DiscordTransportEvent transportEvent)
         => _events.OnNext(transportEvent);
+
+    private static string Sanitize(string message)
+        => System.Text.RegularExpressions.Regex.Replace(
+            message,
+            @"(https?://)([^/@\s]+)@",
+            "$1***@",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
     private static TaskCompletionSource NewReadySource()
         => new(TaskCreationOptions.RunContinuationsAsynchronously);

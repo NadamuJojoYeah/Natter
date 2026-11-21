@@ -115,6 +115,40 @@ internal sealed class SqliteContextDatabase
             current = 2;
         }
 
+        if (current < 3)
+        {
+            Execute(connection, """
+                CREATE TABLE IF NOT EXISTS agent_tasks (
+                    task_id         TEXT PRIMARY KEY,
+                    session_id      TEXT NOT NULL,
+                    source_key      TEXT NOT NULL,
+                    conversation_id TEXT NOT NULL,
+                    guild_id        TEXT NULL,
+                    actor_id        TEXT NULL,
+                    prompt          TEXT NOT NULL,
+                    status          TEXT NOT NULL,
+                    lease_owner     TEXT NULL,
+                    lease_expires_at TEXT NULL,
+                    result_text     TEXT NULL,
+                    error_code      TEXT NULL,
+                    error_message   TEXT NULL,
+                    created_at      TEXT NOT NULL,
+                    updated_at      TEXT NOT NULL,
+                    version         INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS ix_agent_tasks_session ON agent_tasks(session_id, status);
+                CREATE TABLE IF NOT EXISTS task_events (
+                    task_id     TEXT NOT NULL,
+                    seq         INTEGER NOT NULL,
+                    kind        TEXT NOT NULL,
+                    payload_json TEXT NULL,
+                    created_at  TEXT NOT NULL,
+                    PRIMARY KEY(task_id, seq)
+                );
+                """);
+            current = 3;
+        }
+
         using var setVersion = connection.CreateCommand();
         setVersion.CommandText = $"PRAGMA user_version = {current};";
         setVersion.ExecuteNonQuery();

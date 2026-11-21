@@ -450,10 +450,14 @@ deploy/
 | profile-aware memory resolver | CLI/Discord 命令统一按 profile 选择 store，缺失 fail-closed | `ProfileMemoryStoreResolver.cs` |
 | 单实例锁 | `<state-dir>/.lock` 独占锁 | `ServeCommand` |
 | clipped 输出 | 检测并重试一次，仍异常则降级；不写 clipped 内容 | `AiChatResponder` |
+| 代理/超时 | Discord REST+Gateway 统一代理、ConnectionTimeout≥READY 窗口 | `DiscordEgressProxy` |
+| health uptime/Tier1 | 首次 uptime >0、startedAt/sampledAt、Tier2 缺失不降级 | `HostRuntimeClock` / `RuntimeHealth` |
+| health offline | `health --offline` 不启动 gateway | `NatterCli` |
+| upstream 诊断 | lastEvent/connected/disconnect/reconnect count | `IChatUpstreamHealth` |
 | 24h soak | 未执行 | — |
 | 真实双 guild/DM | 未执行（测试侧） | — |
 
-测试：`Natter.Framework.Tests` **239/239**；P3 232 基线未回归。
+测试：`Natter.Framework.Tests` **245/245**；P3 232 基线未回归。
 
 ## 10. 实施顺序
 

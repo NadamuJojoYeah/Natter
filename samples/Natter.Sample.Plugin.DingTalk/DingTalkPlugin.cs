@@ -86,6 +86,11 @@ public sealed class DingTalkStatusCommandHandler(DingTalkOptions options, DingTa
             provider = "dingtalk",
             source = upstream.Source.Key,
             connected = upstream.IsConnected,
+            lastEventAt = upstream.Health.LastEventAt,
+            lastConnectedAt = upstream.Health.LastConnectedAt,
+            lastDisconnectAt = upstream.Health.LastDisconnectAt,
+            reconnectCount = upstream.Health.ReconnectCount,
+            lastError = upstream.Health.LastError,
             botId = options.BotId,
             streamGatewayUrl = options.StreamGatewayUrl,
             streamTopic = options.StreamTopic,
@@ -102,6 +107,10 @@ public sealed class DingTalkStatusCommandHandler(DingTalkOptions options, DingTa
 
         invocation.Console.Out.WriteLine($"source: {snapshot.source}");
         invocation.Console.Out.WriteLine($"connected: {snapshot.connected.ToString().ToLowerInvariant()}");
+        invocation.Console.Out.WriteLine($"lastEventAt: {snapshot.lastEventAt?.ToString("O") ?? "-"}");
+        invocation.Console.Out.WriteLine($"lastConnectedAt: {snapshot.lastConnectedAt?.ToString("O") ?? "-"}");
+        invocation.Console.Out.WriteLine($"reconnectCount: {snapshot.reconnectCount}");
+        invocation.Console.Out.WriteLine($"lastError: {snapshot.lastError ?? "-"}");
         invocation.Console.Out.WriteLine($"streamGatewayUrl: {snapshot.streamGatewayUrl}");
         invocation.Console.Out.WriteLine($"streamTopic: {snapshot.streamTopic}");
         invocation.Console.Out.WriteLine($"requireMention: {snapshot.requireMention.ToString().ToLowerInvariant()}");

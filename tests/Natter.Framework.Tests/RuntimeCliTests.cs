@@ -1,4 +1,7 @@
+using System.Reactive.Subjects;
 using System.Text.Json;
+using Microsoft.Extensions.DependencyInjection;
+using Natter.Chat;
 using Natter.Cli.Abstractions;
 using Natter.Cli.Core;
 using Xunit;
@@ -19,6 +22,52 @@ public sealed class RuntimeCliTests
         Assert.Equal(2, document.RootElement.GetProperty("profiles").GetInt32());
         Assert.Equal(0, document.RootElement.GetProperty("conversations").GetInt32());
         Assert.Equal(2, document.RootElement.GetProperty("providers").GetArrayLength());
+        Assert.True(document.RootElement.GetProperty("uptimeSeconds").GetInt64() > 0);
+        Assert.Equal(0, document.RootElement.GetProperty("tasks").GetProperty("active").GetInt64());
+        Assert.NotEqual(
+            default,
+            document.RootElement.GetProperty("startedAt").GetDateTimeOffset());
+    }
+
+    [Fact]
+    public async Task Health_json_reports_the_persisted_disconnect_reason()
+    {
+        var console = new StringConsole();
+        var options = new NatterCliOptions
+        {
+            LoadPlugins = false,
+            OnHostStartedAsync = services =>
+            {
+                services.GetRequiredService<IChatUpstreamRegistry>().Register(new ReconnectedHealthUpstream());
+                return ValueTask.CompletedTask;
+            },
+        };
+
+        var exitCode = await NatterCli.RunAsync(["health", "--json"], console, options);
+
+        Assert.Equal(CliExitCodes.Success, exitCode);
+        using var document = JsonDocument.Parse(console.Output);
+        var upstream = document.RootElement.GetProperty("upstreams")[0];
+        // OBS-019: the disconnect reason is a dedicated field and survives the reconnect.
+        Assert.Equal("gateway closed (1006)", upstream.GetProperty("lastDisconnectError").GetString());
+        Assert.Equal("ws_closed", upstream.GetProperty("lastDisconnectCode").GetString());
+        Assert.Equal(2, upstream.GetProperty("reconnectCount").GetInt32());
+        // lastError keeps its "current error" semantics and is null after a successful Ready.
+        Assert.Equal(JsonValueKind.Null, upstream.GetProperty("lastError").ValueKind);
+    }
+
+    [Fact]
+    public async Task Offline_health_does_not_start_upstreams()
+    {
+        var console = new StringConsole();
+        var exitCode = await NatterCli.RunAsync(
+            ["health", "--offline", "--json"],
+            console,
+            new NatterCliOptions { LoadPlugins = false });
+        Assert.Equal(CliExitCodes.Success, exitCode);
+        using var document = JsonDocument.Parse(console.Output);
+        Assert.Equal("offline", document.RootElement.GetProperty("status").GetString());
+        Assert.Equal(0, document.RootElement.GetProperty("upstreams").GetArrayLength());
     }
 
     [Fact]
@@ -304,6 +353,42 @@ public sealed class RuntimeCliTests
         public string? ReadLine() => null;
         public string Output => OutWriter.ToString();
         public string ErrorText => ErrorWriter.ToString();
+    }
+
+    private sealed class ReconnectedHealthUpstream : IChatUpstream, IChatUpstreamHealth
+    {
+        private readonly Subject<ChatEvent> _events = new();
+
+        public Source Source { get; } = Source.Create("discord", "discord", "bot");
+
+        public bool IsConnected => true;
+
+        public UpstreamHealth Health { get; } = new(
+            "discord:discord:bot",
+            Connected: true,
+            LastEventAt: null,
+            LastConnectedAt: new DateTimeOffset(2026, 11, 18, 1, 59, 59, TimeSpan.Zero),
+            LastDisconnectAt: new DateTimeOffset(2026, 11, 18, 1, 59, 50, TimeSpan.Zero),
+            ReconnectCount: 2,
+            LastError: null,
+            SendFailures: 0,
+            LastSendError: null,
+            LastDisconnectError: "gateway closed (1006)",
+            LastDisconnectCode: "ws_closed");
+
+        public IObservable<ChatEvent> Events => _events;
+
+        public ValueTask ConnectAsync(CancellationToken cancellationToken = default) => ValueTask.CompletedTask;
+
+        public ValueTask DisconnectAsync(CancellationToken cancellationToken = default) => ValueTask.CompletedTask;
+
+        public ValueTask<Capabilities> GetCapabilitiesAsync(
+            Conversation? conversation = null,
+            CancellationToken cancellationToken = default)
+            => ValueTask.FromResult(new Capabilities());
+
+        public ValueTask<ChatAck> ExecuteAsync(ChatCommand command, CancellationToken cancellationToken = default)
+            => ValueTask.FromResult(ChatAck.Success(command));
     }
 
     private sealed class TempDirectory : IDisposable

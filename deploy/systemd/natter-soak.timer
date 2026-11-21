@@ -1,0 +1,16 @@
+[Unit]
+Description=Passive /health sampling for the Natter 24h soak (every 5 minutes)
+Documentation=file:///opt/natter/docs/OPERATIONS_RUNBOOK.md
+
+[Timer]
+# Start sampling two minutes after boot so the host has time to become ready.
+OnBootSec=2min
+# Then every 5 minutes; this interval must match scripts/soak-report.py --interval (default 300).
+OnUnitActiveSec=5min
+AccuracySec=15s
+# Do not replay a whole night of missed samples after downtime: one late sample is enough.
+Persistent=false
+Unit=natter-soak.service
+
+[Install]
+WantedBy=timers.target

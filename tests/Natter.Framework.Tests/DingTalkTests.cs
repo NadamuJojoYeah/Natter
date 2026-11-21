@@ -72,6 +72,8 @@ public sealed class DingTalkTests
 
         var created = Assert.Single(events.OfType<MessageCreatedEvent>());
         Assert.Equal(ConversationKind.Group, created.Payload.Message.Conversation.Kind);
+        Assert.NotNull(upstream.Health.LastConnectedAt);
+        Assert.NotNull(upstream.Health.LastEventAt);
         Assert.Contains(created.Payload.Message.Content.Mentions!, mention => mention.Id == "bot-dt");
 
         var command = new ChatCommandFactory(clock).Send(
@@ -84,6 +86,8 @@ public sealed class DingTalkTests
         Assert.Equal(3, transport.Replies.Count);
         Assert.All(transport.Replies, reply => Assert.Equal("https://oapi.dingtalk.com/robot/sendBySession?session=test", reply.SessionWebhook));
         Assert.Equal(3, ack.Result!.MessageIds!.Count);
+        await upstream.DisconnectAsync();
+        Assert.Equal(1, upstream.Health.ReconnectCount);
     }
 
     [Fact]

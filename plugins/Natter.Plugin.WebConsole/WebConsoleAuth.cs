@@ -1,0 +1,316 @@
+using System.Security.Cryptography;
+using System.Text;
+
+namespace Natter.Plugin.WebConsole;
+
+public enum WebConsoleRole
+{
+    Viewer,
+    Admin,
+}
+
+/// <summary>In-memory login session. Sessions die with the plugin process (see known limitations).</summary>
+public sealed record WebConsoleSession(
+    string Id,
+    string Csrf,
+    WebConsoleRole Role,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset ExpiresAt);
+
+public sealed class WebConsoleSessionStore
+{
+    private readonly Dictionary<string, WebConsoleSession> _sessions = new(StringComparer.Ordinal);
+    private readonly Lock _gate = new();
+    private readonly TimeProvider _clock;
+
+    public WebConsoleSessionStore(TimeProvider clock)
+    {
+        _clock = clock ?? throw new ArgumentNullException(nameof(clock));
+    }
+
+    public WebConsoleSession Create(WebConsoleRole role, TimeSpan lifetime)
+    {
+        var now = _clock.GetUtcNow();
+        var session = new WebConsoleSession(
+            WebConsoleTokens.CreateToken(),
+            WebConsoleTokens.CreateToken(),
+            role,
+            now,
+            now + lifetime);
+
+        lock (_gate)
+        {
+            PruneLocked(now);
+            _sessions[session.Id] = session;
+        }
+
+        return session;
+    }
+
+    public WebConsoleSession? Find(string? id)
+    {
+        if (string.IsNullOrWhiteSpace(id))
+            return null;
+
+        lock (_gate)
+        {
+            var now = _clock.GetUtcNow();
+            PruneLocked(now);
+            return _sessions.TryGetValue(id, out var session) ? session : null;
+        }
+    }
+
+    public void Revoke(string? id)
+    {
+        if (string.IsNullOrWhiteSpace(id))
+            return;
+
+        lock (_gate)
+            _sessions.Remove(id);
+    }
+
+    public void Clear()
+    {
+        lock (_gate)
+            _sessions.Clear();
+    }
+
+    public int Count
+    {
+        get
+        {
+            lock (_gate)
+                return _sessions.Count;
+        }
+    }
+
+    private void PruneLocked(DateTimeOffset now)
+    {
+        if (_sessions.Count == 0)
+            return;
+
+        foreach (var id in _sessions.Where(pair => pair.Value.ExpiresAt <= now).Select(pair => pair.Key).ToArray())
+            _sessions.Remove(id);
+    }
+}
+
+/// <summary>Token verifier using a constant-time comparison over SHA-256 digests.</summary>
+public sealed class WebConsoleTokenAuthenticator
+{
+    private readonly byte[] _expectedDigest;
+    private readonly string? _problem;
+
+    public WebConsoleTokenAuthenticator(string? token)
+    {
+        if (string.IsNullOrWhiteSpace(token))
+        {
+            _problem = "webconsole.token-missing";
+            _expectedDigest = [];
+            return;
+        }
+
+        if (token.Length < WebConsoleDefaults.MinTokenLength)
+        {
+            _problem = "webconsole.token-too-short";
+            _expectedDigest = [];
+            return;
+        }
+
+        _expectedDigest = SHA256.HashData(Encoding.UTF8.GetBytes(token));
+        IsUsable = true;
+    }
+
+    public bool IsUsable { get; }
+
+    public string? Problem => _problem;
+
+    public bool Verify(string? candidate)
+    {
+        if (!IsUsable || string.IsNullOrEmpty(candidate) || candidate.Length > 512)
+            return false;
+
+        var digest = SHA256.HashData(Encoding.UTF8.GetBytes(candidate));
+        return CryptographicOperations.FixedTimeEquals(digest, _expectedDigest);
+    }
+}
+
+/// <summary>Failed-login throttle: 5 failures per 5 minutes per client, plus a global cap.</summary>
+public sealed class WebConsoleLoginThrottle
+{
+    public const int MaxFailuresPerClient = 5;
+    public const int MaxFailuresGlobal = 50;
+    public static readonly TimeSpan Window = TimeSpan.FromMinutes(5);
+
+    private readonly Dictionary<string, List<DateTimeOffset>> _failures = new(StringComparer.Ordinal);
+    private readonly List<DateTimeOffset> _global = [];
+    private readonly Lock _gate = new();
+    private readonly TimeProvider _clock;
+
+    public WebConsoleLoginThrottle(TimeProvider clock)
+    {
+        _clock = clock ?? throw new ArgumentNullException(nameof(clock));
+    }
+
+    public bool IsBlocked(string clientKey, out TimeSpan retryAfter)
+    {
+        retryAfter = TimeSpan.Zero;
+        var now = _clock.GetUtcNow();
+
+        lock (_gate)
+        {
+            PruneLocked(now);
+
+            if (_global.Count >= MaxFailuresGlobal)
+            {
+                retryAfter = RetryAfter(_global, now);
+                return true;
+            }
+
+            if (_failures.TryGetValue(clientKey, out var entries) && entries.Count >= MaxFailuresPerClient)
+            {
+                retryAfter = RetryAfter(entries, now);
+                return true;
+            }
+
+            return false;
+        }
+    }
+
+    public void RecordFailure(string clientKey)
+    {
+        var now = _clock.GetUtcNow();
+
+        lock (_gate)
+        {
+            PruneLocked(now);
+
+            if (!_failures.TryGetValue(clientKey, out var entries))
+            {
+                entries = [];
+                _failures[clientKey] = entries;
+            }
+
+            entries.Add(now);
+            _global.Add(now);
+        }
+    }
+
+    public void Reset(string clientKey)
+    {
+        lock (_gate)
+            _failures.Remove(clientKey);
+    }
+
+    private static TimeSpan RetryAfter(List<DateTimeOffset> entries, DateTimeOffset now)
+    {
+        var oldest = entries.Count == 0 ? now : entries[0];
+        var remaining = Window - (now - oldest);
+        return remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero;
+    }
+
+    private void PruneLocked(DateTimeOffset now)
+    {
+        foreach (var key in _failures
+                     .Where(pair => pair.Value.Count == 0 || now - pair.Value[^1] >= Window)
+                     .Select(pair => pair.Key)
+                     .ToArray())
+        {
+            _failures.Remove(key);
+        }
+
+        _global.RemoveAll(entry => now - entry >= Window);
+    }
+}
+
+/// <summary>Origin / Sec-Fetch-Site policy for browser requests (design §6.1).</summary>
+public sealed class WebConsoleOriginPolicy
+{
+    private readonly HashSet<string> _allowedOrigins;
+
+    public WebConsoleOriginPolicy(string? publicBaseUrl, int port)
+    {
+        _allowedOrigins = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            $"http://127.0.0.1:{port}",
+            $"http://localhost:{port}",
+            $"http://[::1]:{port}",
+        };
+
+        if (!string.IsNullOrWhiteSpace(publicBaseUrl)
+            && WebConsoleOptionsValidator.TryParseBaseUrl(publicBaseUrl!, out var baseUri)
+            && baseUri is not null)
+        {
+            _allowedOrigins.Add(baseUri.GetLeftPart(UriPartial.Authority));
+        }
+    }
+
+    public IReadOnlyCollection<string> AllowedOrigins => _allowedOrigins;
+
+    public bool RequiresSecureCookie
+        => _allowedOrigins.Any(origin => origin.StartsWith("https://", StringComparison.OrdinalIgnoreCase));
+
+    public bool IsAllowed(string? origin, string? secFetchSite)
+    {
+        if (string.Equals(secFetchSite, "cross-site", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        if (string.IsNullOrWhiteSpace(origin))
+            return true;
+
+        if (!Uri.TryCreate(origin, UriKind.Absolute, out var uri))
+            return false;
+
+        return _allowedOrigins.Contains(uri.GetLeftPart(UriPartial.Authority));
+    }
+}
+
+public static class WebConsoleTokens
+{
+    public static string CreateToken(int byteCount = 32)
+        => Convert.ToBase64String(RandomNumberGenerator.GetBytes(byteCount))
+            .TrimEnd('=')
+            .Replace('+', '-')
+            .Replace('/', '_');
+
+    public static bool FixedTimeEquals(string? left, string? right)
+    {
+        if (left is null || right is null)
+            return false;
+
+        var leftBytes = Encoding.UTF8.GetBytes(left);
+        var rightBytes = Encoding.UTF8.GetBytes(right);
+
+        return leftBytes.Length == rightBytes.Length
+               && CryptographicOperations.FixedTimeEquals(leftBytes, rightBytes);
+    }
+}
+
+public static class WebConsoleCookies
+{
+    public static string BuildSessionCookie(string sessionId, int maxAgeSeconds, bool secure)
+        => $"{WebConsoleDefaults.SessionCookieName}={sessionId}; Path=/; HttpOnly; SameSite=Strict; Max-Age={maxAgeSeconds}"
+           + (secure ? "; Secure" : string.Empty);
+
+    public static string BuildExpiredCookie(bool secure)
+        => $"{WebConsoleDefaults.SessionCookieName}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0"
+           + (secure ? "; Secure" : string.Empty);
+
+    public static string? ReadCookie(string? cookieHeader, string name)
+    {
+        if (string.IsNullOrWhiteSpace(cookieHeader))
+            return null;
+
+        var values = cookieHeader.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        foreach (var value in values)
+        {
+            var separator = value.IndexOf('=');
+            if (separator <= 0)
+                continue;
+
+            if (string.Equals(value[..separator], name, StringComparison.Ordinal))
+                return value[(separator + 1)..];
+        }
+
+        return null;
+    }
+}
