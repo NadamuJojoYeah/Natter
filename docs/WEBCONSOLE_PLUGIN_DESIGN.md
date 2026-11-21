@@ -219,16 +219,17 @@ admin.command
 - 不在日志/HTML/JSON 返回 secret；
 - 审计所有写操作和命令。
 
-### 6.2 角色
-
-P5 第一版可以只有：
+### 6.2 角色（已实现，2026-11-21）
 
 ```text
-viewer  -> read-only
-admin   -> config write / command
+viewer  -> read-only（快照/日志/审计/预览/文档读取 + 两个 /validate）
+admin   -> config write / command / rollback
 ```
 
-不要把角色系统做成复杂 RBAC；先两个角色够用。
+- 两个凭据：`WEBCONSOLE_TOKEN`（必需）与 `WEBCONSOLE_VIEWER_TOKEN`（可选，`viewerToken` 配置改为 `${secret:WEBCONSOLE_VIEWER_TOKEN}` 才启用）；
+- **服务端强制**：`WebConsoleAuthorization.Classify(method, path)` → `Read`/`Manage`，viewer 的 `Manage` 一律 `403 auth.forbidden`；UI 只做提示；
+- 同一密钥用于两个角色时 viewer 登录自动禁用（`viewer-token-duplicates-admin`）；
+- 不做复杂 RBAC：只有这两个角色，权限矩阵见使用说明 §4.2/§4.3。
 
 ### 6.3 反向代理
 
@@ -293,13 +294,14 @@ public interface IAdminDiagnostics
 >
 > 都不可用时区块返回 `available:false` + `gapCode`，不伪造数据。契约与降级表见 [WEBCONSOLE_HOST_API_GAP.md](WEBCONSOLE_HOST_API_GAP.md)。
 
-### 7.3 日志
+### 7.3 日志（已实现：tail + 过滤 + 分页 + 导出）
 
-- 只返回最近 N 行；
-- 先脱敏；
-- 不返回 prompt/memory 正文；
-- 不返回 secret/代理凭据；
-- 支持按 level/plugin 过滤。
+- 只返回最近 N 行（宿主 `AdminLogBuffer` 有界环形缓冲）；
+- 先脱敏（宿主 `IAdminRedactor` + 插件 `SanitizeText`）；
+- 不返回 prompt/memory 正文、不返回 secret/代理凭据；
+- 支持 `level`（最低级别）/`source`/`q`/`since`/`until` 过滤，`limit`+`offset` 分页（上限 500），`order=asc|desc`；
+- 导出 `format=text|jsonl`：附件下载、5000 行 / 1 MiB 字节上限、截断标记、脱敏同源；
+- 轮转不在插件内做：宿主缓冲自动淘汰，插件审计超 1 MiB 轮转为 `.1`，长期留存由运维采集。
 
 ---
 
@@ -531,7 +533,9 @@ DeactivateAsync
 - 配置读取/保存；
 - 命令执行；
 - 配置回滚；
-- 终端拒绝。
+- 终端拒绝；
+- 角色拒绝（`auth.role_denied`）、只读拒绝（`console.read_only`）；
+- 日志查看/导出（`logs.view`/`logs.export`，只记 limit/匹配数/行数，不记内容）。
 
 日志字段：
 
@@ -615,6 +619,14 @@ time, user, ip, action, target, result, duration
 - [x] `GET /api/commands` 状态、`POST /api/commands` 真实执行（exit/stdout/stderr/截断/超时）；
 - [x] 不拼 shell / 不启动子进程（宿主 runner 同样不启子进程）。
 
+### 角色与日志硬化（2026-11-21 追加）
+
+- [x] viewer/admin 双凭据，服务端强制（`403 auth.forbidden`），同密钥自动禁用 viewer；
+- [x] `/api/logs` 过滤（level/source/q/since/until）、分页（limit/offset/order）、`/api/logs/export`（text/jsonl，脱敏 + 有界）；
+- [x] 只读/关闭态统一错误码（`console.read_only` → `config.write_disabled`/`command.disabled`），`/validate` 在只读与 viewer 下可用；
+- [x] 备份路径/undo 文案（会话内快照上限与 TTL、宿主备份手动恢复）、viewer 禁用按钮与原因提示；
+- [x] ui-smoke 覆盖角色徽章、日志面板、导出 URL。
+
 ### Phase 4：可选 sidecar
 
 - ttyd/Wetty/SSH 集成；
@@ -633,6 +645,8 @@ Phase 1 状态见 §18；未达成项都对应 [缺口文档](WEBCONSOLE_HOST_AP
 - [x] 配置编辑 schema/diff/backup/lock（宿主 store + 插件 409/502 映射）
 - [x] 路径白名单（只读侧 + 文档 id 双白名单）
 - [x] 命令 allowlist（插件 + 宿主双重）
+- [x] viewer 只读 + admin 管理（服务端强制）
+- [x] 日志过滤/分页/导出（脱敏、有界）
 - [x] 审计；
 - [ ] file plugin 可加载（staging 脚本已提供，待真实宿主集成验证）
 - [x] ASP.NET Core ALC：Phase 1 不使用，改用 HttpListener（G7）
@@ -663,6 +677,8 @@ Phase 1 状态见 §18；未达成项都对应 [缺口文档](WEBCONSOLE_HOST_AP
 ---
 
 ## 18. Phase 1 实现映射（2026-11-18）
+
+> 角色/日志硬化映射（2026-11-21）：`WebConsoleAuthorization`（访问分类 + 统一错误码）、`WebConsoleCredentials`（viewer 凭据解析）、`WebConsoleLogsPolicy`（过滤/分页/导出边界）、`WebConsoleRequestHandler` 的 `logs`/`logs/export` 路由与角色闸门、`wwwroot` 角色徽章与日志面板。测试见 `tests/Natter.Plugin.WebConsole.Tests/Phase23/{RoleEnforcementTests,LogsFilterExportTests,LogsPolicyTests,ReadOnlyCodesTests}.cs`。
 
 > Phase 2/3 实现映射（2026-11-21）：`WebConsoleAdminSurface`（契约解析）、`WebConsoleAdminGateway`（读/校验/保存/undo/run/logs + 错误码映射 + 内存 undo）、`WebConsoleRequestHandler` 的 `/api/config/*` 与 `/api/commands*` 路由、`WebConsoleDiagnostics`（`host.admin_config`/`host.admin_command`/`host.logs` 检查）、`wwwroot` 配置编辑器与命令台。测试见 `tests/Natter.Plugin.WebConsole.Tests/Phase23`。
 

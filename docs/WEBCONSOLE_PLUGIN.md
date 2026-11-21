@@ -1,6 +1,6 @@
 # Natter WebConsole 插件使用说明
 
-> **状态**：Phase 1（只读诊断）+ Phase 2（配置编辑）+ Phase 3（受限命令）· 2026-11-21
+> **状态**：Phase 1（只读诊断）+ Phase 2（配置编辑）+ Phase 3（受限命令）+ 角色/日志硬化 · 2026-11-21
 > **定位**：面向运维的 loopback Web 控制台；不修改 core，不默认启用。
 > **设计**：[WEBCONSOLE_PLUGIN_DESIGN.md](WEBCONSOLE_PLUGIN_DESIGN.md)
 > **宿主契约缺口**：[WEBCONSOLE_HOST_API_GAP.md](WEBCONSOLE_HOST_API_GAP.md)
@@ -84,6 +84,7 @@ plugins/natter.plugin.webconsole/
   "port": 5090,
   "hostHealthUrl": "http://127.0.0.1:5099/health",
   "token": "${secret:WEBCONSOLE_TOKEN}",
+  "viewerToken": "",
   "readOnly": true,
   "allowConfigWrite": false,
   "allowCommandConsole": false,
@@ -116,6 +117,34 @@ plugins/natter.plugin.webconsole/
 - `admin.command.execute` → `IAdminCommandRunner`；
 
 本地/受信任插件默认自动授予；宿主用 `ForceDeniedPermissions` 可单项回收。缺哪个，对应面板就显示 gap 码，不会半死不活。
+
+### 4.2 会话角色（viewer / admin）
+
+| 角色 | 凭据 | 能做什么 |
+| --- | --- | --- |
+| `admin` | `WEBCONSOLE_TOKEN`（必需） | 全部：读、校验、保存/回滚配置、执行命令 |
+| `viewer` | `WEBCONSOLE_VIEWER_TOKEN`（可选） | 只读：快照/健康/插件/上游/profile/日志/审计/配置预览/文档读取/命令台状态 + 两个 `/validate` 非写检查 |
+
+- 开启 viewer：`"viewerToken": "${secret:WEBCONSOLE_VIEWER_TOKEN}"`，并在宿主 secret provider 提供该值；`""` 表示关闭（默认）；
+- **服务端强制**：`WebConsoleAuthorization` 对每个 `/api/*` 请求按 `method + path` 分类为 `Read`/`Manage`；viewer 的 `Manage` 请求一律 `403 auth.forbidden`（不是 UI 隐藏）；
+- 两个 token 解析到同一密钥时 viewer 登录**自动禁用**（启动 warning + `viewer-login` 检查 `degraded`），避免 viewer 凭据意外变成 admin；
+- viewer 仍受 CSRF 约束（`/validate` 也要 `X-WebConsole-CSRF`）；
+- UI：右上角徽章显示当前角色，viewer 的保存/回滚/运行按钮禁用并给出原因。
+
+### 4.3 只读与关闭态：统一错误码
+
+判定顺序（先命中先返回）：
+
+| # | 条件 | 状态 | 码 |
+| --- | --- | --- | --- |
+| 1 | 未登录 | 401 | `auth.required` |
+| 2 | CSRF 缺失/错误（非安全方法） | 403 | `csrf.invalid` |
+| 3 | viewer 访问管理端点 | 403 | `auth.forbidden` |
+| 4 | `readOnly=true` 且为管理端点 | 403 | `console.read_only` |
+| 5 | `allowConfigWrite=false` | 403 | `config.write_disabled` |
+| 6 | `allowCommandConsole=false` | 403 | `command.disabled` |
+
+`/api/config/{id}/validate` 与 `/api/commands/validate` 只做判定、不写不执行，因此在只读模式与 viewer 会话下仍可用（第 5 条对 command validate 仍生效）。方法不匹配仍返回 405 + `Allow` 头，不会被只读码覆盖。
 
 生成 token：
 
@@ -201,7 +230,8 @@ natter-admin.example.com {
 | GET | `/api/health` `/api/plugins` `/api/upstreams` `/api/profiles` | 单区块 |
 | GET | `/api/logs` | 宿主日志（缺口）+ 审计 |
 | GET | `/api/audit` | 审计 tail |
-| GET | `/api/logs` | 宿主日志 tail（`IAdminLogReader`）+ 插件审计 |
+| GET | `/api/logs` | 宿主日志 tail（`IAdminLogReader`）+ 插件审计，支持过滤/分页（见 §7.3） |
+| GET | `/api/logs/export` | 导出过滤后的日志（`format=text/jsonl`，脱敏、有界、附件下载） |
 | GET | `/api/config` | 插件配置脱敏预览 + 可编辑文档列表 + 宿主管理面可用性 |
 | GET | `/api/admin` | 管理面状态（config store / runner / log reader / allowlist / 超时） |
 | GET | `/api/admin/documents` | 可编辑文档列表（宿主 `ListAsync`，缺失则 501） |
@@ -227,10 +257,44 @@ natter-admin.example.com {
 | 400 | `config.invalid` | 插件策略或宿主 schema 拒绝；`detail.issues[]` 带 JSON Pointer |
 | 502 | `host.admin_config.failed` | 宿主备份/写入失败（`config.backup_failed` / `config.write_failed`） |
 | 501 | `host.admin_config.unavailable` | 没有 store（权限/宿主版本/管理面关闭） |
+| 403 | `auth.forbidden` | viewer 会话触发管理端点；用 admin token 重新登录 |
+| 403 | `console.read_only` | 控制台 `readOnly=true`；所有管理端点统一码 |
+| 400 | `logs.invalid_query` | 日志过滤参数非法（level/limit/offset/order/since/until/audit/q/source） |
+| 400 | `logs.invalid_format` | 导出格式不是 `text`/`jsonl` |
 | 403 | `command.not_allowed` | 插件或宿主 allowlist 拒绝 |
 | 409 | `command.busy` | 宿主正在执行另一条管理命令 |
 | 504 | `command.timeout` | 超时；`result` 仍带部分 stdout/stderr |
 | 502 | `host.admin_command.failed` | runner 抛异常（消息已脱敏） |
+
+### 7.3 日志过滤 / 分页 / 导出
+
+`GET /api/logs` 查询参数（全部可选，非法值 → `400 logs.invalid_query`）：
+
+| 参数 | 取值 | 说明 |
+| --- | --- | --- |
+| `limit` | 1..`min(maxLogLines, 500)` | 每页条数，默认 200 |
+| `offset` | 0..10000 | 分页偏移 |
+| `level` | `trace/debug/information/info/warning/warn/error/critical/fatal` | **最低**级别过滤 |
+| `source` | ≤128 字符 | 来源子串（大小写不敏感） |
+| `q` | ≤128 字符 | 消息/来源子串（大小写不敏感；控制字符拒绝） |
+| `since` / `until` | ISO-8601 | 时间窗（`since > until` 拒绝） |
+| `order` | `asc`/`desc` | 默认 `desc` |
+| `audit` | `true/false`/`1/0` | 是否附带插件审计（默认 true；`q` 同时过滤审计的 action/target） |
+
+响应：`{generatedAt, query{...levels}, total, returned, offset, limit, hasMore, nextOffset, hostLogs:{available,data,...}, audit}` —— `hostLogs` 保持原有 section 形状，`data` 只含当前页，分页信息在顶层。
+
+`GET /api/logs/export?format=text|jsonl&<同样的过滤参数>`：
+
+- 返回 `Content-Disposition: attachment; filename="webconsole-logs-<UTC>.(log|ndjson)"`；
+- 上限 **5000 行 / 1 MiB（UTF-8 字节）**，超限截断并置 `X-WebConsole-Export-Truncated: true`（文本尾部 `... (truncated)`）；
+- 内容来自已脱敏的宿主 tail（`IAdminRedactor` + 插件 `SanitizeText`），导出不额外读取文件；
+- 审计记录 `logs.export`（format/行数/是否截断，不记内容）。
+
+**日志轮转由运维负责**（插件不删除、不压缩、不轮转宿主日志）：
+
+- 宿主：`AdminOptions.MaxLogEntries`（默认 500）是有界环形缓冲，旧行自动淘汰；
+- 插件审计：`plugins/.../audit/webconsole-audit.jsonl` 超过 1 MiB 时轮转为 `.1`（只保留一份历史），目录 0700/文件 0600；
+- 需要长期留存时由运维侧做文件级采集/轮转（本仓库不在插件内实现）。
 
 ### 7.2 配置编辑语义
 
@@ -273,6 +337,9 @@ natter-admin.example.com {
 | 配置保存 501 | `host.admin_config.unavailable` | 检查 manifest 是否声明 `admin.config.write`、宿主是否关闭管理面 |
 | 命令执行 501 | `host.admin_command.unavailable` | 检查 `admin.command.execute` 权限 |
 | 配置保存 409 | `config.conflict` | 重新加载文档（新 ETag）再保存 |
+| 管理端点 403 | `auth.forbidden` | 用 admin token 登录（viewer 只读） |
+| 管理端点 403 | `console.read_only` | 关闭 `readOnly`（并确认 `allowConfigWrite`/`allowCommandConsole`） |
+| 日志 400 | `logs.invalid_query` | 按 §7.3 修正参数（level 词表、limit 上限、时间格式） |
 | 命令 504 | `command.timeout` | 调小 `commandTimeoutSeconds` 或换命令；部分输出仍会返回 |
 
 ---

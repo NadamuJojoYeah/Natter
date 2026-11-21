@@ -238,11 +238,13 @@ ValueTask<AdminCommandResult> RunAsync(string command, IReadOnlyList<string> arg
 
 ## 7. G8/G9：日志与脱敏（已接入）
 
-- `/api/logs`：宿主 `IAdminLogReader.ReadAsync(limit)` → `AdminLogBuffer`（有界环形缓冲，`level/category/message/timestamp/sequence`）。插件按 `maxLogLines` 夹取 limit，逐条 `SanitizeText` 后再返回；读取失败 → `available:false` + `host.logs.failed`，不会 500。
+- `/api/logs`：宿主 `IAdminLogReader.ReadAsync(limit)` → `AdminLogBuffer`（有界环形缓冲，`level/category/message/timestamp/sequence`）。插件按 `maxLogLines` 夹取 limit，逐条 `SanitizeText` 后返回；**过滤/分页/导出全部在插件侧完成**（`WebConsoleLogsPolicy`：level/source/q/since/until + limit/offset/order + `format=text|jsonl`，5000 行 / 1 MiB 上限），宿主契约无需扩展；读取失败 → `available:false` + `host.logs.failed`，不会 500。
 - `/api/audit`：插件自己的 JSONL 审计（`config.read/config.save/config.rollback/command.run/...`），字段 `time/user/ip/action/target/result/durationMs`。
 - 脱敏：宿主 `IAdminRedactor` 负责命令行输出；插件 `WebConsoleRedaction` 负责配置回显、日志行、审计 target 与错误消息（`sk-*`、`ak-*`、`Bearer`、敏感键名）。两者规则一致且有对拍测试。
 
-**双审计**：宿主 `JsonlAdminAuditSink` 记 `admin.config.save`/`admin.command.run`，插件记 `config.write`/`command.run`。两边都只记命令名/文档 id/字节数，不记内容。
+**双审计**：宿主 `JsonlAdminAuditSink` 记 `admin.config.save`/`admin.command.run`，插件记 `config.write`/`command.run`/`auth.role_denied`/`console.read_only`/`logs.export`。两边都只记命令名/文档 id/字节数/行数，不记内容。
+
+**轮转归属**：宿主缓冲按 `AdminOptions.MaxLogEntries` 自动淘汰；插件审计超过 1 MiB 轮转为 `.1`。长期留存/采集/轮转策略属于运维文档范围（本插件不实现文件轮转）。
 
 ## 8. 对验收的影响
 
@@ -267,6 +269,7 @@ ValueTask<AdminCommandResult> RunAsync(string command, IReadOnlyList<string> arg
 | 键 | 默认 | 作用 |
 | --- | --- | --- |
 | `commandTimeoutSeconds` | `10` | 插件侧命令预算（1–10，小于传输层 15s） |
+| `viewerToken` | `""` | 可选只读凭据；`${secret:WEBCONSOLE_VIEWER_TOKEN}` 时启用 viewer 登录 |
 | `permissions` | — | manifest 新增 `admin.read`、`admin.config.write`、`admin.command.execute`（权限缺失即回落 501） |
 
 ### 8.2 已修复问题（宿主侧）
