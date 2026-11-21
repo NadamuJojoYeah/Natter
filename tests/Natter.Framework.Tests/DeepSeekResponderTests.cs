@@ -215,6 +215,136 @@ public sealed class AiChatResponderTests
         Assert.Equal("AI is temporarily unavailable.", Assert.IsType<MessageSendCommand>(fallback).Payload.Content.Text);
     }
 
+    [Theory]
+    [InlineData("<response>hello</response>", "hello")]
+    [InlineData("  <response>\n hello \n</response>  ", "hello")]
+    [InlineData("<RESPONSE>Hello</Response>", "Hello")]
+    [InlineData("<response><response>hello</response></response>", "hello")]
+    [InlineData("<response>我可以帮你什么？ </response>", "我可以帮你什么？")]
+    [InlineData("<response>hello", "hello")]
+    [InlineData("hello</response>", "hello")]
+    [InlineData("plain answer", "plain answer")]
+    [InlineData("before <response>inside</response> after", "before <response>inside</response> after")]
+    public async Task Provider_response_wrapper_is_stripped_from_the_reply_boundaries(
+        string providerText,
+        string expected)
+    {
+        var chat = new FakeChatClient
+        {
+            ResponseFactory = _ => new ChatResponse(new ChatMessage(ChatRole.Assistant, providerText)),
+        };
+        var responder = Build(chat, maxHistoryMessages: 20);
+        var source = ChatTestData.Source();
+
+        var command = Assert.IsType<MessageSendCommand>(await responder.RespondAsync(ChatTestData.CreatedEvent(
+            source,
+            ChatTestData.Message(
+                source,
+                id: "m-wrap",
+                conversation: ChatTestData.Conversation("dm", ConversationKind.Direct),
+                text: "hi"),
+            "evt:wrap")));
+
+        Assert.Equal(expected, command.Payload.Content.Text);
+    }
+
+    [Fact]
+    public async Task Markdown_and_code_blocks_keep_response_tags_in_the_body()
+    {
+        const string body = "Use it like this:\n\n```html\n<response>example</response>\n```\n\nDone.";
+        var chat = new FakeChatClient
+        {
+            ResponseFactory = _ => new ChatResponse(new ChatMessage(ChatRole.Assistant, body)),
+        };
+        var responder = Build(chat, maxHistoryMessages: 20);
+        var source = ChatTestData.Source();
+
+        var command = Assert.IsType<MessageSendCommand>(await responder.RespondAsync(ChatTestData.CreatedEvent(
+            source,
+            ChatTestData.Message(source, id: "m-code", text: "format it"),
+            "evt:code")));
+
+        Assert.Equal(body, command.Payload.Content.Text);
+    }
+
+    [Fact]
+    public async Task Code_fence_at_the_start_is_not_treated_as_a_wrapper()
+    {
+        const string body = "```html\n<response>x</response>\n```\nplain text";
+        var chat = new FakeChatClient
+        {
+            ResponseFactory = _ => new ChatResponse(new ChatMessage(ChatRole.Assistant, body)),
+        };
+        var responder = Build(chat, maxHistoryMessages: 20);
+        var source = ChatTestData.Source();
+
+        var command = Assert.IsType<MessageSendCommand>(await responder.RespondAsync(ChatTestData.CreatedEvent(
+            source,
+            ChatTestData.Message(source, id: "m-fence", text: "show sample"),
+            "evt:fence")));
+
+        Assert.Equal(body, command.Payload.Content.Text);
+    }
+
+    [Fact]
+    public async Task Tag_only_output_falls_back_to_the_empty_response_text()
+    {
+        var chat = new FakeChatClient
+        {
+            ResponseFactory = _ => new ChatResponse(new ChatMessage(ChatRole.Assistant, "<response>   </response>")),
+        };
+        var responder = Build(chat, maxHistoryMessages: 20);
+        var source = ChatTestData.Source();
+
+        var command = Assert.IsType<MessageSendCommand>(await responder.RespondAsync(ChatTestData.CreatedEvent(
+            source,
+            ChatTestData.Message(source, id: "m-empty", text: "hi"),
+            "evt:empty")));
+
+        Assert.Equal("I could not produce a response.", command.Payload.Content.Text);
+    }
+
+    [Fact]
+    public async Task Cleaned_reply_is_what_gets_stored_in_history()
+    {
+        var chat = new FakeChatClient
+        {
+            ResponseFactory = _ => new ChatResponse(new ChatMessage(ChatRole.Assistant, "<response>clean</response>")),
+        };
+        var responder = Build(chat, maxHistoryMessages: 20);
+        var source = ChatTestData.Source();
+        var conversation = ChatTestData.Conversation("dm", ConversationKind.Direct);
+
+        await responder.RespondAsync(ChatTestData.CreatedEvent(
+            source, ChatTestData.Message(source, id: "m-h1", conversation: conversation, text: "one"), "evt:h1"));
+        await responder.RespondAsync(ChatTestData.CreatedEvent(
+            source, ChatTestData.Message(source, id: "m-h2", conversation: conversation, text: "two"), "evt:h2"));
+
+        var secondCall = chat.Calls[^1];
+        Assert.Equal("clean", secondCall[2].Text);
+        Assert.Equal("two", secondCall[^1].Text);
+    }
+
+    [Fact]
+    public async Task Clipped_detection_still_works_when_the_output_is_wrapped()
+    {
+        var calls = 0;
+        var chat = new FakeChatClient
+        {
+            AsyncResponseFactory = _ => Task.FromResult(++calls == 1
+                ? new ChatResponse(new ChatMessage(ChatRole.Assistant, "<response><response clipped></response>"))
+                : new ChatResponse(new ChatMessage(ChatRole.Assistant, "<response>complete answer</response>"))),
+        };
+        var responder = Build(chat, maxHistoryMessages: 20);
+        var source = ChatTestData.Source();
+
+        var command = Assert.IsType<MessageSendCommand>(await responder.RespondAsync(ChatTestData.CreatedEvent(
+            source, ChatTestData.Message(source, id: "m-clip-wrap", text: "hi"), "evt:clip-wrap")));
+
+        Assert.Equal("complete answer", command.Payload.Content.Text);
+        Assert.Equal(2, calls);
+    }
+
     private static (AiChatResponder Responder, FakeChatClient Chat, Source Source, TestClock Clock) CreateResponder(
         int maxHistoryMessages = 20)
     {

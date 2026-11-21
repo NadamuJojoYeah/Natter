@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.AI;
 using Natter.Application.Chat;
 using Natter.Chat;
@@ -218,11 +219,14 @@ public sealed class AiChatResponder : IChatResponder
                 return new GenerationResult(FallbackText());
             }
 
-            if (string.IsNullOrWhiteSpace(text))
+            // Provider wrapper tags are an output-boundary artifact; strip them only here, after
+            // clipped detection, so the clipped retry/fallback path keeps seeing the raw markers.
+            var cleaned = StripResponseEnvelope(text);
+            if (string.IsNullOrWhiteSpace(cleaned))
                 return new GenerationResult(
                     string.IsNullOrWhiteSpace(_options.EmptyResponseText) ? null : _options.EmptyResponseText);
 
-            return new GenerationResult(text);
+            return new GenerationResult(cleaned);
         }
         catch (Exception ex) when (ex is IAiProviderException provider)
         {
@@ -253,6 +257,39 @@ public sealed class AiChatResponder : IChatResponder
         var response = await _chatClient.GetResponseAsync(messages, options, cancellationToken)
             .ConfigureAwait(false);
         return response.Text?.Trim();
+    }
+
+    private static readonly Regex LeadingResponseTag = new(
+        @"^\s*</?response\s*>",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
+        TimeSpan.FromSeconds(1));
+
+    private static readonly Regex TrailingResponseTag = new(
+        @"</?response\s*>\s*$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
+        TimeSpan.FromSeconds(1));
+
+    /// <summary>
+    /// Strips provider wrapper tags (<c>&lt;response&gt;</c> / <c>&lt;/response&gt;</c>) from the
+    /// start and end of the model output only. Tags inside the body (code fences, inline HTML,
+    /// prose) are left untouched, and repeated/nested wrappers are unwrapped.
+    /// </summary>
+    internal static string StripResponseEnvelope(string? text)
+    {
+        if (string.IsNullOrEmpty(text))
+            return text ?? string.Empty;
+
+        var value = text;
+        for (var guard = 0; guard < 4; guard++)
+        {
+            var before = value;
+            value = LeadingResponseTag.Replace(value, string.Empty, 1);
+            value = TrailingResponseTag.Replace(value, string.Empty, 1);
+            if (string.Equals(before, value, StringComparison.Ordinal))
+                break;
+        }
+
+        return value.Trim();
     }
 
     private static bool IsClipped(string? text)
