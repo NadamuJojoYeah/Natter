@@ -87,6 +87,15 @@ docker compose logs -f natter
 - `/state` 命名卷（首次创建时继承镜像里 10001 的属主，因此不需要 root 预建）；
 - `HEALTHCHECK` 探 loopback `5099` 的 `/health`（**liveness**，不代表 Tier 1 profile 健康）。
 
+构建期会做 **插件/host 同源校验**（`--host-dir /out`）：
+
+- `scripts/stage-tier1-plugins.sh` 对每个插件 `lib/` 里与 host 同名的 `Natter.*.dll` 比 SHA-256；
+- 任一不一致 → 脚本 exit 8（`docker build` 直接失败），并在日志里逐行列出 `plugin / assembly / 两侧 sha` 与 `not deployed: ...`；
+- 之后还会断言 `staging-manifest.json` 的 `"hostParity": {"checked": true, ..., "mismatches": 0}`，双重保险；
+- 镜像里可用 `docker run --rm --entrypoint cat <image> /app/plugins/staging-manifest.json` 复核这次构建的 `hostParity.comparedFiles`。
+
+为什么必须校验：每个插件自带一份它链接的 host 程序集私有副本，**旧插件 lib + 新 host** 能编译通过，但运行时会 `MissingMethodException`（例如 `Natter.Chat.UpstreamHealth..ctor`），表现为 `/health` 返回 500。
+
 没有 compose 插件的主机（本机就是这种），用等价 `docker run` 验证：
 
 ```bash

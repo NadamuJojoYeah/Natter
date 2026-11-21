@@ -38,14 +38,22 @@ RUN dotnet publish src/Natter.Cli/Natter.Cli.csproj \
       -o /out \
       /p:UseAppHost=false
 
-# 2. Stage the business plugins. Fails the build when lib/<entry>.deps.json is missing, so an
-#    image can never ship a plugin the NPS loader cannot resolve.
+# 2. Stage the business plugins. Fails the build when:
+#      * lib/<entry>.deps.json is missing (the NPS loader could not resolve the plugin), or
+#      * a plugin's private copy of a Natter.*.dll differs from the host's copy in /out.
+#    `--host-dir /out` turns on the SHA-256 parity check from scripts/stage-tier1-plugins.sh
+#    (task-9): a plugin keeps its own copy of the host assemblies it links against, so an old
+#    plugin lib + a new host compiles fine but throws MissingMethodException at runtime — which
+#    surfaces as HTTP 500 on /health. The image must never ship that mix.
 RUN chmod +x scripts/stage-tier1-plugins.sh \
  && if [ "$TIER2" = "true" ]; then \
-      scripts/stage-tier1-plugins.sh -o /out/plugins -c "$CONFIGURATION" --tier2 --json; \
+      scripts/stage-tier1-plugins.sh -o /out/plugins -c "$CONFIGURATION" --tier2 --host-dir /out --json; \
     else \
-      scripts/stage-tier1-plugins.sh -o /out/plugins -c "$CONFIGURATION" --json; \
-    fi
+      scripts/stage-tier1-plugins.sh -o /out/plugins -c "$CONFIGURATION" --host-dir /out --json; \
+    fi \
+ && echo "== host parity ==" \
+ && grep -q '"hostParity": {"checked": true' /out/plugins/staging-manifest.json \
+ && grep -q '"mismatches": 0' /out/plugins/staging-manifest.json
 
 # 3. Fail-fast manifest check inside the build (no secrets, no network, no upstream started).
 RUN dotnet /out/natter.dll plugins inspect /out/plugins/discord \
