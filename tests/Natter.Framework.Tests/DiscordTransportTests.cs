@@ -308,6 +308,96 @@ public sealed class DiscordTransportTests
     }
 
     [Fact]
+    public async Task Disconnect_reason_survives_a_successful_reconnect()
+    {
+        var clock = new TestClock();
+        var source = Source.Create("discord", "discord", "bot");
+        using var transport = new DiscordFakeTransport();
+        using var upstream = new DiscordChatUpstream(source, transport, new DiscordOptions { SelfId = "bot" }, clock);
+        await upstream.ConnectAsync();
+
+        transport.Emit(new DiscordTransportEvent
+        {
+            Kind = DiscordTransportEventKind.Disconnected,
+            ErrorCode = "ws_closed",
+            ErrorMessage = "gateway closed (1006)",
+        });
+
+        Assert.Equal("ws_closed", upstream.LastDisconnectCode);
+        Assert.Equal("gateway closed (1006)", upstream.LastDisconnectError);
+        Assert.Equal("gateway closed (1006)", upstream.Health.LastError);
+        Assert.Equal("ws_closed", upstream.GetStatus().LastDisconnectCode);
+
+        // Reconnect: Ready must not wipe the disconnect cause (OBS-019).
+        transport.Emit(new DiscordTransportEvent
+        {
+            Kind = DiscordTransportEventKind.Ready,
+            SelfId = "bot",
+            GuildCount = 1,
+            ChannelCount = 2,
+        });
+
+        Assert.True(upstream.IsConnected);
+        Assert.Equal("gateway closed (1006)", upstream.LastDisconnectError);
+        // LastError keeps "current error" semantics (cleared on Ready); the disconnect reason is
+        // the dedicated persisted field.
+        Assert.Null(upstream.Health.LastError);
+        Assert.Equal("gateway closed (1006)", upstream.Health.LastDisconnectError);
+        Assert.Equal("ws_closed", upstream.Health.LastDisconnectCode);
+        Assert.NotNull(upstream.Health.LastDisconnectAt);
+        Assert.Equal(1, upstream.Health.ReconnectCount);
+    }
+
+    [Fact]
+    public async Task Disconnect_without_a_message_still_reports_a_stable_reason()
+    {
+        var clock = new TestClock();
+        var source = Source.Create("discord", "discord", "bot");
+        using var transport = new DiscordFakeTransport();
+        using var upstream = new DiscordChatUpstream(source, transport, new DiscordOptions { SelfId = "bot" }, clock);
+        await upstream.ConnectAsync();
+
+        transport.Emit(new DiscordTransportEvent { Kind = DiscordTransportEventKind.Disconnected });
+
+        Assert.Equal("transport_disconnected", upstream.LastDisconnectCode);
+        Assert.False(string.IsNullOrWhiteSpace(upstream.LastDisconnectError));
+        Assert.Equal(upstream.LastDisconnectError, upstream.Health.LastDisconnectError);
+        Assert.Equal("transport_disconnected", upstream.Health.LastDisconnectCode);
+        Assert.Null(upstream.Health.LastError);
+    }
+
+    [Fact]
+    public async Task A_later_disconnect_overwrites_the_previous_reason()
+    {
+        var clock = new TestClock();
+        var source = Source.Create("discord", "discord", "bot");
+        using var transport = new DiscordFakeTransport();
+        using var upstream = new DiscordChatUpstream(source, transport, new DiscordOptions { SelfId = "bot" }, clock);
+        await upstream.ConnectAsync();
+
+        transport.Emit(new DiscordTransportEvent
+        {
+            Kind = DiscordTransportEventKind.Disconnected,
+            ErrorCode = "ws_closed",
+            ErrorMessage = "first",
+        });
+        transport.Emit(new DiscordTransportEvent
+        {
+            Kind = DiscordTransportEventKind.Disconnected,
+            ErrorCode = "heartbeat_timeout",
+            ErrorMessage = "second",
+        });
+
+        Assert.Equal("heartbeat_timeout", upstream.LastDisconnectCode);
+        Assert.Equal("second", upstream.LastDisconnectError);
+        Assert.Equal("second", upstream.Health.LastDisconnectError);
+        Assert.Equal("heartbeat_timeout", upstream.Health.LastDisconnectCode);
+        // A new disconnect message still updates the current error; Ready is what clears it.
+        Assert.Equal("second", upstream.Health.LastError);
+        Assert.Equal(2, upstream.Health.ReconnectCount);
+    }
+
+    [Fact]
     public async Task Status_and_status_command_never_expose_the_token()
     {
         var clock = new TestClock();

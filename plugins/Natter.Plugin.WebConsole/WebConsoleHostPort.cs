@@ -109,7 +109,9 @@ public sealed record WebConsoleUpstream(
     int ReconnectCount,
     string? LastError,
     int SendFailures,
-    string? LastSendError);
+    string? LastSendError,
+    string? LastDisconnectError = null,
+    string? LastDisconnectCode = null);
 
 public sealed record WebConsolePluginFailure(string Id, string State, string Phase, string Code, string Message);
 
@@ -415,7 +417,9 @@ public sealed class HealthEndpointHostPort : IWebConsoleHostPort, IDisposable
                 ReadInt32(upstream, "reconnectCount"),
                 ReadString(upstream, "lastError"),
                 ReadInt32(upstream, "sendFailures"),
-                ReadString(upstream, "lastSendError")));
+                ReadString(upstream, "lastSendError"),
+                ReadString(upstream, "lastDisconnectError"),
+                ReadString(upstream, "lastDisconnectCode")));
         }
 
         return upstreams;

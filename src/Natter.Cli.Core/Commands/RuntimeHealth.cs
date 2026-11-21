@@ -60,7 +60,9 @@ public static class RuntimeHealth
                         value.ReconnectCount,
                         value.LastError,
                         value.SendFailures,
-                        value.LastSendError);
+                        value.LastSendError,
+                        value.LastDisconnectError is null ? null : Sanitize(value.LastDisconnectError),
+                        value.LastDisconnectCode);
                 }
                 return new RuntimeHealthUpstream(upstream.Source.Key, upstream.IsConnected);
             })
@@ -114,7 +116,9 @@ public sealed record RuntimeHealthUpstream(
     int ReconnectCount = 0,
     string? LastError = null,
     int SendFailures = 0,
-    string? LastSendError = null);
+    string? LastSendError = null,
+    string? LastDisconnectError = null,
+    string? LastDisconnectCode = null);
 
 public sealed record RuntimeHealthProvider(string Id, bool Available, string Profile, int SupportTier);
 

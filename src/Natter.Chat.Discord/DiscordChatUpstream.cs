@@ -61,6 +61,12 @@ public sealed class DiscordChatUpstream : IChatUpstream, IChatUpstreamHealth, ID
 
     public string? LastError { get; private set; }
 
+    /// <summary>OBS-019: reason of the most recent disconnect, kept across a successful reconnect.</summary>
+    public string? LastDisconnectError { get; private set; }
+
+    /// <summary>OBS-019: stable code of the most recent disconnect (transport code or fallback).</summary>
+    public string? LastDisconnectCode { get; private set; }
+
     public int? GuildCount { get; private set; }
 
     public int? ChannelCount { get; private set; }
@@ -163,7 +169,9 @@ public sealed class DiscordChatUpstream : IChatUpstream, IChatUpstreamHealth, ID
             _reconnectCount,
             LastError,
             _sendFailures,
-            _lastSendError);
+            _lastSendError,
+            LastDisconnectError,
+            LastDisconnectCode);
 
     public DiscordStatusSnapshot GetStatus()
         => new(
@@ -184,7 +192,9 @@ public sealed class DiscordChatUpstream : IChatUpstream, IChatUpstreamHealth, ID
             _lastEventAt,
             _lastConnectedAt,
             _lastDisconnectAt,
-            _reconnectCount);
+            _reconnectCount,
+            LastDisconnectError,
+            LastDisconnectCode);
 
     public void Dispose()
     {
@@ -374,6 +384,16 @@ public sealed class DiscordChatUpstream : IChatUpstream, IChatUpstreamHealth, ID
             case DiscordTransportEventKind.Disconnected:
                 lock (_gate)
                     _connected = false;
+                // OBS-019: disconnect cause is persisted (and never cleared by Ready), so /health
+                // can explain a reconnect instead of reporting "disconnected without reason".
+                LastDisconnectCode = string.IsNullOrWhiteSpace(transportEvent.ErrorCode)
+                    ? "transport_disconnected"
+                    : transportEvent.ErrorCode;
+                LastDisconnectError = string.IsNullOrWhiteSpace(transportEvent.ErrorMessage)
+                    ? "Discord transport disconnected."
+                    : transportEvent.ErrorMessage;
+                // LastError keeps its "current/latest error" semantics; the disconnect reason lives
+                // in LastDisconnectError/LastDisconnectCode and survives a reconnect (OBS-019).
                 if (!string.IsNullOrWhiteSpace(transportEvent.ErrorMessage))
                     LastError = transportEvent.ErrorMessage;
                 PublishStatus(UpstreamState.Disconnected, transportEvent.ErrorMessage);
@@ -598,4 +618,6 @@ public sealed record DiscordStatusSnapshot(
     DateTimeOffset? LastEventAt = null,
     DateTimeOffset? LastConnectedAt = null,
     DateTimeOffset? LastDisconnectAt = null,
-    int ReconnectCount = 0);
+    int ReconnectCount = 0,
+    string? LastDisconnectError = null,
+    string? LastDisconnectCode = null);

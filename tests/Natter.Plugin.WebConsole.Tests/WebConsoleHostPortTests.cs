@@ -23,7 +23,11 @@ public sealed class WebConsoleHostPortTests
               "source": "discord:bot",
               "connected": true,
               "lastConnectedAt": "2026-11-18T01:59:59Z",
+              "lastDisconnectAt": "2026-11-18T01:59:50Z",
               "reconnectCount": 1,
+              "lastError": null,
+              "lastDisconnectError": "gateway closed (1006)",
+              "lastDisconnectCode": "ws_closed",
               "sendFailures": 0
             }
           ],
@@ -58,6 +62,9 @@ public sealed class WebConsoleHostPortTests
         Assert.True(snapshot.Upstreams.Available);
         Assert.Equal("discord:bot", snapshot.Upstreams.Data![0].Source);
         Assert.True(snapshot.Upstreams.Data[0].Connected);
+        Assert.Null(snapshot.Upstreams.Data[0].LastError);
+        Assert.Equal("gateway closed (1006)", snapshot.Upstreams.Data[0].LastDisconnectError);
+        Assert.Equal("ws_closed", snapshot.Upstreams.Data[0].LastDisconnectCode);
 
         Assert.True(snapshot.Profiles.Available);
         Assert.Equal("deepseek", snapshot.Profiles.Data![0].Provider);

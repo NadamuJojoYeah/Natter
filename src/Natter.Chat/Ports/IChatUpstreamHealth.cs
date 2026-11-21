@@ -10,7 +10,9 @@ public sealed record UpstreamHealth(
     int ReconnectCount,
     string? LastError,
     int SendFailures = 0,
-    string? LastSendError = null);
+    string? LastSendError = null,
+    string? LastDisconnectError = null,
+    string? LastDisconnectCode = null);
 
 public interface IChatUpstreamHealth
 {
