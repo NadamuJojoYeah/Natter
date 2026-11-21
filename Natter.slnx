@@ -21,8 +21,10 @@
   <Project Path="samples/Natter.Sample.Plugin.Memory/Natter.Sample.Plugin.Memory.csproj" />
   <Project Path="samples/Natter.Sample.Plugin.Discord/Natter.Sample.Plugin.Discord.csproj" />
   <Project Path="samples/Natter.Sample.Plugin.DingTalk/Natter.Sample.Plugin.DingTalk.csproj" />
+  <Project Path="plugins/Natter.Plugin.PromptLibrary/Natter.Plugin.PromptLibrary.csproj" />
   <Project Path="plugins/Natter.Plugin.WebConsole/Natter.Plugin.WebConsole.csproj" />
   <Project Path="tests/Natter.Framework.Tests/Natter.Framework.Tests.csproj" />
   <Project Path="tests/Natter.Live.Tests/Natter.Live.Tests.csproj" />
+  <Project Path="tests/Natter.Plugin.PromptLibrary.Tests/Natter.Plugin.PromptLibrary.Tests.csproj" />
   <Project Path="tests/Natter.Plugin.WebConsole.Tests/Natter.Plugin.WebConsole.Tests.csproj" />
 </Solution>

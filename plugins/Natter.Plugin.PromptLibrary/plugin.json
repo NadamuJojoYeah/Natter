@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "id": "natter.prompt.library",
+  "name": "Natter Prompt Library",
+  "version": "0.1.0",
+  "kind": "feature",
+  "hostApi": ">=0.1.0 <1.0.0",
+  "entry": {
+    "assembly": "lib/Natter.Plugin.PromptLibrary.dll",
+    "type": "Natter.Plugin.PromptLibrary.PromptLibraryPlugin"
+  },
+  "description": "File/inline prompt fragments and inheritable presets for the host Prompt Compiler. Disable a fragment without deleting its source; the host mandatory safety fragment always wins.",
+  "author": "Natter",
+  "license": "MIT",
+  "homepage": "https://github.com/natter-framework/natter",
+  "permissions": [
+    "filesystem.read",
+    "cli.commands"
+  ],
+  "configSchema": "config.schema.json",
+  "contributions": [
+    {
+      "type": "prompt.provider",
+      "id": "default"
+    },
+    {
+      "type": "cli.command",
+      "id": "prompt.explain"
+    }
+  ],
+  "platforms": [
+    "windows",
+    "linux",
+    "macos"
+  ],
+  "capabilities": [
+    "prompt.library",
+    "prompt.explain"
+  ]
+}

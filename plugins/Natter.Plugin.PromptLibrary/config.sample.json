@@ -1,0 +1,64 @@
+{
+  "enabled": true,
+  "preset": "tier1-default",
+  "locale": "zh-CN",
+  "maxCharacters": 12000,
+  "maxFragmentCharacters": 8000,
+  "missingVariables": "warn",
+  "promptDirectory": "prompts",
+  "disabledFragments": [],
+  "fragments": [
+    {
+      "id": "persona",
+      "file": "persona.md",
+      "order": 10,
+      "version": "1",
+      "tags": ["persona"]
+    },
+    {
+      "id": "legacy-style",
+      "file": "legacy-style.md",
+      "order": 15,
+      "enabledByDefault": false,
+      "version": "1",
+      "tags": ["legacy", "style"]
+    },
+    {
+      "id": "channel-rules",
+      "file": "channel-rules.md",
+      "order": 30,
+      "version": "1",
+      "tags": ["channel"]
+    },
+    {
+      "id": "profile-note",
+      "text": "当前平台：{{platform}}；会话类型：{{conversation.kind}}。",
+      "order": 40,
+      "version": "1",
+      "tags": ["context"]
+    }
+  ],
+  "presets": [
+    {
+      "id": "base",
+      "version": "2026-11-21",
+      "locale": "zh-CN",
+      "sections": [
+        { "fragmentId": "persona", "order": 10 },
+        { "fragmentId": "channel-rules", "order": 30 }
+      ]
+    },
+    {
+      "id": "tier1-default",
+      "version": "2026-11-21",
+      "extends": "base",
+      "locale": "zh-CN",
+      "variables": { "locale": "zh-CN" },
+      "sections": [
+        { "fragmentId": "profile-note", "order": 40 },
+        { "fragmentId": "legacy-style", "enabled": false, "reason": "too verbose" }
+      ]
+    }
+  ],
+  "presetFile": "presets.extra.json"
+}

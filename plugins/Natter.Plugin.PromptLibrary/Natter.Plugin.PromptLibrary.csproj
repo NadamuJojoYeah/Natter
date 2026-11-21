@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Natter.Plugin.PromptLibrary</RootNamespace>
+    <AssemblyName>Natter.Plugin.PromptLibrary</AssemblyName>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <IsPackable>false</IsPackable>
+    <Description>Natter Prompt Library plugin: file/inline prompt fragments, inheritable presets, enable/disable and versioned prompt.provider contributions compiled by the host Prompt Compiler.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/Natter.Plugin.Abstractions/Natter.Plugin.Abstractions.csproj" />
+    <ProjectReference Include="../../src/Natter.Cli.Abstractions/Natter.Cli.Abstractions.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="plugin.json" LogicalName="Natter.Plugin.PromptLibrary.plugin.json" />
+    <None Update="plugin.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="config.schema.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="config.sample.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="presets.extra.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="prompts/**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>
