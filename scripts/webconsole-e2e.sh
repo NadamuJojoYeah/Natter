@@ -235,4 +235,4 @@ json_check "$WORK/status.json" 'payload["server"]["state"] == "external"'
 echo
 echo "PASS: WebConsole E2E matrix"
 echo "  console=http://127.0.0.1:$CONSOLE_PORT health=http://127.0.0.1:$HEALTH_PORT/health"
-echo "  audit=$(find "$WORK/plugins/natter.plugin.webconsole/audit" -type f -maxdepth 1 | head -1)"
+echo "  audit=$(find "$WORK/state/webconsole/audit" -type f -maxdepth 1 | head -1)"

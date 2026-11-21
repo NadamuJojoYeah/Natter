@@ -109,6 +109,135 @@ public sealed class WebConsoleRuntimeTests
         }
     }
 
+    [Fact]
+    public async Task Audit_log_uses_the_state_root_when_NATTER_STATE_DIR_is_set()
+    {
+        var port = FreePort();
+        var directory = CreateDirectory();
+        var stateRoot = Path.Combine(directory, "state");
+        var log = new NullPluginLog();
+
+        try
+        {
+            var options = new WebConsoleOptions { Port = port };
+            var runtime = new WebConsoleRuntime(
+                Identity(directory),
+                options,
+                WebConsoleConfig.Build(JsonSerializer.SerializeToElement(new { }), "test", null, options),
+                log,
+                TimeProvider.System,
+                () => stateRoot);
+
+            await using (runtime)
+            {
+                await runtime.StartAsync(new FakePluginSecrets(WebConsoleHarness.Token), new FakeServiceProvider());
+
+                var expected = Path.Combine(stateRoot, "webconsole", "audit");
+                Assert.Equal(expected, runtime.AuditLocation!.Directory);
+                Assert.Equal(WebConsoleAuditRoot.StateDirectory, runtime.AuditLocation.Root);
+                Assert.Equal(Path.Combine(expected, WebConsoleDefaults.AuditFileName), runtime.AuditPath);
+                Assert.True(File.Exists(runtime.AuditPath));
+                Assert.DoesNotContain(log.Messages, message => message.Contains("NATTER_STATE_DIR is not set", StringComparison.Ordinal));
+
+                var status = runtime.DescribeStatus(json: true);
+                Assert.Contains("\"root\":\"state-directory\"", status);
+                Assert.Contains("root=state-directory", runtime.DescribeStatus(json: false));
+
+                if (!OperatingSystem.IsWindows())
+                {
+                    Assert.Equal(
+                        UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute,
+                        File.GetUnixFileMode(expected));
+                }
+            }
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Audit_log_falls_back_to_the_plugin_directory_with_a_warning()
+    {
+        var port = FreePort();
+        var directory = CreateDirectory();
+        var log = new NullPluginLog();
+
+        try
+        {
+            var options = new WebConsoleOptions { Port = port };
+            var runtime = new WebConsoleRuntime(
+                Identity(directory),
+                options,
+                WebConsoleConfig.Build(JsonSerializer.SerializeToElement(new { }), "test", null, options),
+                log,
+                TimeProvider.System,
+                () => null);
+
+            await using (runtime)
+            {
+                await runtime.StartAsync(new FakePluginSecrets(WebConsoleHarness.Token), new FakeServiceProvider());
+
+                Assert.Equal(WebConsoleAuditRoot.PluginDirectory, runtime.AuditLocation!.Root);
+                Assert.Equal(Path.Combine(directory, "audit"), runtime.AuditLocation.Directory);
+                Assert.Contains(log.Messages, message => message.Contains("NATTER_STATE_DIR is not set", StringComparison.Ordinal));
+                Assert.Contains("\"root\":\"plugin-directory\"", runtime.DescribeStatus(json: true));
+            }
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Unwritable_audit_root_fails_with_an_actionable_startup_code()
+    {
+        if (OperatingSystem.IsWindows() || Environment.UserName == "root")
+            return;
+
+        var port = FreePort();
+        var directory = CreateDirectory();
+        var stateRoot = Path.Combine(directory, "state");
+        Directory.CreateDirectory(stateRoot);
+        File.SetUnixFileMode(stateRoot, UnixFileMode.None);
+
+        try
+        {
+            var options = new WebConsoleOptions { Port = port };
+            var runtime = new WebConsoleRuntime(
+                Identity(directory),
+                options,
+                WebConsoleConfig.Build(JsonSerializer.SerializeToElement(new { }), "test", null, options),
+                new NullPluginLog(),
+                TimeProvider.System,
+                () => stateRoot);
+
+            var exception = await Assert.ThrowsAsync<WebConsoleStartupException>(
+                () => runtime.StartAsync(new FakePluginSecrets(WebConsoleHarness.Token), new FakeServiceProvider()));
+
+            Assert.Equal("webconsole.audit-unwritable", exception.Code);
+            Assert.Contains("NATTER_STATE_DIR", exception.Message, StringComparison.Ordinal);
+            Assert.Contains("/var/lib/natter", exception.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.SetUnixFileMode(stateRoot, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    private static WebConsoleIdentity Identity(string directory) => new(
+        "natter.plugin.webconsole",
+        "Natter WebConsole",
+        "0.1.0",
+        "tool",
+        "0.1.0",
+        "Natter.Plugin.WebConsole",
+        directory,
+        Path.Combine(directory, "plugin.json"));
+
     [Theory]
     [InlineData("127.0.0.1", 5090, "http://127.0.0.1:5090")]
     [InlineData("::1", 5090, "http://[::1]:5090")]
