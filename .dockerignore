@@ -1,0 +1,11 @@
+# Docker 构建上下文收敛：只保留构建 CLI 发布产物需要的源码。
+.git
+.github
+artifacts/
+docs/
+tests/
+**/bin/
+**/obj/
+**/*.apk
+**/*.aab
+TestResults/
