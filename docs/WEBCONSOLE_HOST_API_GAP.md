@@ -1,8 +1,8 @@
 # Natter WebConsole 宿主契约缺口与适配方案
 
-> **状态**：Living document · 随实现更新  
-> **日期**：2026-11-18  
-> **关联**：[WebConsole 插件设计](WEBCONSOLE_PLUGIN_DESIGN.md)、[NPS v1 规范](PLUGIN_SPEC.md)、[Harness 架构](HARNESS_ARCHITECTURE.md)、[运维手册](OPERATIONS_RUNBOOK.md)  
+> **状态**：Living document · G4/G5/G6/G8 已由宿主实现并接入插件（2026-11-21）
+> **日期**：2026-11-18（初版） · 2026-11-21（宿主契约落地与插件接入）
+> **关联**：[WebConsole 插件设计](WEBCONSOLE_PLUGIN_DESIGN.md)、[NPS v1 规范](PLUGIN_SPEC.md)、[Harness 架构](HARNESS_ARCHITECTURE.md)、[运维手册](OPERATIONS_RUNBOOK.md)
 > **约束**：本文件记录宿主（`src/`）**尚不存在**的接口与模型，以及插件侧的临时适配。按项目约束，WebConsole 实现**不修改主项目**来补齐这些契约；先文档化，再走独立提案。
 
 ---
@@ -14,12 +14,12 @@
 | G1 | manifest `kind: "admin"` | `PluginKind` 仅 `transport/feature/tool/memory`，manifest 校验拒绝其他值 | 无 admin kind | 用 `kind: "tool"` 发布，语义在 README/manifest description 中说明 |
 | G2 | contribution `admin.ui` / `admin.api` / `admin.command` | `PluginContributionTypes` 与 manifest 校验只认 8 种 v1 类型 | 无管理面贡献点 | 不声明管理贡献；在 `ActivateAsync` 启动 loopback 服务，CLI 只贡献 `cli.command` |
 | G3 | `IAdminDiagnostics` / `AdminSnapshot` / `AdminLogEntry` | 不存在 | 插件拿不到宿主聚合快照 | 插件内定义 `IWebConsoleHostPort`，数据源走已存在的 `serve --health-port` `/health` |
-| G4 | `IPluginRuntimeDiagnostics` 桥接 | 接口存在，宿主 DI 已注册；**未注入插件 provider** | 插件无法读取 plugin graph/contributions/permissions | 插件 provider 里 `GetService<IPluginRuntimeDiagnostics>()`，为空则 `/plugins` 降级为 health 里的计数/失败项 |
-| G5 | `IAdminConfigStore` | 不存在 | 配置编辑无路径白名单、schema/diff/backup/lock/ETag | 插件侧校验/ETag/diff 已就绪（`validate` 端点）；写入仍 `501 host.admin_config.unavailable` |
-| G6 | `IAdminCommandRunner` | 不存在；CLI 无执行治理权限词 | 受限命令终端无法安全执行 | 插件侧 allowlist/参数/输出策略已就绪（`validate` 端点）；执行仍 `501 host.admin_command.unavailable` |
+| G4 | `IPluginRuntimeDiagnostics` 桥接 | **已实现**：`BindAdminServices` 在 `admin.read` 授予时注入 | — | `/plugins` 自动升级为 plugin graph/contributions/permissions |
+| G5 | `IAdminConfigStore` | **已实现**（`Natter.Application.Admin` + `HostAdminConfigStore`） | — | 插件适配为 `WebConsoleAdminGateway`：真实读/校验/保存、409 冲突、409 锁、备份路径、重启提示；`rollback` 走插件内存 undo |
+| G6 | `IAdminCommandRunner` | **已实现**（`CliAdminCommandRunner`，`admin.command.execute`） | — | 插件转发到 runner，映射 400/403/409/504/502，输出二次脱敏与 64 KiB 预算 |
 | G7 | ASP.NET Core 宿主管线 | host `runtimeconfig` 只有 `Microsoft.NETCore.App`；`PluginLoadContext` 不共享 `Microsoft.AspNetCore.*` | Kestrel/ASP.NET Core 无法从插件 ALC 加载 | Phase 1 用 BCL `HttpListener`（`WebConsoleServer`），不加 `FrameworkReference` |
-| G8 | 宿主日志 tail API | `IPluginLog` 只写；无读取端口 | `/logs` 无法取宿主日志 | `/logs` 返回 `unavailable`；`/api/audit` 返回插件审计记录 |
-| G9 | 统一脱敏服务 | `RuntimeHealth.Sanitize` 是 CLI 内部静态方法，非公开契约 | 插件不能复用宿主脱敏 | 插件内 `WebConsoleRedaction`，规则与宿主保持一致并单测 |
+| G8 | 宿主日志 tail API | **已实现**（`IAdminLogReader` + `AdminLogBuffer`） | — | `/api/logs` 返回真实宿主日志 tail（脱敏、有界），仍保留 `/api/audit` |
+| G9 | 统一脱敏服务 | **已实现**（`IAdminRedactor`，`AdminRedactor.Default`） | — | 插件仍保留 `WebConsoleRedaction` 作为本地兜底，输出与配置回显双重脱敏 |
 | G10 | CLI 子进程执行治理 | 无 `process.exec` 权限词、无审计桥 | 不能用子进程兜底命令终端 | 明确不做子进程兜底；等 `IAdminCommandRunner` |
 
 **一句话**：Phase 1 只依赖**已经存在**的 `serve --health-port` `/health` 和插件自身上下文；其余缺口全部显式降级并在这里登记，不碰 `src/`。
@@ -48,7 +48,7 @@
 
 ## 2. G3/G4：诊断快照与插件运行视图
 
-### 2.1 提议的宿主契约（未实现）
+### 2.1 早先提议的聚合契约（`IAdminDiagnostics`，仍未实现，已被满足需求取代）
 
 ```csharp
 namespace Natter.Application.Admin; // 提议命名空间，当前不存在
@@ -109,7 +109,7 @@ public interface IWebConsoleHostPort
 
 未来宿主实现 `IAdminDiagnostics` 后，只需在插件 provider 注册该服务，再增加一个 `AdminDiagnosticsHostPort` 适配器；**服务器、UI、测试都不用改**。
 
-### 2.3 G4 的最小宿主改动建议（一行桥接）
+### 2.3 G4 的宿主桥接（已实现）
 
 `NpsPluginRuntime.BuildPluginProvider` 增加：
 
@@ -117,7 +117,7 @@ public interface IWebConsoleHostPort
 services.AddSingleton(_hostProvider.GetRequiredService<IPluginRuntimeDiagnostics>());
 ```
 
-这不会扩大插件能力面：`IPluginRuntimeDiagnostics` 本身就是只读诊断契约，且已在宿主 DI 注册。当前实现不修改宿主，仅在插件侧做空值降级。
+2026-11-21 落地形态（`NpsPluginRuntime.BindAdminServices`）：授予 `admin.read` 时注册 `IPluginRuntimeDiagnostics`（+ `IAdminLogReader`），不暴露根 `IServiceProvider`；未授予则该服务不存在，插件自动回落 health 计数与日志缺口。
 
 ---
 
@@ -145,97 +145,66 @@ services.AddSingleton(_hostProvider.GetRequiredService<IPluginRuntimeDiagnostics
 
 ---
 
-## 4. G5：配置编辑
+## 4. G5：配置编辑（已接入）
 
-设计要求的保存链路是：
+保存链路（宿主实现，插件只做 HTTP 适配）：
 
 ```text
-read → edit → validate schema → diff → backup → lock → write → reload/restart hint
+read → validate(content+schema) → diff → lock → backup → atomic replace → reload/restart hint
 ```
 
-宿主目前没有暴露：
+宿主契约（`src/Natter.Application/Admin/AdminContracts.cs`，程序集 `Natter.Application` 属于 `PluginContractAssemblies` 共享集，插件侧类型标识一致）：
 
-- 可编辑文档 ID（`profiles` / `plugin:<id>`）到真实路径的映射；
-- schema 校验入口（`NpsPluginConfigLoader` 是 Infrastructure internal）；
-- 备份目录、写锁、ETag/版本；
-- 热重载/重启提示。
+```csharp
+ValueTask<IReadOnlyList<AdminConfigDocumentInfo>> ListAsync(ct);   // 附加能力，插件不依赖
+ValueTask<AdminConfigReadResult> ReadAsync(string id, ct);          // Available=false ⇒ store 不可用/拒绝
+ValueTask<AdminConfigValidation> ValidateAsync(string id, string content, ct);
+ValueTask<AdminConfigSaveResult> SaveAsync(string id, string content, string? etag, ct);
+```
 
-插件**不会**自行猜测 `config/`、`profiles.json` 路径，也不做任意文件读写。Phase 2 在 `IAdminConfigStore` 注入前：
+关键语义（插件依赖这些，改动需同步本文）：
 
-- `POST /api/config/{id}` → `501 admin_api_unavailable`；
-- `/api/config` 仅返回本插件配置的脱敏预览；
-- `allowConfigWrite=true` 只是“允许未来写入”，不会绕过端口探测。
+| 语义 | 宿主行为 | 插件映射 |
+| --- | --- | --- |
+| ETag 口径 | `AdminETag.Compute` = `sha256:` + 小写 hex(SHA256(UTF-8 原文)) | 与 `WebConsoleConfigEditPolicy.ComputeETag` **逐字节一致**（对拍测试 `AdminContractParityTests`） |
+| 陈旧 ETag | 不抛异常，返回 `Saved=false` + `Code=config.etag_mismatch` + `ConflictETag` | `409 config.conflict`，`detail.conflictETag` 供 UI 刷新 |
+| 创建文档 | `etag=null` 且文档不存在才允许；否则 `config.etag_mismatch` | 同上（409） |
+| 写锁 | 每文档 `SemaphoreSlim`，超时 `config.locked` | `409 config.locked` |
+| 备份 | `config/.backup/<UTC时间戳>/<file>`，0600/0700；失败则 `config.backup_failed` 且不写 | `502 host.admin_config.failed`，成功时把 `backupPath` 透出 |
+| 原子替换 | 临时文件 + `File.Move(overwrite:true)`，保留原权限 | 无（宿主保证） |
+| 符号链接 | 拒绝读写（`config.symlink_not_allowed`） | `409 config.symlink` |
+| 文档 id | 仅 `profiles`、`plugin:<pluginId>`；拒绝 `..`/分隔符/secret 文件名 | 插件先跑同一白名单（`400 config.id_invalid`），双保险 |
+| 重载提示 | `profiles → RestartHost`；`plugin:<id> → RestartPlugin` | 响应 `reloadHint`/`restartRequired`，UI 明确“需重启宿主” |
 
-提议契约为设计文档 §8.3 的 `IAdminConfigStore`，补充一条：返回的 `AdminConfigDocument` 必须带 `Etag` 与 `LastModified`，保存必须原子替换（`File.Move(overwrite: true)`）。
+**回滚能力边界**：宿主未提供 backup 列表/回读 API（`SaveAsync` 只返回本次备份路径），因此插件的“回滚”是**内存 undo**：保存前读到的原文 + ETag 留在会话内存（每文档 ≤8 条、全局 ≤32 条、30 分钟 TTL），`POST /api/config/{id}/rollback` 用它重新走一次 `SaveAsync`；宿主备份路径在 UI 展示，供运维手动恢复。重启插件后 undo 失效属预期。
 
-### 4.1 插件侧已就绪（不依赖宿主）
+写入路径仍只有一条：插件**从不直接读写配置文件**，全部经 `IAdminConfigStore`。
 
-`WebConsoleConfigEditPolicy` 是纯函数，不读写文件：
+## 5. G6：受限命令终端（已接入）
 
-| 能力 | 规则 |
+宿主契约：
+
+```csharp
+ValueTask<AdminCommandResult> RunAsync(string command, IReadOnlyList<string> args, ct);
+```
+
+宿主实现要点（`src/Natter.Cli.Core/Cli/CliAdminCommandRunner.cs`）：`CliCommandRegistry` + `CliParser` 解析、宿主 allowlist 复核、`SemaphoreSlim` 串行（`ConsoleAccessor` 是进程级状态）、10s 默认超时、`BoundedConsole` 64 KiB 共享输出预算、`IAdminRedactor` 脱敏、`IAdminAuditSink` 审计。**不启子进程、不拼 shell**。
+
+插件侧映射（`WebConsoleAdminGateway.RunAsync`）：
+
+| 宿主结果 | HTTP |
 | --- | --- |
-| 文档 ID | 仅 `profiles`、`plugin:<plugin-id>`（`[a-z0-9._-]`，≤128） |
-| 大小 | ≤256 KiB（UTF-8） |
-| JSON | 允许注释/尾逗号；root 必须是 object/array；NUL 拒绝 |
-| secret | 拒绝 `sk-*`、`ak-*`、`Bearer …`、PEM 私钥、`"token":"明文"` 等；`${secret:NAME}` 允许 |
-| ETag | `sha256:<hex>`，基于完整 content |
-| diff | 行级 LCS；≤250k 单元；预览 ≤200 行/32 KiB，超限标记 truncated |
+| `Executed=true, TimedOut=false` | `200`（`exitCode/stdout/stderr/truncated/outputBytes/durationMs`） |
+| `TimedOut=true` | `504 command.timeout`，仍带回部分 stdout/stderr |
+| `command.not_allowed` | `403 command.not_allowed` |
+| `command.not_registered` / `command.invalid` | `400` |
+| `command.busy` | `409 command.busy` |
+| `command.cancelled` | `408 command.cancelled` |
+| 宿主抛异常 | `502 host.admin_command.failed`（异常消息已脱敏） |
 
-HTTP 接线：
+双重门禁：插件先按 `commandAllowlist` 判定（不含即 `403 command.not_allowed`），宿主再按自己的 `AdminOptions.CommandAllowlist` 判定；输出在宿主脱敏后再过一遍 `WebConsoleCommandPolicy.NormalizeOutput`（幂等 + 64 KiB 预算）。
 
-```http
-POST /api/config/{id}/validate
-X-WebConsole-CSRF: <session csrf>
-{"content": "{...}"}
-
-200 {"id":"profiles","validation":{"valid":false,"eTag":"sha256:…","sizeBytes":13,
-     "containsSecretLiteral":false,"issues":[{"pointer":"$","code":"config.invalid_json","message":"…"}]}}
-```
-
-`POST /api/config/{id}` 在宿主 store 缺失时仍执行同一校验：无效 → `400 config.invalid`，有效 → `501 host.admin_config.unavailable`。
-
-宿主实现 `IAdminConfigStore` 后，插件只需把 `ReadAsync/ValidateAsync/SaveAsync` 适配到本策略的 ETag/validation，写锁、备份、原子替换仍由宿主负责。
-
----
-
-## 5. G6：受限命令终端
-
-宿主 CLI 命令在进程内注册（`ICliCommandContributor`），插件 provider 只能拿到自己被注入的服务；`IChatCommandDispatcher` 是聊天命令，不是管理命令。
-
-因此插件不做以下兜底：
-
-- 不 `Process.Start("natter ...")`；
-- 不执行 shell；
-- 不解析用户输入拼命令行。
-
-`allowCommandConsole` 与 `commandAllowlist` 只做配置校验和 UI 展示。等 `IAdminCommandRunner`（设计 §9.1）落地后，命令白名单映射到宿主注册的 CLI 命令，插件只做 HTTP → runner 的转发和审计。
-
-提议补充权限词：`admin.command.execute`，并在宿主侧对每条命令做 allowlist + 参数 schema，而不是在插件里做字符串匹配。
-
-### 5.1 插件侧已就绪（不依赖宿主）
-
-`WebConsoleCommandPolicy` 是纯函数，不启动进程、不拼 shell：
-
-| 能力 | 规则 |
-| --- | --- |
-| 命令 | 去首尾/折叠空白；≤128 字符；控制字符拒绝；必须与 `commandAllowlist` 精确匹配 |
-| 参数 | ≤8 个；每个 ≤128 字符；控制字符拒绝；以 argv 数组传递，不做字符串拼接 |
-| 输出 | 总量 ≤64 KiB；stdout/stderr 共享预算；截断标记；`sk-*`/`Bearer` 脱敏 |
-| 超时 | 由宿主 `IAdminCommandRunner` 负责（插件只传 CancellationToken） |
-
-HTTP 接线：
-
-```http
-POST /api/commands/validate
-X-WebConsole-CSRF: <session csrf>
-{"command":"plugins list","args":["--detail"]}
-
-200 {"decision":{"allowed":true,"code":"command.allowed","command":"plugins list","args":["--detail"]}}
-```
-
-`POST /api/commands`：控制台关闭 → 403；不在 allowlist → 403 `command.not_allowed`；通过策略 → `501 host.admin_command.unavailable`（等待 runner）。
-
----
+插件侧预算 `commandTimeoutSeconds`（默认 10、上限 10）刻意小于传输层 15s，保证控制台能先返回 504 而不是被 `HttpListener` 层掐断。
 
 ## 6. G7：ASP.NET Core / ALC 实测结论
 
@@ -267,38 +236,48 @@ X-WebConsole-CSRF: <session csrf>
 
 ---
 
-## 7. G8/G9：日志与脱敏
+## 7. G8/G9：日志与脱敏（已接入）
 
-- `/logs`：无宿主日志读取端口 → `available: false`，`gapCode: host.logs.unavailable`；
-- `/api/audit`：返回插件自己的审计 JSONL（登录、快照、配置读取、命令拒绝、配置写入尝试），字段 `time/user/ip/action/target/result/durationMs`；
-- 脱敏：插件内 `WebConsoleRedaction`，规则：
-  - 键名匹配 `token|secret|password|passwd|api[-_]?key|authorization|cookie|credential|private[-_]?key|connection[-_]?string` → `***`；
-  - 值形如 `${secret:NAME}` → 保留引用，不展开；
-  - 超长字符串截断到 2000 字符并标记；
-  - 审计/日志只记录摘要与长度，不记录完整输出。
+- `/api/logs`：宿主 `IAdminLogReader.ReadAsync(limit)` → `AdminLogBuffer`（有界环形缓冲，`level/category/message/timestamp/sequence`）。插件按 `maxLogLines` 夹取 limit，逐条 `SanitizeText` 后再返回；读取失败 → `available:false` + `host.logs.failed`，不会 500。
+- `/api/audit`：插件自己的 JSONL 审计（`config.read/config.save/config.rollback/command.run/...`），字段 `time/user/ip/action/target/result/durationMs`。
+- 脱敏：宿主 `IAdminRedactor` 负责命令行输出；插件 `WebConsoleRedaction` 负责配置回显、日志行、审计 target 与错误消息（`sk-*`、`ak-*`、`Bearer`、敏感键名）。两者规则一致且有对拍测试。
 
-等宿主提供公共 `IAdminRedactor` 后，插件改为注入该服务，保留本地实现作为 fallback。
-
----
+**双审计**：宿主 `JsonlAdminAuditSink` 记 `admin.config.save`/`admin.command.run`，插件记 `config.write`/`command.run`。两边都只记命令名/文档 id/字节数，不记内容。
 
 ## 8. 对验收的影响
 
-| 验收项（设计 §15） | Phase 1 状态 | 说明 |
+| 验收项（设计 §15） | 状态 | 说明 |
 | --- | --- | --- |
 | 默认只绑定 loopback | 达成 | 非 loopback 直接激活失败 |
 | 无 token 不启动 | 达成 | 缺 secret → `webconsole.token-missing` |
-| 只读 dashboard 可看 health/plugins/upstreams/profiles/logs | 部分达成 | health/upstreams/providers/plugins 计数可用；logs 缺口 G8 |
-| secret 不返回 | 达成 | 配置预览只保留 `${secret:...}` 引用 |
-| 配置编辑 schema/diff/backup/lock | 未达成 | 缺口 G5，端点 501 |
-| 路径白名单 | 达成（只读侧） | 静态资源白名单，无任意文件读取 |
-| 命令 allowlist | 未达成 | 缺口 G6，端点 501 |
-| 审计 | 达成 | JSONL 审计 + 保留期由运维负责 |
-| file plugin 可加载 | 待集成验证 | 插件目录 staging 见 `docs/WEBCONSOLE_PLUGIN.md` |
-| ASP.NET Core ALC 正常 | 不适用 | 用 HttpListener 规避，见 G7 |
-| Android 不加载 | 达成 | manifest `platforms` 不含 android；宿主侧仍需按平台过滤 |
-| 不阻塞 P5 | 达成 | 独立插件目录，无 `src/` 改动 |
+| 只读 dashboard 可看 health/plugins/upstreams/profiles/logs | 达成 | health/upstreams/profiles 走 `/health`；plugins 走 `IPluginRuntimeDiagnostics`；logs 走 `IAdminLogReader` |
+| secret 不返回 | 达成 | 配置回显/命令输出/日志/审计四路脱敏，单测覆盖 |
+| 配置编辑 schema/diff/backup/lock | 达成 | 宿主 schema 校验 + 有界 diff + `.backup` + 写锁 + 原子替换；插件 400/409/502 映射 |
+| 配置回滚 | 部分达成 | 无宿主 backup 回读契约 → 插件内存 undo（重启失效），备份路径展示供手动恢复 |
+| 路径白名单 | 达成 | 文档 id 白名单（插件+宿主双份）、静态资源白名单、符号链接拒绝 |
+| 命令 allowlist | 达成 | 插件 + 宿主双重 allowlist，argv 语义，超时/输出上限 |
+| 审计 | 达成 | 插件 JSONL + 宿主 `admin-audit.jsonl` |
+| file plugin 可加载 | 达成 | `./scripts/stage-webconsole.sh` + E2E |
+| ASP.NET Core ALC 正常 | 不适用 | 仍用 `HttpListener`（G7 未变） |
+| Android 不加载 | 达成 | manifest `platforms` 不含 android |
+| 不阻塞 P5 | 达成 | 插件目录 + 文档；本任务未改 `src/` |
 
----
+### 8.1 接入后新增/变化的插件配置
+
+| 键 | 默认 | 作用 |
+| --- | --- | --- |
+| `commandTimeoutSeconds` | `10` | 插件侧命令预算（1–10，小于传输层 15s） |
+| `permissions` | — | manifest 新增 `admin.read`、`admin.config.write`、`admin.command.execute`（权限缺失即回落 501） |
+
+### 8.2 已修复问题（宿主侧）
+
+**OBS-003 · `admin.command.execute` 会让插件 CLI 命令从 CLI 表层消失（已修复 `0f3d61c`）**
+
+- 触发：插件声明 `admin.command.execute` → 宿主 `BindAdminServices` 在**插件激活中**解析 `IAdminCommandRunner` → `CliAdminCommandRunner` 构造参数 `CliCommandRegistry` 被提前实例化 → 其构造时枚举 `ICliCommandContributor`，而 `NpsPluginRuntime.GetCliCommands()` 过滤 `State == Activated`，此刻插件尚未 Activated → 得到空快照并被单例固化。
+- 影响：所有插件贡献的 CLI 命令（`web status`、`greet`、`metrics` …）在任何后续解析中都不存在；`natter doctor` 显示 `commands: 32 registered`（缺 4 个插件命令），但 `natter plugins contributions` 仍显示 active。
+- 规避（临时）：E2E 断言保留，等待宿主修好后回归；不要为了绕过而从 manifest 去掉该权限（否则 Phase 3 回到 501）。
+- 修复（`0f3d61c`）：`CliAdminCommandRunner` 不再在构造期解析 `CliCommandRegistry`，改为 `RunAsync` 内首次取用；命令表在插件全部激活后才成形。
+- 回归证据：`natter web status --json` 恢复（`state=external`，`admin` 三项均 `available`）；`natter greet alice` 恢复；`natter doctor` 显示 `commands: 35`（含插件命令）；`./scripts/webconsole-e2e.sh` 全绿。
 
 ## 9. 变更记录
 

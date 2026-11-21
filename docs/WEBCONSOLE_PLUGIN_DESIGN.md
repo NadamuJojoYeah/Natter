@@ -1,8 +1,8 @@
 # Natter WebConsole Plugin Design
 
-> **状态**：Accepted design · Phase 1 delivered；Phase 2/3 插件侧校验/策略已就绪（2026-11-18）  
-> **日期**：2026-11-17（设计）/ 2026-11-18（实现决策）  
-> **定位**：Natter 的独立运维/调试插件，提供 Web 诊断、配置编辑和受限命令终端；不进入 core，不默认启用。  
+> **状态**：Accepted design · Phase 1 delivered；Phase 2/3 插件侧校验/策略已就绪（2026-11-18）
+> **日期**：2026-11-17（设计）/ 2026-11-18（实现决策）
+> **定位**：Natter 的独立运维/调试插件，提供 Web 诊断、配置编辑和受限命令终端；不进入 core，不默认启用。
 > **关联**：[NPS v1](PLUGIN_SPEC.md)、[运维手册](OPERATIONS_RUNBOOK.md)、[Harness 架构](HARNESS_ARCHITECTURE.md)、[P5 Agent Runtime](P5_AGENT_TASK_RUNTIME.md)、[宿主契约缺口与适配](WEBCONSOLE_HOST_API_GAP.md)、[插件使用说明](WEBCONSOLE_PLUGIN.md)
 
 ---
@@ -328,25 +328,32 @@ read → edit → validate schema → diff → backup → lock → write → rel
 - 保存后提示“需要重启/热重载”；
 - 不自动重启整个 host，除非显式确认。
 
-### 8.3 Host API
+### 8.3 Host API（已实现，2026-11-21）
+
+实际契约在 `src/Natter.Application/Admin/AdminContracts.cs`（程序集 `Natter.Application` 在
+`PluginContractAssemblies` 共享集内，插件侧类型标识一致，插件 csproj 无需新增引用）：
 
 ```csharp
 public interface IAdminConfigStore
 {
-    ValueTask<AdminConfigDocument> ReadAsync(string id, CancellationToken ct = default);
+    ValueTask<IReadOnlyList<AdminConfigDocumentInfo>> ListAsync(CancellationToken ct = default);
+    ValueTask<AdminConfigReadResult> ReadAsync(string id, CancellationToken ct = default);
     ValueTask<AdminConfigValidation> ValidateAsync(string id, string content, CancellationToken ct = default);
     ValueTask<AdminConfigSaveResult> SaveAsync(string id, string content, string? etag, CancellationToken ct = default);
 }
 ```
 
-`id` 只能是：
+与最初提议的差异（插件按实际契约适配）：
 
-```text
-profiles
-plugin:<pluginId>
-```
+| 项 | 实际 |
+| --- | --- |
+| 读取结果 | `AdminConfigReadResult { Available, Code, Message, Document }`：`Available=false` 表示 store 不可用/被拒；`Available=true` 且 `Document.Exists=false` 表示文档尚不存在（可创建） |
+| 冲突 | 不抛异常：`Saved=false` + `AdminCodes.ConfigEtagMismatch` + `ConflictETag` |
+| 备份回读 | **无** `ListBackups`/`ReadBackup`；`SaveAsync` 只回传本次 `BackupPath` |
+| 重载提示 | `AdminConfigReloadHint { None, ReloadProfiles, RestartHost, RestartPlugin }`，`profiles → RestartHost` |
+| 脱敏/审计 | `IAdminRedactor`、`IAdminAuditSink`（宿主 `admin-audit.jsonl`） |
 
-不允许 `../`、绝对路径、secret 文件。
+`id` 只能是 `profiles` 或 `plugin:<pluginId>`，不允许 `../`、分隔符、绝对路径、secret 文件；插件与宿主各校验一次。
 
 ### 8.4 Phase 2 插件侧就绪（宿主端口缺失时的行为）
 
@@ -393,7 +400,7 @@ memory list
 task status
 ```
 
-通过 `IAdminCommandRunner`：
+通过 `IAdminCommandRunner`（已实现，2026-11-21；实现 `CliAdminCommandRunner` 位于 `Natter.Cli.Core`）：
 
 ```csharp
 public interface IAdminCommandRunner
@@ -403,7 +410,14 @@ public interface IAdminCommandRunner
         IReadOnlyList<string> args,
         CancellationToken ct = default);
 }
+
+public sealed record AdminCommandResult(
+    bool Executed, string Code, string Message, string Command, IReadOnlyList<string> Args,
+    int ExitCode, string Stdout, string Stderr, bool Truncated, int OutputBytes,
+    long DurationMs, bool TimedOut);
 ```
+
+宿主复核自己的 allowlist（`AdminOptions.CommandAllowlist`，默认只读诊断命令），`ConsoleAccessor` 是进程级状态所以执行串行化；插件再按 `commandAllowlist` 预先判定并做第二次脱敏。
 
 要求：
 
@@ -587,16 +601,19 @@ time, user, ip, action, target, result, duration
 
 - [x] 插件侧 id/大小/JSON/secret literal 校验 + ETag + 有界 diff（`/api/config/{id}/validate`）；
 - [x] 无效内容在写入前 `400`，有效内容在宿主缺失时 `501`；
-- [ ] `IAdminConfigStore` 读取/保存/备份/写锁/原子替换（宿主）；
-- [x] 只允许 profiles/plugin config；
-- [ ] 重启提示（宿主返回 reload hint 后接入）。
+- [x] `IAdminConfigStore` 读取/保存/备份/写锁/原子替换（宿主，2026-11-21）；
+- [x] 只允许 profiles/plugin config（插件 + 宿主双白名单）；
+- [x] 重启提示（宿主 `ReloadHint`/`RestartRequired` → UI 文案）；
+- [x] HTTP：`GET /api/config/{id}`、保存 409 冲突/409 锁/502 备份失败映射、`/undo`、`/rollback`（会话内存 undo）；
+- [ ] profile 热重载（宿主目前只返回 `restart-host`）。
 
 ### Phase 3：受限命令
 
 - [x] 插件侧 allowlist/参数/控制字符/输出截断与脱敏（`/api/commands/validate`）；
 - [x] 拒绝路径审计（`command.run` denied）；
-- [ ] `IAdminCommandRunner` 执行、超时与结果回传（宿主）；
-- [x] 不拼 shell / 不启动子进程。
+- [x] `IAdminCommandRunner` 执行、超时与结果回传（宿主，2026-11-21）；
+- [x] `GET /api/commands` 状态、`POST /api/commands` 真实执行（exit/stdout/stderr/截断/超时）；
+- [x] 不拼 shell / 不启动子进程（宿主 runner 同样不启子进程）。
 
 ### Phase 4：可选 sidecar
 
@@ -611,11 +628,11 @@ Phase 1 状态见 §18；未达成项都对应 [缺口文档](WEBCONSOLE_HOST_AP
 
 - [x] 默认只绑定 loopback；
 - [x] 无 token 不启动；
-- [ ] 只读 dashboard 可看 health/plugins/upstreams/profiles/logs（logs 缺口 G8；plugins 明细缺口 G4）
-- [x] secret 不返回；
-- [ ] 配置编辑 schema/diff/backup/lock（缺口 G5）
-- [x] 路径白名单（只读侧）
-- [ ] 命令 allowlist（缺口 G6）
+- [x] 只读 dashboard 可看 health/plugins/upstreams/profiles/logs（plugins 走 `IPluginRuntimeDiagnostics`，logs 走 `IAdminLogReader`）
+- [x] secret 不返回（配置/命令/日志/审计四路脱敏）
+- [x] 配置编辑 schema/diff/backup/lock（宿主 store + 插件 409/502 映射）
+- [x] 路径白名单（只读侧 + 文档 id 双白名单）
+- [x] 命令 allowlist（插件 + 宿主双重）
 - [x] 审计；
 - [ ] file plugin 可加载（staging 脚本已提供，待真实宿主集成验证）
 - [x] ASP.NET Core ALC：Phase 1 不使用，改用 HttpListener（G7）
@@ -646,6 +663,8 @@ Phase 1 状态见 §18；未达成项都对应 [缺口文档](WEBCONSOLE_HOST_AP
 ---
 
 ## 18. Phase 1 实现映射（2026-11-18）
+
+> Phase 2/3 实现映射（2026-11-21）：`WebConsoleAdminSurface`（契约解析）、`WebConsoleAdminGateway`（读/校验/保存/undo/run/logs + 错误码映射 + 内存 undo）、`WebConsoleRequestHandler` 的 `/api/config/*` 与 `/api/commands*` 路由、`WebConsoleDiagnostics`（`host.admin_config`/`host.admin_command`/`host.logs` 检查）、`wwwroot` 配置编辑器与命令台。测试见 `tests/Natter.Plugin.WebConsole.Tests/Phase23`。
 
 | 设计要求 | 实现位置 | 说明 |
 | --- | --- | --- |

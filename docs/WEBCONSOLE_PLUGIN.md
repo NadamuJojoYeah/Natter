@@ -1,6 +1,6 @@
 # Natter WebConsole 插件使用说明
 
-> **状态**：Phase 1（只读诊断） · 2026-11-18
+> **状态**：Phase 1（只读诊断）+ Phase 2（配置编辑）+ Phase 3（受限命令）· 2026-11-21
 > **定位**：面向运维的 loopback Web 控制台；不修改 core，不默认启用。
 > **设计**：[WEBCONSOLE_PLUGIN_DESIGN.md](WEBCONSOLE_PLUGIN_DESIGN.md)
 > **宿主契约缺口**：[WEBCONSOLE_HOST_API_GAP.md](WEBCONSOLE_HOST_API_GAP.md)
@@ -17,7 +17,7 @@
 - 审计流水（登录、快照、拒绝、配置写入尝试）；
 - 插件清单、host API、服务器状态。
 
-Phase 2（配置编辑）与 Phase 3（受限命令）的 HTTP 端点在宿主管理 API 缺失时返回 `501 admin_api_unavailable`，UI 会显示“未启用”，不会静默失败。
+Phase 2（配置编辑）与 Phase 3（受限命令）已接入宿主管理面（`IAdminConfigStore` / `IAdminCommandRunner` / `IAdminLogReader`，见 [缺口文档](WEBCONSOLE_HOST_API_GAP.md)）。宿主契约缺失（没有 `admin.*` 权限、宿主关闭管理面或旧版本宿主）时端点仍返回 `501 host.admin_config.unavailable` / `501 host.admin_command.unavailable`，UI 显示“未启用”，不会静默失败。
 
 ---
 
@@ -88,6 +88,7 @@ plugins/natter.plugin.webconsole/
   "allowConfigWrite": false,
   "allowCommandConsole": false,
   "commandAllowlist": [],
+  "commandTimeoutSeconds": 10,
   "sessionMinutes": 60,
   "maxLogLines": 500,
   "trustedProxies": ["127.0.0.1"]
@@ -100,7 +101,21 @@ plugins/natter.plugin.webconsole/
 - 没有 `WEBCONSOLE_TOKEN` → 插件激活失败（实际可能是 `phase=config code=missing-secret`，与 `webconsole.token-missing` 语义等价），不会启动无认证控制台；
 - `bind` 必须是 loopback（`127.0.0.1`、`::1`、`localhost`）；其他值 → `webconsole.bind-not-loopback`；
 - `hostHealthUrl` 必须是 loopback URL；指向 `natter serve --health-port <port>` 的 `/health`；
-- `publicBaseUrl` 仅在通过反向代理暴露时设置（用于 cookie `Secure`、Origin 校验）。
+- `publicBaseUrl` 仅在通过反向代理暴露时设置（用于 cookie `Secure`、Origin 校验）；
+- `commandTimeoutSeconds`（1–10，默认 10）是插件侧命令预算，必须小于 HTTP 层 15s，保证超时能返回 `504 command:timeout` 而不是被传输层掐断。
+
+### 4.1 宿主权限（manifest）
+
+```json
+"permissions": ["network", "secrets:WEBCONSOLE_TOKEN", "cli.commands",
+                "admin.read", "admin.config.write", "admin.command.execute"]
+```
+
+- `admin.read` → 插件运行视图（plugins 明细）+ 宿主日志 tail；
+- `admin.config.write` → `IAdminConfigStore`；
+- `admin.command.execute` → `IAdminCommandRunner`；
+
+本地/受信任插件默认自动授予；宿主用 `ForceDeniedPermissions` 可单项回收。缺哪个，对应面板就显示 gap 码，不会半死不活。
 
 生成 token：
 
@@ -186,13 +201,44 @@ natter-admin.example.com {
 | GET | `/api/health` `/api/plugins` `/api/upstreams` `/api/profiles` | 单区块 |
 | GET | `/api/logs` | 宿主日志（缺口）+ 审计 |
 | GET | `/api/audit` | 审计 tail |
-| GET | `/api/config` | 插件配置脱敏预览 |
-| POST | `/api/config/{id}/validate` | 配置文本校验（无写入） |
-| POST | `/api/config/{id}` | 保存：无效 400；有效但宿主 store 缺失 501 |
+| GET | `/api/logs` | 宿主日志 tail（`IAdminLogReader`）+ 插件审计 |
+| GET | `/api/config` | 插件配置脱敏预览 + 可编辑文档列表 + 宿主管理面可用性 |
+| GET | `/api/admin` | 管理面状态（config store / runner / log reader / allowlist / 超时） |
+| GET | `/api/admin/documents` | 可编辑文档列表（宿主 `ListAsync`，缺失则 501） |
+| GET | `/api/config/{id}` | 读取文档：`{id,exists,eTag,lastModified,content,source,reloadHint}` |
+| POST | `/api/config/{id}/validate` | 校验：宿主可用时含 schema 校验与 diff；否则插件策略 |
+| POST | `/api/config/{id}` | 保存 `{content,etag}` → 200 / 400 / 403 / 409 / 413 / 501 / 502 |
+| GET | `/api/config/{id}/undo` | 会话内可恢复快照列表 |
+| POST | `/api/config/{id}/rollback` | 回滚到快照 `{etag,undoId}`（走宿主 `SaveAsync`） |
+| GET | `/api/commands` | 命令台状态（enabled/allowlist/超时/runner 可用性） |
 | POST | `/api/commands/validate` | 命令 allowlist 判定（无执行） |
-| POST | `/api/commands` | 执行：拒绝 403；宿主 runner 缺失 501 |
+| POST | `/api/commands` | 执行：403 拒绝；501 无 runner；504 超时；502 宿主异常 |
 
 `id` 只接受 `profiles` 或 `plugin:<plugin-id>`；所有 POST/DELETE 需要 `X-WebConsole-CSRF`。
+
+### 7.1 Phase 2/3 错误码
+
+| 状态 | 码 | 含义 / 处理 |
+| --- | --- | --- |
+| 409 | `config.conflict` | ETag 过期；`detail.conflictETag` 是当前值，重新加载后再存 |
+| 409 | `config.locked` | 宿主同一文档正在被写，稍后重试 |
+| 409 | `config.symlink` | 目标是符号链接，宿主拒绝覆盖 |
+| 409 | `config.undo_empty` | 没有会话内快照；用展示的宿主备份路径手动恢复 |
+| 400 | `config.invalid` | 插件策略或宿主 schema 拒绝；`detail.issues[]` 带 JSON Pointer |
+| 502 | `host.admin_config.failed` | 宿主备份/写入失败（`config.backup_failed` / `config.write_failed`） |
+| 501 | `host.admin_config.unavailable` | 没有 store（权限/宿主版本/管理面关闭） |
+| 403 | `command.not_allowed` | 插件或宿主 allowlist 拒绝 |
+| 409 | `command.busy` | 宿主正在执行另一条管理命令 |
+| 504 | `command.timeout` | 超时；`result` 仍带部分 stdout/stderr |
+| 502 | `host.admin_command.failed` | runner 抛异常（消息已脱敏） |
+
+### 7.2 配置编辑语义
+
+- 宿主 schema 校验权威（`profiles` 校验结构与 provider 引用，`plugin:<id>` 校验插件 `config.schema.json`）；插件策略先跑，保证无宿主时仍是可解释的 400；
+- `etag` 只有**文档不存在**时才可为 `null`（创建）；否则 409；
+- 保存响应带 `backupPath`（宿主备份，`config/.backup/<时间戳>/<file>`）与 `reloadHint`/`restartRequired`；
+- **回滚**是插件会话内存 undo（每文档 ≤8 条、全局 ≤32 条、30 分钟 TTL），不是宿主备份回读；重启插件后失效，宿主备份需手动恢复；
+- 插件任何情况下都不直接读写配置文件。
 
 配置校验会拒绝明文 secret（`sk-*`、`Bearer`、PEM、`"token":"明文"`），只允许 `${secret:NAME}` 引用；命令策略要求命令精确匹配 `commandAllowlist`，参数 ≤8 个、每个 ≤128 字符。
 
@@ -224,8 +270,10 @@ natter-admin.example.com {
 | 页面 health 灰显 | `host.health.unavailable` | 启动 `serve --health-port` 并核对 `hostHealthUrl` |
 | plugins 明细缺失 | `host.plugin_diagnostics.unavailable` | 宿主播接 `IPluginRuntimeDiagnostics`（缺口 G4） |
 | `/api/logs` 501 | `host.logs.unavailable` | 缺口 G8，暂用 `/api/audit` |
-| 配置保存 501 | `host.admin_config.unavailable` | 缺口 G5 |
-| 命令执行 501 | `host.admin_command.unavailable` | 缺口 G6 |
+| 配置保存 501 | `host.admin_config.unavailable` | 检查 manifest 是否声明 `admin.config.write`、宿主是否关闭管理面 |
+| 命令执行 501 | `host.admin_command.unavailable` | 检查 `admin.command.execute` 权限 |
+| 配置保存 409 | `config.conflict` | 重新加载文档（新 ETag）再保存 |
+| 命令 504 | `command.timeout` | 调小 `commandTimeoutSeconds` 或换命令；部分输出仍会返回 |
 
 ---
 
@@ -237,8 +285,9 @@ natter-admin.example.com {
 - 无 ASP.NET Core：Phase 1 用 `HttpListener`，不支持 HTTP/2/WebSocket；
 - 无宿主日志读取端口：`/logs` 只展示审计；
 - 无插件明细：`IPluginRuntimeDiagnostics` 未注入插件 provider；
-- 配置编辑只有校验/ETag/diff（`validate` 端点）；保存与备份等待 `IAdminConfigStore`；
-- 命令终端只有 allowlist/策略判定（`validate` 端点）；执行与超时等待 `IAdminCommandRunner`；
+- 配置回滚依赖插件内存 undo（宿主无 backup 回读契约）；插件重启后只能按备份路径手动恢复；
+- `profiles` 保存后宿主返回 `restart-host`（当前不会热重载 profile store）；
+- 命令执行依赖宿主在进程内解析 CLI 命令（`admin.command.execute` 触发的命令表提前固化缺陷已由 `0f3d61c` 修复，见缺口文档 OBS-003）；
 - `external` 模式只做探测，不代理另一个实例的请求；
 - 单 token / 单角色（admin）；viewer 角色与多用户未实现；
 - 会话只存内存，插件重启后需要重新登录。
