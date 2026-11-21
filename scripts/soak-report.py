@@ -7,13 +7,16 @@ Answers the questions a 24h soak acceptance actually needs:
   * did the host restart under us (startedAt changes)?
   * was it healthy the whole time (status / plugins / Tier 1 providers)?
   * did Discord/DingTalk stay connected, and how many reconnects happened?
-  * are disconnects attributed (OBS-019) or silent?
+  * are disconnects attributed (OBS-019) or silent? Attribution reads lastDisconnectError /
+    lastDisconnectCode first; only payloads without those fields fall back to the legacy
+    "lastDisconnectAt set + lastError null" heuristic, so a fixed host is never over-counted.
   * did anything fail to send (sendFailures / lastSendError)?
 
 Usage:
   python3 scripts/soak-report.py artifacts/ops/.../soak-2026-11-17.jsonl
   python3 scripts/soak-report.py soak/*.jsonl --interval 300 --min-coverage 95
   python3 scripts/soak-report.py soak.jsonl --json > soak-report.json
+  python3 scripts/soak-report.py --self-test          # synthetic fixtures, no input files
 
 Exit codes: 0 = PASS, 1 = FAIL, 2 = usage/unreadable input.
 """
@@ -190,9 +193,68 @@ def summarise(audit: SoakAudit, interval: int, max_gap: int) -> dict:
                 reconnect_events += cur_count
         sends = [int(u.get("sendFailures") or 0) for _, u in entries]
         errors = sorted({str(u.get("lastError")) for _, u in entries if u.get("lastError")})
-        silent_disconnects = sum(
-            1 for _, u in entries if u.get("lastDisconnectAt") and not u.get("lastError")
-        )
+
+        # Disconnect attribution is payload-version aware (OBS-019 fix):
+        #   * payload has lastDisconnectError -> authoritative. Empty means "really no reason".
+        #   * payload lacks the field (older host / older capture) -> legacy: infer from lastError.
+        # `lastError` alone must never label a disconnect "silent" on a fixed host, because it is
+        # cleared on Ready by design.
+        # `lastDisconnectAt` is sticky: every later sample repeats the same timestamp. Counting those
+        # samples would multiply one disconnect by the number of samples, so group by disconnect
+        # event (timestamp) and attribute each event once.
+        payload_new = 0
+        payload_legacy = 0
+        events: dict[str, dict] = {}
+
+        for _, upstream in entries:
+            has_reason_field = "lastDisconnectError" in upstream
+            if has_reason_field:
+                payload_new += 1
+            else:
+                payload_legacy += 1
+
+            disconnect_at = upstream.get("lastDisconnectAt")
+            if not disconnect_at:
+                continue
+            event = events.setdefault(
+                str(disconnect_at),
+                {"has_field": has_reason_field, "error": "", "code": "", "last_error": None},
+            )
+            # Later samples of the same event can only add information, never remove it.
+            event["has_field"] = event["has_field"] or has_reason_field
+            if not event["error"]:
+                event["error"] = str(upstream.get("lastDisconnectError") or "").strip()
+            if not event["code"]:
+                event["code"] = str(upstream.get("lastDisconnectCode") or "").strip()
+            if not event["last_error"]:
+                event["last_error"] = upstream.get("lastError")
+
+        silent_new = 0
+        silent_legacy = 0
+        attributed_new = 0
+        attributed_legacy = 0
+        reason_counts: dict[tuple[str, str], int] = {}
+
+        for event in events.values():
+            if event["has_field"]:
+                if event["error"]:
+                    attributed_new += 1
+                    reason_counts[(event["code"] or "unknown", event["error"])] = (
+                        reason_counts.get((event["code"] or "unknown", event["error"]), 0) + 1
+                    )
+                else:
+                    silent_new += 1
+            else:
+                if event["last_error"]:
+                    attributed_legacy += 1
+                else:
+                    silent_legacy += 1
+
+        disconnect_reasons = [
+            {"code": code, "error": error, "samples": count}
+            for (code, error), count in sorted(reason_counts.items(), key=lambda item: -item[1])[:5]
+        ]
+
         upstreams[prefix.rstrip(":")] = {
             "samples": len(entries),
             "disconnectedSamples": sum(1 for _, u in entries if u.get("connected") is not True),
@@ -202,7 +264,19 @@ def summarise(audit: SoakAudit, interval: int, max_gap: int) -> dict:
             "reconnects": reconnect_events,
             "sendFailuresMax": max(sends) if sends else 0,
             "lastErrors": errors,
-            "samplesWithDisconnectButNoReason": silent_disconnects,
+            # Kept for compatibility: total of silent disconnects in both payload versions.
+            "samplesWithDisconnectButNoReason": silent_new + silent_legacy,
+            "distinctDisconnects": len(events),
+            "silentDisconnects": {
+                "newPayload": silent_new,
+                "legacyPayload": silent_legacy,
+            },
+            "disconnectsWithReason": {
+                "newPayload": attributed_new,
+                "legacyPayload": attributed_legacy,
+            },
+            "payloadVersions": {"new": payload_new, "legacy": payload_legacy},
+            "disconnectReasons": disconnect_reasons,
             "lastEventAtFinal": entries[-1][1].get("lastEventAt"),
         }
 
@@ -228,6 +302,12 @@ def summarise(audit: SoakAudit, interval: int, max_gap: int) -> dict:
             reasons.append(f"{name} disconnected in {data['disconnectedSamples']} sample(s)")
         if data["sendFailuresMax"]:
             reasons.append(f"{name} sendFailures reached {data['sendFailuresMax']}")
+        silent = data["silentDisconnects"]
+        if silent["newPayload"]:
+            reasons.append(
+                f"{name} still has {silent['newPayload']} silent disconnect(s) on the new payload "
+                "(lastDisconnectError empty) — the OBS-019 fix should have attributed them"
+            )
 
     result = "PASS" if not reasons else "FAIL"
 
@@ -284,11 +364,21 @@ def print_human(summary: dict) -> None:
             flag = "!" if gap["exceedsTolerance"] else " "
             print(f" {flag} {gap['from']} -> {gap['to']}  {gap['seconds']}s  missing~{gap['missingSamples']}")
     for name, data in summary.get("upstreams", {}).items():
+        silent = data.get("silentDisconnects", {})
+        with_reason = data.get("disconnectsWithReason", {})
+        versions = data.get("payloadVersions", {})
         print(
             f"upstream {name:<8}: reconnects={data['reconnects']} (end={data['reconnectCountEnd']}) "
-            f"disconnected={data['disconnectedSamples']} sendFailuresMax={data['sendFailuresMax']} "
-            f"silentDisconnects={data['samplesWithDisconnectButNoReason']}"
+            f"disconnected={data['disconnectedSamples']} sendFailuresMax={data['sendFailuresMax']}"
         )
+        print(
+            f"                   disconnects: attributed={with_reason.get('newPayload', 0)} "
+            f"silent={silent.get('newPayload', 0)} (new payload) | "
+            f"legacy: attributed={with_reason.get('legacyPayload', 0)} silent={silent.get('legacyPayload', 0)}"
+        )
+        print(f"                   payload versions: new={versions.get('new', 0)} legacy={versions.get('legacy', 0)}")
+        for reason in data.get("disconnectReasons", []):
+            print(f"                   reason[{reason['samples']}]: code={reason['code']} error={reason['error']}")
         if data["lastErrors"]:
             for err in data["lastErrors"]:
                 print(f"                   lastError: {err}")
@@ -299,14 +389,145 @@ def print_human(summary: dict) -> None:
         print(f"  - {reason}")
 
 
+def _fixture_rows(
+    *,
+    payload: str,
+    disconnect: bool,
+    reason: str | None,
+    last_error: str | None,
+    samples: int = 5,
+) -> list[dict]:
+    """Build one synthetic soak run: `payload` is "new" (reason fields) or "legacy" (no fields)."""
+    start = dt.datetime(2026, 1, 1, tzinfo=dt.timezone.utc)
+    rows: list[dict] = [
+        {
+            "soakStart": start.isoformat(),
+            "intervalSeconds": 300,
+            "durationSeconds": 86400,
+            "port": 5099,
+        }
+    ]
+    for index in range(samples):
+        at = start + dt.timedelta(seconds=300 * index)
+        upstream: dict = {
+            "source": "discord:discord:1",
+            "connected": True,
+            "reconnectCount": 1 if (disconnect and index >= 2) else 0,
+            "lastDisconnectAt": (start + dt.timedelta(seconds=600)).isoformat() if disconnect else None,
+            "lastError": last_error,
+            "sendFailures": 0,
+            "lastSendError": None,
+        }
+        if payload == "new":
+            upstream["lastDisconnectError"] = reason
+            upstream["lastDisconnectCode"] = "ws_closed" if reason else None
+        rows.append(
+            {
+                "status": "healthy",
+                "uptimeSeconds": 300 * index,
+                "startedAt": start.isoformat(),
+                "sampledAt": at.isoformat(),
+                "upstreams": [upstream],
+                "providers": [
+                    {"id": "natter.feature.ai.deepseek#deepseek", "available": True, "supportTier": 1}
+                ],
+                "plugins": {"activated": 4, "failed": 0, "failures": []},
+                "conversations": 0,
+            }
+        )
+    return rows
+
+
+def self_test() -> int:
+    """Synthetic fixtures for both payload versions; no network, no real host, no secrets."""
+    import tempfile
+
+    failures = 0
+
+    def check(name: str, ok: bool, detail: str = "") -> None:
+        nonlocal failures
+        if ok:
+            print(f"  ok   {name}")
+        else:
+            print(f"  FAIL {name} {detail}")
+            failures += 1
+
+    def audit(rows: list[dict]) -> dict:
+        with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as handle:
+            handle.write("\n".join(json.dumps(row) for row in rows) + "\n")
+            path = Path(handle.name)
+        try:
+            return summarise(load([path]), 300, 900)
+        finally:
+            path.unlink(missing_ok=True)
+
+    print("== soak-report self-test ==")
+
+    # 1. New payload with a reason: attributed, not silent, run is healthy.
+    summary = audit(_fixture_rows(payload="new", disconnect=True, reason="gateway closed (1006)", last_error=None))
+    discord = summary["upstreams"]["discord"]
+    check("new payload with reason is attributed", discord["disconnectsWithReason"]["newPayload"] == 1,
+          discord["disconnectsWithReason"])
+    check("new payload with reason is not silent", discord["silentDisconnects"]["newPayload"] == 0,
+          discord["silentDisconnects"])
+    check("attributed disconnect does not fail the run", summary["result"] == "PASS", summary["reasons"])
+    check("reason is reported with its code",
+          any(r["code"] == "ws_closed" and "1006" in r["error"] for r in discord["disconnectReasons"]),
+          discord["disconnectReasons"])
+
+    # 2. New payload, empty reason field: this is a real defect and must fail.
+    summary = audit(_fixture_rows(payload="new", disconnect=True, reason=None, last_error=None))
+    discord = summary["upstreams"]["discord"]
+    check("new payload without reason is silent", discord["silentDisconnects"]["newPayload"] == 1,
+          discord["silentDisconnects"])
+    check("silent disconnect on new payload fails the run", summary["result"] == "FAIL", summary["result"])
+    check("verdict explains the silent disconnect",
+          any("silent disconnect" in reason for reason in summary["reasons"]), summary["reasons"])
+
+    # 3. Legacy payload (no reason fields) with a cleared lastError: counted as legacy, not as new.
+    summary = audit(_fixture_rows(payload="legacy", disconnect=True, reason=None, last_error=None))
+    discord = summary["upstreams"]["discord"]
+    check("legacy payload is detected", discord["payloadVersions"]["legacy"] == 5, discord["payloadVersions"])
+    check("legacy silent disconnect is counted separately",
+          discord["silentDisconnects"] == {"newPayload": 0, "legacyPayload": 1}, discord["silentDisconnects"])
+    check("legacy-only silence does not fail the run", summary["result"] == "PASS", summary["reasons"])
+
+    # 4. Legacy payload where lastError still carries the cause: legacy attribution.
+    summary = audit(_fixture_rows(payload="legacy", disconnect=True, reason=None, last_error="Server missed last heartbeat"))
+    discord = summary["upstreams"]["discord"]
+    check("legacy payload attributes via lastError", discord["disconnectsWithReason"]["legacyPayload"] == 1,
+          discord["disconnectsWithReason"])
+    check("legacy attributed disconnect is not silent", discord["silentDisconnects"]["legacyPayload"] == 0,
+          discord["silentDisconnects"])
+
+    # 5. lastError cleared on Ready must not create a silent disconnect on a fixed host.
+    summary = audit(_fixture_rows(payload="new", disconnect=False, reason=None, last_error=None))
+    discord = summary["upstreams"]["discord"]
+    check("no disconnect at all is quiet",
+          discord["silentDisconnects"] == {"newPayload": 0, "legacyPayload": 0} and summary["result"] == "PASS",
+          discord["silentDisconnects"])
+
+    if failures:
+        print(f"self-test FAILED ({failures} case(s))", file=sys.stderr)
+        return 1
+    print("self-test passed (5 scenarios)")
+    return 0
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="Audit a Natter passive soak jsonl.")
-    parser.add_argument("files", nargs="+", type=Path, help="soak jsonl file(s)")
+    parser.add_argument("files", nargs="*", type=Path, help="soak jsonl file(s)")
     parser.add_argument("--interval", type=int, default=300, help="expected sampling interval in seconds (default 300)")
     parser.add_argument("--max-gap", type=int, default=900, help="largest tolerated gap in seconds (default 900)")
     parser.add_argument("--min-coverage", type=float, default=95.0, help="minimum coverage percent (default 95)")
     parser.add_argument("--json", action="store_true", help="emit the report as JSON")
+    parser.add_argument("--self-test", action="store_true", help="run synthetic fixtures and exit")
     args = parser.parse_args(argv)
+
+    if args.self_test:
+        return self_test()
+    if not args.files:
+        parser.error("at least one soak jsonl file is required (or use --self-test)")
 
     missing = [str(path) for path in args.files if not path.is_file()]
     if missing:
