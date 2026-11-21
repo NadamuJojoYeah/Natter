@@ -131,7 +131,9 @@ public sealed class ChatCompositionModule : ICompositionModule
                 provider.GetRequiredService<Natter.Application.Chat.IConversationStore>(),
                 provider.GetRequiredService<ChatCommandFactory>(),
                 provider.GetRequiredService<Natter.Application.Chat.IContextComponentCatalog>(),
-                provider.GetRequiredService<Natter.Application.Chat.IProfileMemoryStoreResolver>()));
+                provider.GetRequiredService<Natter.Application.Chat.IProfileMemoryStoreResolver>(),
+                provider.GetRequiredService<Natter.Application.Chat.ITaskStore>(),
+                provider.GetRequiredService<Natter.Application.Chat.ITaskDispatcher>()));
         services.AddSingleton<Natter.Application.Chat.IChatResponder>(provider =>
             new Natter.Application.Chat.ProfileAwareChatResponder(
                 provider.GetRequiredService<Natter.Application.Chat.IChatResponderRegistry>(),

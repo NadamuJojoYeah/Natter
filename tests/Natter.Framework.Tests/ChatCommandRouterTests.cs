@@ -84,6 +84,23 @@ public sealed class ChatCommandRouterTests
         => InMemoryConversationStore.SessionId(new ConversationKey(source.Key, conversation.Id, conversation.GuildId, user.Id));
 
     [Fact]
+    public async Task Host_composition_wires_task_runtime_into_router()
+    {
+        await using var host = await TestHost.CreateAsync();
+        var router = host.Get<IChatCommandRouter>();
+        var source = Source.Create("discord", "discord", "bot");
+        var conversation = new Conversation("c1", ConversationKind.Direct);
+        var user = new User("u1", "User");
+
+        var response = Assert.IsType<InteractionRespondCommand>(await router.TryHandleAsync(
+            Event(source, conversation, user, "task", new() { ["prompt"] = "host task" })));
+
+        Assert.Contains("Task accepted", response.Payload.Content.Text);
+        var taskId = response.Payload.Content.Text.Split(':', 2)[1].Trim();
+        Assert.NotNull(await host.Get<ITaskStore>().GetAsync(taskId));
+    }
+
+    [Fact]
     public async Task Ask_falls_through_to_ai_and_shared_scope_is_refused()
     {
         var clock = new TestClock();
