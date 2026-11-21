@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Natter.Application.Admin;
 using Natter.Chat;
 
@@ -5,21 +6,25 @@ namespace Natter.Application.Chat;
 
 /// <summary>
 /// AI-backed worker. When the routed provider responder implements <see cref="ITaskModelGateway"/>
-/// it runs the bounded P5.1 tool loop (model → read-only tool → model, at most
-/// <see cref="ToolLoopOptions.MaxToolCallsHardCap"/> tool calls). Otherwise it keeps the legacy
-/// single-step behaviour: send a synthetic event through the profile-aware responder, extract the
-/// text and never dispatch that command itself. The deterministic read-only tool worker remains the
-/// last fallback when no AI provider is available.
+/// it runs the bounded P5.x tool loop (model → tool → model), negotiating native function calling
+/// against the text fallback; both transports execute tools through <see cref="ToolInvoker"/>.
+/// Otherwise it keeps the legacy single-step behaviour: send a synthetic event through the
+/// profile-aware responder, extract the text and never dispatch that command itself. The
+/// deterministic read-only tool worker remains the last fallback when no AI provider is available.
 /// </summary>
 public sealed class AiTaskWorker(
     IServiceProvider services,
     IEnumerable<ITool> tools,
     IToolPolicy policy,
-    ToolLoopOptions? loopOptions = null) : ITaskWorker
+    ToolLoopOptions? loopOptions = null,
+    IToolRegistry? toolRegistry = null,
+    ToolInvoker? toolInvoker = null) : ITaskWorker
 {
     private readonly IReadOnlyList<ITool> _tools = tools.ToArray();
     private readonly IToolPolicy _policy = policy;
     private readonly ToolLoopOptions _loopOptions = loopOptions ?? new ToolLoopOptions();
+    private readonly IToolRegistry _registry = toolRegistry ?? new ToolRegistry(tools);
+    private readonly ToolInvoker _invoker = toolInvoker ?? new ToolInvoker(toolRegistry ?? new ToolRegistry(tools), policy);
     private readonly Lazy<IChatResponder> _responder = new(
         () => (IChatResponder)services.GetService(typeof(IChatResponder))!,
         LazyThreadSafetyMode.ExecutionAndPublication);
@@ -80,9 +85,10 @@ public sealed class AiTaskWorker(
     }
 
     /// <summary>
-    /// Bounded multi-step loop. Intermediate observations never touch conversation history or
-    /// memory; only the returned <see cref="TaskResult"/> leaves the worker and the dispatcher
-    /// remains the single platform sender.
+    /// Bounded multi-step loop. The worker owns budgets and observation sanitising; tools are
+    /// executed by <see cref="ToolInvoker"/> (policy, permissions, JSON-schema arguments, per-tool
+    /// timeout, output bounds, audit). Intermediate observations never touch conversation history
+    /// or memory, and the dispatcher remains the single platform sender.
     /// </summary>
     private async ValueTask<TaskResult> ExecuteToolLoopAsync(
         AgentTask task,
@@ -90,17 +96,27 @@ public sealed class AiTaskWorker(
         ITaskModelGateway gateway,
         CancellationToken cancellationToken)
     {
+        var negotiation = ToolProtocolNegotiator.Negotiate(
+            gateway.ProtocolCapabilities,
+            _registry.Descriptors);
+        if (!negotiation.Ok)
+        {
+            return new TaskResult(
+                null,
+                TaskToolLoopCodes.ProtocolUnsupported,
+                negotiation.Reason);
+        }
+
+        var protocol = negotiation.Protocol;
         var hardCap = Math.Max(1, _loopOptions.MaxToolCallsHardCap);
         var requestedCalls = context.MaxToolCalls <= 0 ? hardCap : context.MaxToolCalls;
         var maxToolCalls = Math.Clamp(Math.Min(requestedCalls, hardCap), 1, hardCap);
         var maxModelSteps = Math.Max(1, _loopOptions.MaxModelSteps);
         var observationLimit = Math.Max(128, _loopOptions.MaxObservationCharacters);
 
-        var allowedTools = _tools
-            .Where(tool => _policy.IsAllowed(tool, context.Profile))
-            .ToArray();
-        var descriptors = allowedTools
-            .Select(tool => new TaskToolDescriptor(tool.Name, tool.Description))
+        var allowed = _registry.Allowed(context.Profile, _policy);
+        var descriptors = allowed
+            .Select(descriptor => descriptor.ToTaskToolDescriptor())
             .ToArray();
 
         var deadline = DateTimeOffset.UtcNow + context.Timeout;
@@ -119,7 +135,8 @@ public sealed class AiTaskWorker(
                 context.Profile.Ai.Model,
                 descriptors,
                 observations.ToArray(),
-                stepIndex);
+                stepIndex,
+                protocol);
 
             TaskModelReply reply;
             try
@@ -160,33 +177,30 @@ public sealed class AiTaskWorker(
                 return BudgetExceeded(maxToolCalls);
 
             toolCalls++;
-            var call = reply.ToolCall;
-            var tool = allowedTools.FirstOrDefault(candidate =>
-                string.Equals(candidate.Name, call.Tool, StringComparison.Ordinal));
-            if (tool is null)
-            {
-                observations.Add(new TaskToolObservation(
-                    call.Tool,
-                    call.Input,
-                    Ok: false,
-                    Output: string.Empty,
-                    ErrorCode: TaskToolLoopCodes.ToolNotAllowed,
-                    ErrorMessage: $"Tool '{call.Tool}' is not available under the current task policy."));
-                continue;
-            }
-
             remaining = deadline - DateTimeOffset.UtcNow;
             if (remaining <= TimeSpan.Zero)
                 return BudgetExceeded(maxToolCalls);
 
-            ToolResult toolResult;
+            var call = reply.ToolCall;
+            var arguments = call.Arguments
+                            ?? JsonSerializer.SerializeToElement(new { input = call.Input ?? string.Empty });
+            var request = new ToolCallRequest(
+                call.Tool,
+                arguments,
+                CallId: $"task:{task.TaskId}:{stepIndex}",
+                RawInput: call.Input);
+
+            ToolCallResult result;
             try
             {
                 using var toolBudget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 toolBudget.CancelAfter(StepTimeout(remaining));
-                toolResult = await tool
-                    .ExecuteAsync(new ToolRequest(call.Input), toolBudget.Token)
-                    .ConfigureAwait(false);
+                result = await _invoker.InvokeAsync(
+                    request,
+                    context.Profile,
+                    grantedPermissions: null,
+                    protocol,
+                    toolBudget.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -197,22 +211,44 @@ public sealed class AiTaskWorker(
                 return new TaskResult(
                     null,
                     TaskToolLoopCodes.ToolTimeout,
-                    $"Tool '{tool.Name}' timed out inside the task step budget.");
-            }
-            catch (Exception ex)
-            {
-                toolResult = new ToolResult(string.Empty, TaskToolLoopCodes.ToolFailed, Describe(ex));
+                    $"Tool '{call.Tool}' timed out inside the task step budget.");
             }
 
+            if (result.Ok)
+            {
+                observations.Add(new TaskToolObservation(
+                    call.Tool,
+                    call.Input ?? string.Empty,
+                    Ok: true,
+                    Output: SanitizeObservation(result.Output, observationLimit)));
+                continue;
+            }
+
+            if (string.Equals(result.ErrorCode, ToolErrorCodes.Timeout, StringComparison.Ordinal))
+            {
+                return new TaskResult(
+                    null,
+                    TaskToolLoopCodes.ToolTimeout,
+                    result.ErrorMessage ?? $"Tool '{call.Tool}' timed out.");
+            }
+
+            // Policy/permission rejections surface with the P5.1 observation code so the model can
+            // correct itself; argument/unknown failures keep their concrete registry codes.
+            var observationCode = result.ErrorCode switch
+            {
+                ToolErrorCodes.PolicyDenied or ToolErrorCodes.PermissionDenied => TaskToolLoopCodes.ToolNotAllowed,
+                _ => result.ErrorCode,
+            };
+
             observations.Add(new TaskToolObservation(
-                tool.Name,
-                call.Input,
-                toolResult.Ok,
-                SanitizeObservation(toolResult.Output, observationLimit),
-                toolResult.ErrorCode,
-                toolResult.ErrorMessage is null
+                call.Tool,
+                call.Input ?? string.Empty,
+                Ok: false,
+                Output: SanitizeObservation(result.Output, observationLimit),
+                ErrorCode: observationCode,
+                ErrorMessage: result.ErrorMessage is null
                     ? null
-                    : SanitizeObservation(toolResult.ErrorMessage, observationLimit)));
+                    : SanitizeObservation(result.ErrorMessage, observationLimit)));
         }
 
         return new TaskResult(

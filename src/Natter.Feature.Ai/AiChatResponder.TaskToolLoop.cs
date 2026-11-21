@@ -8,12 +8,17 @@ using Natter.Chat;
 namespace Natter.Feature.Ai;
 
 /// <summary>
-/// P5.1 bounded tool loop gateway. The worker owns tool execution and budgets; this part only turns
-/// one task step into provider messages, calls the model and parses the single-tool-call protocol.
-/// It never writes conversation history or memory.
+/// P5.x bounded tool loop gateway. The worker owns tool execution, budgets and observation
+/// sanitising; this part only turns one task step into provider messages, calls the model and
+/// returns either the final text or one tool call. Native function calling is used when the
+/// provider declares support, otherwise the text protocol is used. It never writes conversation
+/// history or memory.
 /// </summary>
 public sealed partial class AiChatResponder : ITaskModelGateway
 {
+    /// <summary>Declared by the provider adapter; defaults to the text protocol.</summary>
+    public ToolProtocolCapabilities ProtocolCapabilities { get; }
+
     private static readonly Regex ToolCallPattern = new(
         @"<tool_call>\s*(?<json>\{.*?\})\s*</tool_call>",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.CultureInvariant,
@@ -24,6 +29,9 @@ public sealed partial class AiChatResponder : ITaskModelGateway
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
         TimeSpan.FromSeconds(1));
 
+    private static readonly JsonElement DefaultToolSchema = JsonDocument.Parse(
+        """{"type":"object","properties":{"input":{"type":"string"}},"required":["input"]}""").RootElement.Clone();
+
     public async ValueTask<TaskModelReply> CompleteStepAsync(
         TaskModelStep step,
         CancellationToken cancellationToken = default)
@@ -31,15 +39,15 @@ public sealed partial class AiChatResponder : ITaskModelGateway
         ArgumentNullException.ThrowIfNull(step);
 
         var messages = BuildTaskStepMessages(step);
-        var options = string.IsNullOrWhiteSpace(step.ModelId)
-            ? null
-            : new ChatOptions { ModelId = step.ModelId };
+        var options = BuildTaskOptions(step);
 
         try
         {
             using var lease = await _gate.AcquireAsync($"task-loop:{step.TaskId}", cancellationToken).ConfigureAwait(false);
             var response = await _chatClient.GetResponseAsync(messages, options, cancellationToken).ConfigureAwait(false);
-            return ParseTaskReply(response.Text);
+            return step.Protocol == ToolCallProtocol.Native
+                ? ParseNativeReply(response)
+                : ParseTaskReply(response.Text);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -104,6 +112,8 @@ public sealed partial class AiChatResponder : ITaskModelGateway
                     ? inputElement.GetString() ?? string.Empty
                     : string.Empty;
 
+                // The text protocol envelope is not the tool argument object; the worker derives
+                // arguments from <input> (or the raw input) for schema validation.
                 return TaskModelReply.Call(toolElement.GetString()!, input);
             }
             catch (JsonException)
@@ -115,8 +125,78 @@ public sealed partial class AiChatResponder : ITaskModelGateway
         return TaskModelReply.Answer(StripResponseEnvelope(text));
     }
 
+    /// <summary>Parses a native <see cref="FunctionCallContent"/>; text-only replies are final.</summary>
+    internal static TaskModelReply ParseNativeReply(ChatResponse response)
+    {
+        ArgumentNullException.ThrowIfNull(response);
+
+        foreach (var message in response.Messages ?? [])
+        {
+            foreach (var content in message.Contents ?? [])
+            {
+                if (content is not FunctionCallContent call || string.IsNullOrWhiteSpace(call.Name))
+                    continue;
+
+                var arguments = call.Arguments is null
+                    ? JsonSerializer.SerializeToElement(new { input = string.Empty })
+                    : JsonSerializer.SerializeToElement(call.Arguments);
+
+                var input = arguments.ValueKind == JsonValueKind.Object
+                            && arguments.TryGetProperty("input", out var inputElement)
+                            && inputElement.ValueKind == JsonValueKind.String
+                    ? inputElement.GetString() ?? string.Empty
+                    : arguments.GetRawText();
+
+                return TaskModelReply.Call(call.Name, input, arguments);
+            }
+        }
+
+        var text = response.Text;
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            text = string.Concat(
+                (response.Messages ?? [])
+                .SelectMany(message => message.Contents ?? [])
+                .OfType<TextContent>()
+                .Select(content => content.Text));
+        }
+
+        return TaskModelReply.Answer(StripResponseEnvelope(text));
+    }
+
+    private ChatOptions? BuildTaskOptions(TaskModelStep step)
+    {
+        var hasModel = !string.IsNullOrWhiteSpace(step.ModelId);
+        if (step.Protocol != ToolCallProtocol.Native || step.Tools.Count == 0)
+            return hasModel ? new ChatOptions { ModelId = step.ModelId } : null;
+
+        var options = new ChatOptions
+        {
+            ModelId = step.ModelId,
+            AllowMultipleToolCalls = false,
+            ToolMode = ChatToolMode.Auto,
+        };
+
+        options.Tools = step.Tools
+            .Select(tool => (AITool)CreateToolDeclaration(tool))
+            .ToList();
+        return options;
+    }
+
+    private static AIFunctionDeclaration CreateToolDeclaration(TaskToolDescriptor tool)
+    {
+        var schema = ToolInputSchema.TryParse(tool.InputSchema, out var parsed)
+            ? parsed
+            : DefaultToolSchema;
+        return AIFunctionFactory.CreateDeclaration(
+            tool.Name,
+            tool.Description,
+            schema);
+    }
+
     private IReadOnlyList<ChatMessage> BuildTaskStepMessages(TaskModelStep step)
     {
+        var native = step.Protocol == ToolCallProtocol.Native;
         var system = new StringBuilder();
         system.AppendLine(string.IsNullOrWhiteSpace(_options.SystemPrompt)
             ? "You are Natter, a concise assistant."
@@ -127,6 +207,11 @@ public sealed partial class AiChatResponder : ITaskModelGateway
         if (step.Tools.Count == 0)
         {
             system.AppendLine("No tools are available; answer the user directly.");
+        }
+        else if (native)
+        {
+            system.AppendLine("Use the provided tools through the native tool interface when they help.");
+            system.AppendLine("When you have enough information, answer the user directly without calling a tool.");
         }
         else
         {
@@ -145,18 +230,40 @@ public sealed partial class AiChatResponder : ITaskModelGateway
             new(ChatRole.User, step.Prompt),
         };
 
-        foreach (var observation in step.Observations)
-            messages.Add(new ChatMessage(ChatRole.User, FormatObservation(observation)));
+        for (var index = 0; index < step.Observations.Count; index++)
+        {
+            var observation = step.Observations[index];
+            if (native)
+            {
+                // Reconstruct the assistant call / tool result pair so native providers see a
+                // well-formed tool conversation without touching host history.
+                var callId = $"task-observation-{index}";
+                var arguments = new Dictionary<string, object?> { ["input"] = observation.Input };
+                messages.Add(new ChatMessage(
+                    ChatRole.Assistant,
+                    new List<AIContent> { new FunctionCallContent(callId, observation.Tool, arguments) }));
+                messages.Add(new ChatMessage(
+                    ChatRole.Tool,
+                    new List<AIContent> { new FunctionResultContent(callId, FormatObservationBody(observation)) }));
+            }
+            else
+            {
+                messages.Add(new ChatMessage(ChatRole.User, FormatObservation(observation)));
+            }
+        }
 
         return messages;
     }
 
     private static string FormatObservation(TaskToolObservation observation)
-    {
-        var status = observation.Ok ? "ok" : "error:" + (observation.ErrorCode ?? "unknown");
-        var body = observation.Ok
+        => $"[tool observation] {observation.Tool} ({Status(observation)})\n{FormatObservationBody(observation)}";
+
+    private static string FormatObservationBody(TaskToolObservation observation)
+        => observation.Ok
             ? observation.Output
-            : (string.IsNullOrWhiteSpace(observation.ErrorMessage) ? observation.Output : observation.ErrorMessage);
-        return $"[tool observation] {observation.Tool} ({status})\n{body}";
-    }
+            : $"{observation.ErrorCode ?? "tool_error"}: "
+              + (string.IsNullOrWhiteSpace(observation.ErrorMessage) ? observation.Output : observation.ErrorMessage);
+
+    private static string Status(TaskToolObservation observation)
+        => observation.Ok ? "ok" : "error:" + (observation.ErrorCode ?? "unknown");
 }

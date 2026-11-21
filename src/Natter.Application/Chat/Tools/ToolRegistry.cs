@@ -185,6 +185,11 @@ public static class ToolDescriptorExtensions
     public static TaskToolDescriptor ToTaskToolDescriptor(this ToolDescriptor descriptor)
     {
         ArgumentNullException.ThrowIfNull(descriptor);
-        return new TaskToolDescriptor(descriptor.Name, descriptor.Description);
+        return new TaskToolDescriptor(
+            descriptor.Name,
+            descriptor.Description,
+            descriptor.Metadata.InputSchema,
+            descriptor.Metadata.Version,
+            descriptor.Metadata.NativeCallSupported);
     }
 }

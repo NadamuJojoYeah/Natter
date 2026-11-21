@@ -33,7 +33,8 @@ public sealed partial class AiChatResponder : IChatResponder
         ChatCommandFactory commands,
         IPluginLog log,
         IAiContextAssembler? contextAssembler = null,
-        Natter.Application.Chat.IContextPipeline? contextPipeline = null)
+        Natter.Application.Chat.IContextPipeline? contextPipeline = null,
+        Natter.Application.Chat.ToolProtocolCapabilities? toolProtocols = null)
     {
         _chatClient = chatClient ?? throw new ArgumentNullException(nameof(chatClient));
         _options = options ?? throw new ArgumentNullException(nameof(options));
@@ -43,6 +44,7 @@ public sealed partial class AiChatResponder : IChatResponder
         _log = log ?? throw new ArgumentNullException(nameof(log));
         _contextAssembler = contextAssembler ?? new RecentWindowContextAssembler(options);
         _contextPipeline = contextPipeline;
+        ProtocolCapabilities = toolProtocols ?? Natter.Application.Chat.ToolProtocolCapabilities.TextOnly;
     }
 
     public async ValueTask<ChatCommand?> RespondAsync(

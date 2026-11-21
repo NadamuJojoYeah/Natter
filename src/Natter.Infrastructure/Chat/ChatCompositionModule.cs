@@ -179,12 +179,24 @@ public sealed class ChatCompositionModule : ICompositionModule
         });
         services.AddSingleton<Natter.Application.Chat.IToolPolicy, Natter.Application.Chat.ReadOnlyToolPolicy>();
         services.AddSingleton(new Natter.Application.Chat.ToolLoopOptions());
+        // P5.2: one registry/invoker for every tool call (native function calling and the text
+        // fallback both execute through it: policy, permissions, schema, timeout, output bounds).
+        services.AddSingleton<Natter.Application.Chat.IToolRegistry>(provider =>
+            new Natter.Application.Chat.ToolRegistry(
+                provider.GetServices<Natter.Application.Chat.ITool>(),
+                Natter.Application.Chat.ToolProtocolCapabilities.NativeAndText));
+        services.AddSingleton<Natter.Application.Chat.ToolInvoker>(provider =>
+            new Natter.Application.Chat.ToolInvoker(
+                provider.GetRequiredService<Natter.Application.Chat.IToolRegistry>(),
+                provider.GetRequiredService<Natter.Application.Chat.IToolPolicy>()));
         services.AddSingleton<Natter.Application.Chat.ITaskWorker>(provider =>
             new Natter.Application.Chat.AiTaskWorker(
                 provider,
                 provider.GetServices<Natter.Application.Chat.ITool>(),
                 provider.GetRequiredService<Natter.Application.Chat.IToolPolicy>(),
-                provider.GetService<Natter.Application.Chat.ToolLoopOptions>()));
+                provider.GetService<Natter.Application.Chat.ToolLoopOptions>(),
+                provider.GetRequiredService<Natter.Application.Chat.IToolRegistry>(),
+                provider.GetRequiredService<Natter.Application.Chat.ToolInvoker>()));
         services.AddSingleton<Natter.Abstractions.Plugins.IPluginLifecycle, Natter.Application.Chat.TaskRecoveryLifecycle>();
         services.AddSingleton<Natter.Application.Chat.ITaskDispatcher>(provider =>
             new Natter.Application.Chat.TaskDispatcher(

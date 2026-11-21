@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace Natter.Application.Chat;
 
 /// <summary>
@@ -17,7 +19,12 @@ public sealed class ToolLoopOptions
 }
 
 /// <summary>Tool description exposed to the model inside a task tool loop.</summary>
-public sealed record TaskToolDescriptor(string Name, string Description);
+public sealed record TaskToolDescriptor(
+    string Name,
+    string Description,
+    string? InputSchema = null,
+    string Version = "1.0.0",
+    bool NativeCallSupported = false);
 
 /// <summary>One tool result (already redacted/truncated) fed back to the model as an observation.</summary>
 public sealed record TaskToolObservation(
@@ -35,10 +42,14 @@ public sealed record TaskModelStep(
     string? ModelId,
     IReadOnlyList<TaskToolDescriptor> Tools,
     IReadOnlyList<TaskToolObservation> Observations,
-    int StepIndex);
+    int StepIndex,
+    ToolCallProtocol Protocol = ToolCallProtocol.Text);
 
-/// <summary>One tool invocation requested by the model.</summary>
-public sealed record TaskToolCall(string Tool, string Input);
+/// <summary>
+/// One tool invocation requested by the model. <see cref="Arguments"/> carries structured native
+/// arguments; text-protocol calls leave it null and rely on <see cref="Input"/>.
+/// </summary>
+public sealed record TaskToolCall(string Tool, string Input, JsonElement? Arguments = null);
 
 /// <summary>Model reply for one step: a final text answer, a tool call, or an explicit error.</summary>
 public sealed record TaskModelReply(
@@ -51,7 +62,8 @@ public sealed record TaskModelReply(
 
     public static TaskModelReply Answer(string? text) => new(text);
 
-    public static TaskModelReply Call(string tool, string input) => new(null, new TaskToolCall(tool, input));
+    public static TaskModelReply Call(string tool, string input, JsonElement? arguments = null)
+        => new(null, new TaskToolCall(tool, input, arguments));
 
     public static TaskModelReply Fail(string code, string message) => new(null, null, code, message);
 }
@@ -63,6 +75,12 @@ public sealed record TaskModelReply(
 /// </summary>
 public interface ITaskModelGateway
 {
+    /// <summary>
+    /// Tool-call transports the routed provider supports. Legacy gateways default to the text
+    /// protocol so existing implementations keep working; native-capable providers override it.
+    /// </summary>
+    ToolProtocolCapabilities ProtocolCapabilities => ToolProtocolCapabilities.TextOnly;
+
     ValueTask<TaskModelReply> CompleteStepAsync(
         TaskModelStep step,
         CancellationToken cancellationToken = default);
@@ -78,5 +96,6 @@ public static class TaskToolLoopCodes
     public const string ModelStepTimeout = "ai_step_timeout";
     public const string ModelStepFailed = "ai_step_failed";
     public const string ToolLoopFailed = "tool_loop_failed";
+    public const string ProtocolUnsupported = "tool_protocol_unsupported";
     public const string EmptyResponse = "empty_response";
 }
