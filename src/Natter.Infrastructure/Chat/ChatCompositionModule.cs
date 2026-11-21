@@ -175,11 +175,13 @@ public sealed class ChatCompositionModule : ICompositionModule
             return new Natter.Application.Chat.HttpFetchTool(hardened, hosts);
         });
         services.AddSingleton<Natter.Application.Chat.IToolPolicy, Natter.Application.Chat.ReadOnlyToolPolicy>();
+        services.AddSingleton(new Natter.Application.Chat.ToolLoopOptions());
         services.AddSingleton<Natter.Application.Chat.ITaskWorker>(provider =>
             new Natter.Application.Chat.AiTaskWorker(
                 provider,
                 provider.GetServices<Natter.Application.Chat.ITool>(),
-                provider.GetRequiredService<Natter.Application.Chat.IToolPolicy>()));
+                provider.GetRequiredService<Natter.Application.Chat.IToolPolicy>(),
+                provider.GetService<Natter.Application.Chat.ToolLoopOptions>()));
         services.AddSingleton<Natter.Abstractions.Plugins.IPluginLifecycle, Natter.Application.Chat.TaskRecoveryLifecycle>();
         services.AddSingleton<Natter.Application.Chat.ITaskDispatcher>(provider =>
             new Natter.Application.Chat.TaskDispatcher(

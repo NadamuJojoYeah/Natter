@@ -12,7 +12,7 @@ namespace Natter.Feature.Ai;
 /// NLMP responder backed by <see cref="IChatClient"/>. It owns conversation history,
 /// per-conversation serialization, idempotency and user-facing error fallbacks.
 /// </summary>
-public sealed class AiChatResponder : IChatResponder
+public sealed partial class AiChatResponder : IChatResponder
 {
     private readonly IChatClient _chatClient;
     private readonly AiResponderOptions _options;
