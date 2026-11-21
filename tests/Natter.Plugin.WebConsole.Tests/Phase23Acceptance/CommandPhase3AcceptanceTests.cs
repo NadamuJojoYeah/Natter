@@ -194,11 +194,10 @@ public sealed class CommandPhase3AcceptanceTests
     }
 
     [Fact]
-    public async Task Plain_key_value_secret_in_command_output_is_a_documented_redaction_gap()
+    public async Task Plain_key_value_secret_in_command_output_is_redacted()
     {
-        // OBS-WC-P3-REDACT-KV: WebConsoleRedaction only rewrites sk-/ak-/Bearer shapes. A plain
-        // KEY=value pair in command output reaches the browser unchanged. Recorded as an
-        // observation for task-2/task-5, not signed off as acceptable.
+        // OBS-WC-P3-REDACT-KV: after the fix a plain KEY=value pair in command output is masked
+        // while the key stays readable, so the browser never receives the secret value.
         var runner = new ScriptedCommandRunner { Stderr = "token=super-secret-value-123" };
         using var harness = AcceptanceHarness.Create(runner: runner);
         var (cookie, csrf, _) = await harness.LoginAsync();
@@ -212,7 +211,8 @@ public sealed class CommandPhase3AcceptanceTests
 
         Assert.Equal(200, response.StatusCode);
         var stderr = AcceptanceHarness.Json(response).GetProperty("stderr").GetString() ?? string.Empty;
-        Assert.Contains("super-secret-value-123", stderr, StringComparison.Ordinal);
+        Assert.DoesNotContain("super-secret-value-123", stderr, StringComparison.Ordinal);
+        Assert.Contains("token=[redacted]", stderr, StringComparison.Ordinal);
     }
 
     [Fact]

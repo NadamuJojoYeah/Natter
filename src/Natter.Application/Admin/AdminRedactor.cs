@@ -27,7 +27,7 @@ public sealed class AdminRedactor : IAdminRedactor
         RegexTimeout);
 
     private static readonly Regex SecretPairPattern = new(
-        @"(?<prefix>""?(?<key>token|secret|password|passwd|api[-_]?key|apikey|authorization|cookie|credential|credentials|private[-_]?key|connection[-_]?string)""?\s*[:=]\s*""?)(?<value>[^""\s,;}]+)",
+        @"(?<prefix>""?(?<key>token|secret|password|passwd|pwd|api[-_]?key|apikey|authorization|cookie|credential|credentials|private[-_]?key|connection[-_]?string)""?\s*[:=]\s*""?)(?<value>[^""\s,;]+)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase,
         RegexTimeout);
 

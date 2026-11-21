@@ -54,6 +54,38 @@ public sealed class WebConsoleRedactionTests
         Assert.Equal("[redacted]", result);
     }
 
+    [Theory]
+    [InlineData("token=abc123", "token=[redacted]")]
+    [InlineData("API_KEY=XYZ-123", "API_KEY=[redacted]")]
+    [InlineData("password: hunter2", "password: [redacted]")]
+    [InlineData("secret = s3cr3t-value", "secret = [redacted]")]
+    [InlineData("--api-key=plain-value", "--api-key=[redacted]")]
+    [InlineData("{\"token\": \"abc123\"}", "{\"token\": \"[redacted]\"}")]
+    public void Text_sanitizer_redacts_key_value_secrets_and_keeps_the_key(string input, string expected)
+        => Assert.Equal(expected, WebConsoleRedaction.SanitizeText(input));
+
+    [Fact]
+    public void Text_sanitizer_keeps_secret_references_inside_key_value_pairs()
+    {
+        var result = WebConsoleRedaction.SanitizeText("token=${secret:WEBCONSOLE_TOKEN}");
+
+        Assert.Equal("token=${secret:WEBCONSOLE_TOKEN}", result);
+    }
+
+    [Fact]
+    public void Sanitized_config_redacts_key_value_pairs_inside_free_text()
+    {
+        var raw = JsonSerializer.SerializeToElement(new { note = "token=abc123 and password: hunter2" });
+
+        var (sanitized, redacted) = WebConsoleRedaction.Sanitize(raw);
+
+        var note = sanitized.GetProperty("note").GetString()!;
+        Assert.DoesNotContain("abc123", note);
+        Assert.DoesNotContain("hunter2", note);
+        Assert.Single(redacted);
+        Assert.Contains("$.note", redacted);
+    }
+
     [Fact]
     public void Text_sanitizer_truncates_without_leaking()
     {

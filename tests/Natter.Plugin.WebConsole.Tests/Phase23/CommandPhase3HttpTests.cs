@@ -179,6 +179,43 @@ public sealed class CommandPhase3HttpTests
     }
 
     [Fact]
+    public async Task Timeout_with_oversized_partial_output_stays_bounded_and_maps_to_504()
+    {
+        var huge = new string('y', WebConsoleCommandPolicy.MaxOutputBytes);
+        var runner = new FakeAdminCommandRunner
+        {
+            ResultFactory = (command, args) => new AdminCommandResult(
+                true,
+                AdminCodes.CommandTimeout,
+                "Command timed out after 10s.",
+                command,
+                args,
+                130,
+                huge,
+                huge,
+                true,
+                huge.Length * 2,
+                10_000,
+                true),
+        };
+
+        using var harness = WebConsoleHarness.Create(Runnable(allowlist: ["events watch"]), adminCommand: runner);
+        var login = await harness.LoginAsync();
+
+        var response = await harness.Handler.HandleAsync(harness.Request(
+            "POST", "/api/commands", body: Body("events watch"), cookie: login.Cookie, csrf: login.Csrf));
+
+        Assert.Equal(504, response.StatusCode);
+        Assert.Equal("command.timeout", Code(response));
+        var result = Json(response).GetProperty("result");
+        Assert.True(result.GetProperty("timedOut").GetBoolean());
+        Assert.True(result.GetProperty("truncated").GetBoolean());
+        var combined = System.Text.Encoding.UTF8.GetByteCount(result.GetProperty("stdout").GetString()!)
+                       + System.Text.Encoding.UTF8.GetByteCount(result.GetProperty("stderr").GetString()!);
+        Assert.True(combined <= WebConsoleCommandPolicy.MaxOutputBytes);
+    }
+
+    [Fact]
     public async Task Run_reports_host_exception_as_bad_gateway()
     {
         var runner = new FakeAdminCommandRunner { Throw = true };

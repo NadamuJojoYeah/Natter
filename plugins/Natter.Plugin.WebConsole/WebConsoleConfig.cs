@@ -28,11 +28,15 @@ public static class WebConsoleConfig
         var (sanitized, redacted) = WebConsoleRedaction.Sanitize(raw);
         var writeEnabled = !options.ReadOnly && options.AllowConfigWrite;
 
+        // OBS-WC-WRITEGAP: the static preview only reports the plugin switch. Whether the host
+        // admin config store is bridged is a live property (WebConsoleDiagnostics.ConfigPreview /
+        // WebConsoleAdminStatus.ConfigGapCode), and the UI enables editing from
+        // admin.configStoreAvailable rather than from this field alone.
         return new WebConsoleConfigPreview(
             source,
             schemaPath,
             writeEnabled,
-            writeEnabled ? WebConsoleGaps.AdminConfig.Code : "webconsole.write_disabled",
+            writeEnabled ? null : "webconsole.write_disabled",
             sanitized,
             redacted);
     }
@@ -54,6 +58,12 @@ public static class WebConsoleRedaction
     private static readonly Regex SensitiveValuePattern = new(
         @"(sk-[A-Za-z0-9_\-]{8,}|ak-[A-Za-z0-9_\-]{8,}|Bearer\s+[A-Za-z0-9._\-]{8,})",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
+        TimeSpan.FromSeconds(1));
+
+    /// <summary>OBS-WC-P3-REDACT-KV: <c>token=...</c> / <c>API_KEY: ...</c> plain text pairs.</summary>
+    private static readonly Regex SensitivePairPattern = new(
+        "(?<prefix>\"?(?i:token|secret|password|passwd|pwd|api[-_]?key|apikey|authorization|cookie|credential|credentials|private[-_]?key|connection[-_]?string)\"?\\s*[:=]\\s*\"?)(?<value>[^\\s,;\"']+)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant,
         TimeSpan.FromSeconds(1));
 
     private static readonly Regex SecretReferencePattern = new(
@@ -80,7 +90,17 @@ public static class WebConsoleRedaction
     }
 
     public static string RedactSecrets(string? value)
-        => string.IsNullOrEmpty(value) ? value ?? string.Empty : SensitiveValuePattern.Replace(value, "[redacted]");
+    {
+        if (string.IsNullOrEmpty(value))
+            return value ?? string.Empty;
+
+        var redacted = SensitiveValuePattern.Replace(value, "[redacted]");
+        return SensitivePairPattern.Replace(
+            redacted,
+            match => SecretReferencePattern.IsMatch(match.Groups["value"].Value)
+                ? match.Value
+                : match.Groups["prefix"].Value + "[redacted]");
+    }
 
     public static string SanitizeText(string? value, int maxLength = 300)
     {
@@ -136,11 +156,10 @@ public static class WebConsoleRedaction
                 if (SecretReferencePattern.IsMatch(text))
                     return;
 
-                var flagged = SensitiveValuePattern.IsMatch(text);
-                if (flagged)
+                var replaced = RedactSecrets(text);
+                if (!string.Equals(replaced, text, StringComparison.Ordinal))
                     redacted.Add(pointer);
 
-                var replaced = flagged ? SensitiveValuePattern.Replace(text, "[redacted]") : text;
                 if (replaced.Length > MaxStringLength)
                     replaced = replaced[..MaxStringLength] + "…(truncated)";
 

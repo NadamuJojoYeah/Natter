@@ -221,10 +221,10 @@ public sealed class HostAdminConfigStore : IAdminConfigStore
         {
             try
             {
-                var created = !Directory.Exists(root);
+                // OBS-WC-CONFIG-MODE: tighten a pre-existing config directory too; chmod does not
+                // touch the document contents.
                 Directory.CreateDirectory(root);
-                if (created)
-                    SetUnixMode(root, PrivateDirectoryMode);
+                SetUnixMode(root, PrivateDirectoryMode);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {

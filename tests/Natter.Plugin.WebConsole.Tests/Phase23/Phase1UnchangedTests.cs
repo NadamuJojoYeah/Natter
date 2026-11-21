@@ -59,6 +59,38 @@ public sealed class Phase1UnchangedTests
     }
 
     [Fact]
+    public void Static_config_preview_never_claims_a_host_gap()
+    {
+        var raw = JsonDocument.Parse("""{ "port": 5090 }""").RootElement;
+
+        var writable = WebConsoleConfig.Build(
+            raw,
+            "plugin",
+            schemaPath: null,
+            new WebConsoleOptions { Port = 5090, ReadOnly = false, AllowConfigWrite = true });
+        var readOnly = WebConsoleConfig.Build(raw, "plugin", schemaPath: null, new WebConsoleOptions { Port = 5090 });
+
+        // Host availability is decided by admin.*Available; the static value only mirrors the switch.
+        Assert.Null(writable.WriteGapCode);
+        Assert.Equal("webconsole.write_disabled", readOnly.WriteGapCode);
+    }
+
+    [Fact]
+    public async Task Config_http_endpoint_reports_the_host_gap_only_when_the_store_is_missing()
+    {
+        using var harness = WebConsoleHarness.Create(
+            new WebConsoleOptions { Port = 5090, ReadOnly = false, AllowConfigWrite = true });
+        var login = await harness.LoginAsync();
+
+        var response = await harness.Handler.HandleAsync(harness.Request("GET", "/api/config", cookie: login.Cookie));
+
+        Assert.Equal(200, response.StatusCode);
+        var json = JsonDocument.Parse(response.Body).RootElement;
+        Assert.Equal("host.admin_config.unavailable", json.GetProperty("writeGapCode").GetString());
+        Assert.False(json.GetProperty("admin").GetProperty("configStoreAvailable").GetBoolean());
+    }
+
+    [Fact]
     public async Task Satisfied_gaps_disappear_from_the_console()
     {
         var store = new FakeAdminConfigStore().WithDocument("profiles", "{}");

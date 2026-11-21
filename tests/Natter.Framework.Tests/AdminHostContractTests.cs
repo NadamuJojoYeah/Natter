@@ -282,6 +282,33 @@ public sealed class AdminHostContractTests
     }
 
     [Fact]
+    public async Task Save_tightens_an_existing_config_directory_to_0700()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        using var workspace = new AdminWorkspace();
+        File.SetUnixFileMode(
+            workspace.ConfigDir,
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
+            | UnixFileMode.GroupRead | UnixFileMode.GroupExecute
+            | UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
+        workspace.WriteConfig("profiles.json", AdminWorkspace.ValidProfiles);
+
+        var store = CreateStore(workspace);
+        var read = await store.ReadAsync("profiles");
+        var result = await store.SaveAsync("profiles", AdminWorkspace.ProfilesWithExtraProfile, read.Document!.ETag);
+
+        Assert.True(result.Saved);
+        Assert.Equal(
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute,
+            File.GetUnixFileMode(workspace.ConfigDir));
+        Assert.Equal(
+            AdminWorkspace.ProfilesWithExtraProfile,
+            File.ReadAllText(workspace.ConfigPath("profiles.json")));
+    }
+
+    [Fact]
     public async Task Save_rejects_documents_for_unregistered_plugins()
     {
         using var workspace = new AdminWorkspace();
@@ -381,6 +408,22 @@ public sealed class AdminHostContractTests
     }
 
     [Fact]
+    public void Redactor_masks_key_value_secrets_and_keeps_secret_references()
+    {
+        const string text = "token=abc123 API_KEY=XYZ-123 password: hunter2 --api-key=plain";
+        var redacted = AdminRedactor.Default.Redact(text);
+
+        Assert.DoesNotContain("abc123", redacted);
+        Assert.DoesNotContain("XYZ-123", redacted);
+        Assert.DoesNotContain("hunter2", redacted);
+        Assert.DoesNotContain("plain", redacted);
+        Assert.Contains("token=[redacted]", redacted);
+        Assert.Equal(
+            "token=${secret:WEBCONSOLE_TOKEN}",
+            AdminRedactor.Default.Redact("token=${secret:WEBCONSOLE_TOKEN}"));
+    }
+
+    [Fact]
     public void Diff_uses_the_webconsole_line_prefix_convention()
     {
         var diff = AdminConfigDiffBuilder.Build("{\n\"a\": 1\n}", "{\n\"a\": 2\n}");
@@ -462,6 +505,8 @@ public sealed class AdminHostContractTests
         Assert.True(result.OutputBytes <= AdminCommandPolicy.MaxOutputBytes);
         Assert.DoesNotContain("sk-abcdefgh12345678", result.Stdout);
         Assert.DoesNotContain("Bearer abcdefghijklmnop", result.Stdout);
+        Assert.DoesNotContain("plain-value-123", result.Stdout);
+        Assert.DoesNotContain("hunter2-secret", result.Stdout);
         Assert.Contains("[redacted]", result.Stdout);
     }
 
@@ -1140,6 +1185,8 @@ public sealed class AdminHostContractTests
                     services.AddSingleton(TestDescriptor("admin noisy", (invocation, _) =>
                     {
                         invocation.Console.Out.WriteLine("token=sk-abcdefgh12345678");
+                        invocation.Console.Out.WriteLine("api_key=plain-value-123");
+                        invocation.Console.Out.WriteLine("password: hunter2-secret");
                         invocation.Console.Out.WriteLine("Authorization: Bearer abcdefghijklmnop");
                         invocation.Console.Out.WriteLine(new string('x', 100_000));
                         return ValueTask.FromResult(CliExitCodes.Success);
