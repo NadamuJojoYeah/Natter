@@ -11,7 +11,7 @@ public sealed class WebConsoleDiagnosticsTests
 
         var snapshot = await harness.Diagnostics.CreateSnapshotAsync();
 
-        Assert.Equal(6, snapshot.Checks.Count);
+        Assert.Equal(9, snapshot.Checks.Count);
         Assert.Contains(snapshot.Checks, check => check.Name == "audit" && check.Status == "ok");
         Assert.Contains(snapshot.Checks, check => check.Name == "server" && check.Status == "ok");
         Assert.Contains(snapshot.Checks, check => check.Name == "host.health" && check.Status == "degraded");
@@ -19,6 +19,10 @@ public sealed class WebConsoleDiagnosticsTests
         Assert.False(snapshot.Logs.Available);
         Assert.Equal("host.logs.unavailable", snapshot.Logs.GapCode);
         Assert.NotEmpty(snapshot.Gaps);
+        Assert.Contains(snapshot.Checks, check => check.Name == "host.admin_config" && check.Status == "degraded");
+        Assert.Contains(snapshot.Checks, check => check.Name == "host.admin_command" && check.Status == "degraded");
+        Assert.False(snapshot.Admin.ConfigStoreAvailable);
+        Assert.False(snapshot.Admin.CommandRunnerAvailable);
         Assert.True(snapshot.Config.Values.ValueKind == System.Text.Json.JsonValueKind.Object);
     }
 
@@ -41,6 +45,7 @@ public sealed class WebConsoleDiagnosticsTests
             harness.Options,
             harness.Diagnostics.ConfigPreview,
             UnavailableWebConsoleHostPort.Instance,
+            harness.Admin,
             harness.Status,
             harness.Audit,
             new WebConsoleTokenAuthenticator("short"),

@@ -19,6 +19,10 @@ class FakeNode {
     this.textContent = "";
     this.className = "";
     this.hidden = false;
+    this.disabled = false;
+    this.value = "";
+    this.type = "";
+    this.placeholder = "";
     this.listeners = {};
   }
 
@@ -47,6 +51,9 @@ const ids = [
   "login", "dashboard", "login-form", "token", "login-error", "status-line", "subtitle",
   "overview", "checks", "upstreams", "profiles", "plugins", "gaps", "config", "audit",
   "logs", "refresh", "logout",
+  "config-editor", "config-doc", "config-load", "config-validate", "config-save",
+  "config-status", "config-text", "config-diff", "config-undo",
+  "command-console", "command-name", "command-args", "command-run", "command-status", "command-output",
 ];
 const elements = new Map(ids.map((id) => [id, new FakeNode()]));
 const document = {
@@ -85,6 +92,9 @@ const snapshot = {
     { name: "audit", status: "ok", detail: null },
     { name: "host.health", status: "ok", detail: null },
     { name: "host.plugins", status: "degraded", detail: "host.plugin_diagnostics.unavailable" },
+    { name: "host.admin_config", status: "ok", detail: "available" },
+    { name: "host.admin_command", status: "ok", detail: "available" },
+    { name: "host.logs", status: "ok", detail: "1 entries" },
   ],
   health: {
     available: true,
@@ -154,17 +164,31 @@ const snapshot = {
     ],
   },
   logs: {
-    available: false,
-    gapCode: "host.logs.unavailable",
-    reason: "宿主没有日志读取端口",
+    available: true,
+    data: [
+      { timestamp: "2026-11-18T02:20:00Z", level: "Information", source: "Natter.Host", message: "host started" },
+    ],
   },
   config: {
     source: "plugin.config",
     schemaPath: null,
-    writeEnabled: false,
-    writeGapCode: "host.admin_config.unavailable",
-    values: { port: 5090, token: "${secret:WEBCONSOLE_TOKEN}", readOnly: true },
+    writeEnabled: true,
+    writeGapCode: null,
+    values: { port: 5090, token: "${secret:WEBCONSOLE_TOKEN}", readOnly: false },
     redacted: ["$.nested.password", "$.nested.apiKey"],
+    documents: [
+      { id: "profiles", exists: true, eTag: "sha256:aaa", lastModified: "2026-11-18T02:00:00Z", source: "config-directory", writable: true, reloadHint: "restart-host" },
+      { id: "plugin:natter.plugin.webconsole", exists: false, eTag: "sha256:bbb", lastModified: null, source: "missing", writable: true, reloadHint: "restart-plugin" },
+    ],
+  },
+  admin: {
+    configStoreAvailable: true,
+    configWriteEnabled: true,
+    commandRunnerAvailable: true,
+    commandEnabled: true,
+    commandAllowlist: ["health", "plugins list"],
+    commandTimeoutSeconds: 10,
+    logReaderAvailable: true,
   },
   gaps: [
     "host.admin_diagnostics.unavailable",
@@ -211,6 +235,29 @@ async function fetchStub(url, options = {}) {
     return respond(200, snapshot);
   }
 
+  if (url === "/api/config/profiles") {
+    return respond(200, {
+      id: "profiles",
+      exists: true,
+      eTag: "sha256:aaa",
+      lastModified: "2026-11-18T02:00:00Z",
+      content: "{\"schemaVersion\":1}",
+      contentRedacted: false,
+      source: "config-directory",
+      reloadHint: "restart-host",
+      restartRequired: true,
+      sizeBytes: 18,
+    });
+  }
+
+  if (url === "/api/config/profiles/undo") {
+    return respond(200, { id: "profiles", entries: [{ undoId: "undo-1", documentId: "profiles", recordedAt: "2026-11-18T02:10:00Z", sizeBytes: 18, eTag: "sha256:aaa", backupPath: ".backup/x/profiles.json" }] });
+  }
+
+  if (url === "/api/commands") {
+    return respond(200, { command: "health", args: ["--json"], executed: true, exitCode: 0, stdout: "{\"status\":\"ok\"}", stderr: "", truncated: false, outputBytes: 15, durationMs: 12, timedOut: false });
+  }
+
   return respond(404, { error: { code: "not_found", message: "not found" } });
 }
 
@@ -250,7 +297,7 @@ assert(elements.get("dashboard").hidden === false, "dashboard should be visible"
 assert(elements.get("login").hidden === true, "login should be hidden after authentication");
 assert(statusLine.textContent.startsWith("health=degraded"), "status line should show degraded health");
 assert(statusLine.className.includes("degraded"), "status class should be degraded");
-assert(checks.length === 6, `expected 6 checks, got ${checks.length}`);
+assert(checks.length === 9, `expected 9 checks, got ${checks.length}`);
 assert(upstreams.length === 1, "upstream section should contain a table");
 assert(elements.get("profiles").children.length === 1, "profiles section should contain a table");
 assert(elements.get("plugins").children.length >= 3, "plugins section should render counts, failures and nodes");
@@ -258,7 +305,40 @@ assert(gaps.length === 7, `expected 7 gaps, got ${gaps.length}`);
 assert(config.includes("${secret:WEBCONSOLE_TOKEN}"), "config preview must keep secret references");
 assert(config.includes("redacted=2"), "config preview must report redacted fields");
 assert(elements.get("audit").children.length === 1, "audit section should contain a table");
-assert(logs.includes("宿主日志不可用"), "logs section should explain the host gap");
+assert(logs.includes("宿主日志已启用"), "logs section should report the host log tail");
+
+// Phase 2/3 panels
+const docSelect = elements.get("config-doc");
+assert(docSelect.children.length === 2, `expected 2 config documents, got ${docSelect.children.length}`);
+assert(docSelect.value === "profiles", "config document select should default to profiles");
+assert(elements.get("config-save").disabled === false, "save must be enabled when the host store is writable");
+assert(
+  elements.get("config-status").textContent.includes("宿主配置已接入"),
+  "config status should report the host admin surface",
+);
+assert(
+  elements.get("command-status").textContent.includes("允许命令"),
+  "command status should list the allowlist",
+);
+assert(elements.get("command-run").disabled === false, "command run must be enabled with a runner");
+
+elements.get("config-load").listeners.click();
+await new Promise((resolve) => setTimeout(resolve, 40));
+assert(
+  elements.get("config-text").value.includes("schemaVersion"),
+  "loading a document should fill the editor",
+);
+assert(elements.get("config-undo").children.length === 1, "undo list should render the snapshot row");
+
+elements.get("command-name").value = "health";
+elements.get("command-args").value = "--json";
+elements.get("command-run").listeners.click();
+await new Promise((resolve) => setTimeout(resolve, 40));
+assert(
+  elements.get("command-output").textContent.includes("status"),
+  "command output should render stdout",
+);
+
 assert(sessionCalls === 1, "bootstrap should call /api/session exactly once");
 
 console.log(JSON.stringify({
@@ -267,5 +347,7 @@ console.log(JSON.stringify({
   gaps: gaps.length,
   statusLine: statusLine.textContent,
   configRedacted: config.includes("redacted=2"),
+  configDocuments: docSelect.children.length,
+  commandOutput: elements.get("command-output").textContent.includes("status"),
   auditTable: elements.get("audit").children.length,
 }, null, 2));

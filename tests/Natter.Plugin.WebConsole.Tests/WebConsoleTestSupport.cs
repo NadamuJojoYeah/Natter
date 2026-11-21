@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using Natter.Abstractions.Plugins;
 using Natter.Plugin.Abstractions;
+using Natter.Plugin.WebConsole.Tests.Phase23;
 
 namespace Natter.Plugin.WebConsole.Tests;
 
@@ -110,7 +111,10 @@ internal sealed class WebConsoleHarness : IDisposable
         WebConsoleOptions options,
         IWebConsoleHostPort hostPort,
         JsonElement config,
-        string directory)
+        string directory,
+        FakeAdminConfigStore? adminConfig,
+        FakeAdminCommandRunner? adminCommand,
+        FakeAdminLogReader? logReader)
     {
         Options = options;
         Clock = new FakeTimeProvider(new DateTimeOffset(2026, 11, 18, 2, 0, 0, TimeSpan.Zero));
@@ -133,11 +137,18 @@ internal sealed class WebConsoleHarness : IDisposable
         var tokens = new WebConsoleTokenAuthenticator(Token);
         var assets = WebConsoleStaticAssets.Load(Path.Combine(directory, "wwwroot"));
 
+        AdminConfig = adminConfig;
+        AdminCommand = adminCommand;
+        LogReader = logReader;
+        var surface = new WebConsoleAdminSurface(adminConfig, adminCommand, logReader, new FakeAdminRedactor());
+        Admin = new WebConsoleAdminGateway(surface, options, Clock);
+
         Diagnostics = new WebConsoleDiagnostics(
             identity,
             options,
             preview,
             hostPort,
+            Admin,
             Status,
             Audit,
             tokens,
@@ -151,6 +162,7 @@ internal sealed class WebConsoleHarness : IDisposable
             new WebConsoleLoginThrottle(Clock),
             new WebConsoleOriginPolicy(options.PublicBaseUrl, options.Port),
             Diagnostics,
+            Admin,
             Audit,
             assets,
             Clock,
@@ -167,6 +179,14 @@ internal sealed class WebConsoleHarness : IDisposable
 
     public WebConsoleDiagnostics Diagnostics { get; }
 
+    public WebConsoleAdminGateway Admin { get; }
+
+    public FakeAdminConfigStore? AdminConfig { get; }
+
+    public FakeAdminCommandRunner? AdminCommand { get; }
+
+    public FakeAdminLogReader? LogReader { get; }
+
     public WebConsoleRequestHandler Handler { get; }
 
     public string Directory { get; }
@@ -174,7 +194,10 @@ internal sealed class WebConsoleHarness : IDisposable
     public static WebConsoleHarness Create(
         WebConsoleOptions? options = null,
         IWebConsoleHostPort? hostPort = null,
-        JsonElement? config = null)
+        JsonElement? config = null,
+        FakeAdminConfigStore? adminConfig = null,
+        FakeAdminCommandRunner? adminCommand = null,
+        FakeAdminLogReader? logReader = null)
     {
         options ??= new WebConsoleOptions { Port = 5090 };
         var directory = Path.Combine(Path.GetTempPath(), "natter-webconsole-tests", Guid.NewGuid().ToString("N"));
@@ -192,7 +215,14 @@ internal sealed class WebConsoleHarness : IDisposable
             name = "console",
         });
 
-        return new WebConsoleHarness(options, hostPort ?? UnavailableWebConsoleHostPort.Instance, defaultConfig, directory);
+        return new WebConsoleHarness(
+            options,
+            hostPort ?? UnavailableWebConsoleHostPort.Instance,
+            defaultConfig,
+            directory,
+            adminConfig,
+            adminCommand,
+            logReader);
     }
 
     public WebConsoleHttpRequest Request(
