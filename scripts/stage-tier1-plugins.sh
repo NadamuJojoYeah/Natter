@@ -173,7 +173,7 @@ stage_one() {
   rm -rf "$tmp"
   mkdir -p "$tmp/lib"
   cp -a "$bin_dir/lib/." "$tmp/lib/"
-  cp -f "$source_dir/plugin.json" "$source_dir/config.schema.json" "$tmp/"
+  install -m 0644 "$source_dir/plugin.json" "$source_dir/config.schema.json" "$tmp/"
 
   # Preserve a deployment-provided config.json across re-staging.
   if [[ -f "$dest/config.json" ]]; then

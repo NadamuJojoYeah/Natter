@@ -86,6 +86,7 @@ fi
 
 echo "2/7 release layout (read-only)"
 run chown -R root:root "$RELEASE_DIR"
+run chmod -R a+rX "$RELEASE_DIR"
 run chmod -R go-w "$RELEASE_DIR"
 
 echo "3/7 config layout"
