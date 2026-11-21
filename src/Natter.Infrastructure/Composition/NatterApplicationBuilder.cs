@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using Natter.Abstractions.Composition;
 using Natter.Abstractions.Plugins;
 using Natter.Abstractions.Ports;
+using Natter.Infrastructure.Admin;
 using Natter.Infrastructure.Chat;
 using Natter.Infrastructure.Modules;
 using Natter.Infrastructure.Plugins;
@@ -29,6 +30,7 @@ public sealed class NatterApplicationBuilder
     private readonly NpsPluginRuntime _npsRuntime;
     private readonly CompositionOptions _options = new();
     private Action<ILoggingBuilder>? _loggingConfiguration;
+    private Action<AdminOptions>? _adminConfiguration;
     private bool _built;
 
     private NatterApplicationBuilder()
@@ -52,6 +54,18 @@ public sealed class NatterApplicationBuilder
         AddModule<CoreCompositionModule>();
         AddModule<ChatCompositionModule>();
         AddModule<ApplicationCompositionModule>();
+        AddModule(new AdminCompositionModule(() => _adminConfiguration));
+        return this;
+    }
+
+    /// <summary>
+    /// Configures the host admin surface (config store, command allowlist, log tail). Call before
+    /// <see cref="Build"/>; the delegate runs after framework composition options are applied.
+    /// </summary>
+    public NatterApplicationBuilder ConfigureAdmin(Action<AdminOptions> configure)
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+        _adminConfiguration = configure;
         return this;
     }
 

@@ -1,8 +1,11 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Natter.Abstractions.Composition;
 using Natter.Abstractions.Plugins;
+using Natter.Application.Admin;
 using Natter.Cli.Abstractions;
 using Natter.Cli.Core.Commands;
+using Natter.Infrastructure.Admin;
 
 namespace Natter.Cli.Core;
 
@@ -18,6 +21,14 @@ public sealed class CliCoreCompositionModule : ICompositionModule
         services.AddSingleton<IConsoleAccessor>(provider => provider.GetRequiredService<ConsoleAccessor>());
         services.AddSingleton<CliCommandRegistry>();
         services.AddSingleton<CliRunner>();
+        services.AddSingleton<IAdminCommandRunner>(provider => new CliAdminCommandRunner(
+            provider.GetRequiredService<CliCommandRegistry>(),
+            provider,
+            provider.GetRequiredService<ConsoleAccessor>(),
+            provider.GetService<AdminOptions>() ?? new AdminOptions(),
+            provider.GetService<IAdminRedactor>() ?? AdminRedactor.Default,
+            provider.GetService<IAdminAuditSink>() ?? NullAdminAuditSink.Instance,
+            provider.GetRequiredService<ILogger<CliAdminCommandRunner>>()));
 
         services.AddSingleton<CliEventPrinter>();
         services.AddSingleton<IPluginLifecycle>(provider => provider.GetRequiredService<CliEventPrinter>());

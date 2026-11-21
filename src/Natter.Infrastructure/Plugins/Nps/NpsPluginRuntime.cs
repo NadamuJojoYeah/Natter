@@ -5,9 +5,11 @@ using Natter.Abstractions.Composition;
 using Natter.Abstractions.Events;
 using Natter.Abstractions.Plugins;
 using Natter.Abstractions.Ports;
+using Natter.Application.Admin;
 using Natter.Application.Chat;
 using Natter.Chat;
 using Natter.Cli.Abstractions;
+using Natter.Infrastructure.Admin;
 using Natter.Infrastructure.Chat;
 using Natter.Plugin.Abstractions;
 
@@ -646,6 +648,9 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
         services.AddSingleton<IChatCommandDispatcher>(provider => new NpsPermissionedChatCommandDispatcher(
             _hostProvider.GetRequiredService<IChatCommandDispatcher>(),
             candidate.Permissions?.Granted ?? []));
+
+        BindAdminServices(candidate, services);
+
         services.AddSingleton(typeof(ILogger<>), typeof(Logger<>));
 
         return services.BuildServiceProvider(new ServiceProviderOptions
@@ -653,6 +658,43 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
             ValidateScopes = false,
             ValidateOnBuild = false,
         });
+    }
+
+    /// <summary>
+    /// Bridges the admin surface into the plugin provider. Only explicit, host-owned services are
+    /// registered — the plugin never receives the root <see cref="IServiceProvider"/>. A plugin
+    /// without the matching admin permission keeps its 501 fallback because the service is absent.
+    /// </summary>
+    private void BindAdminServices(NpsPluginCandidate candidate, IServiceCollection services)
+    {
+        if (_hostProvider is null)
+            return;
+
+        if (_hostProvider.GetService<AdminOptions>() is { EnableAdminSurface: false })
+            return;
+
+        var granted = candidate.Permissions?.Granted ?? [];
+
+        // Least privilege: each admin contract has its own permission word.
+        if (granted.Contains(PluginPermissions.AdminRead))
+        {
+            services.AddSingleton<IPluginRuntimeDiagnostics>(this);
+
+            if (_hostProvider.GetService<IAdminLogReader>() is { } logReader)
+                services.AddSingleton(logReader);
+        }
+
+        if (granted.Contains(PluginPermissions.AdminConfigWrite)
+            && _hostProvider.GetService<IAdminConfigStore>() is { } configStore)
+        {
+            services.AddSingleton(configStore);
+        }
+
+        if (granted.Contains(PluginPermissions.AdminCommandExecute)
+            && _hostProvider.GetService<IAdminCommandRunner>() is { } commandRunner)
+        {
+            services.AddSingleton(commandRunner);
+        }
     }
 
     private void CommitChatContributions(NpsPluginCandidate candidate, IServiceProvider provider)

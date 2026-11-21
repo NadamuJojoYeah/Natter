@@ -17,6 +17,15 @@ public static class PluginPermissions
     public const string Storage = "storage";
     public const string CliCommands = "cli.commands";
 
+    /// <summary>Allows a plugin to read the admin diagnostics snapshot and the host log tail (G4/G8).</summary>
+    public const string AdminRead = "admin.read";
+
+    /// <summary>Allows a plugin to read/write the whitelisted admin config documents (G5).</summary>
+    public const string AdminConfigWrite = "admin.config.write";
+
+    /// <summary>Allows a plugin to run allowlisted Natter CLI commands in-process (G6).</summary>
+    public const string AdminCommandExecute = "admin.command.execute";
+
     public static IReadOnlyList<string> All { get; } =
     [
         Network,
@@ -31,6 +40,9 @@ public static class PluginPermissions
         AiComplete,
         Storage,
         CliCommands,
+        AdminRead,
+        AdminConfigWrite,
+        AdminCommandExecute,
     ];
 
     public static string Secret(string name) => SecretsPrefix + name;
