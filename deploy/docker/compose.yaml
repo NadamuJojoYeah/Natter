@@ -1,22 +1,69 @@
+# Natter Tier 1 deployment for Docker Compose.
+#
+#   cd deploy/docker
+#   cp live.env.example live.env && chmod 600 live.env   # fill secrets, never commit
+#   mkdir -p config                                       # profiles.json + plugin config.json
+#   docker compose up -d --build
+#
+# Paths in this file are relative to deploy/docker/, not to the repository root.
+
 services:
   natter:
     build:
       context: ../..
       dockerfile: deploy/docker/Dockerfile
+      args:
+        # Tier 1 only by default. Set "true" to also stage DingTalk + Spark.
+        TIER2: "false"
+    image: natter:tier1
     restart: unless-stopped
+
     env_file:
       - ./live.env
     environment:
       NATTER_CONFIG_DIR: /config
       NATTER_STATE_DIR: /state
+      # Keep the loopback /health and the local state out of any egress proxy.
+      # Discord interaction acks have a 3s budget: see docs/operations/discord-3s-interaction-egress.md
+      NO_PROXY: 127.0.0.1,localhost,::1
+      # Extra egress settings (HTTP(S)_PROXY) belong in an optional proxy.env, mounted as another
+      # env_file, NOT in live.env (secrets and egress config stay separate).
+
     volumes:
       - ./config:/config:ro
       - natter-state:/state
+
+    # The health port stays inside the container network: publishing it would expose state.
+    # Sample it with: docker compose exec natter bash -c 'printf "GET /health HTTP/1.0\r\n\r\n" > /dev/tcp/127.0.0.1/5099'
+    expose:
+      - "5099"
+
     read_only: true
     tmpfs:
       - /tmp
+    cap_drop:
+      - ALL
     security_opt:
       - no-new-privileges:true
+
+    healthcheck:
+      # Liveness only. Tier 1-only deployments report status=degraded while Tier 2 profiles are
+      # absent; that must not flap the container. Readiness lives in the operator's alerting.
+      test:
+        - CMD
+        - bash
+        - -c
+        - exec 3<>/dev/tcp/127.0.0.1/5099 || exit 1; printf 'GET /health HTTP/1.0\r\n\r\n' >&3; read -r status_line <&3; case "$status_line" in *' 200 '*) exit 0;; *) exit 1;; esac
+      interval: 60s
+      timeout: 10s
+      start_period: 120s
+      retries: 3
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
 
 volumes:
   natter-state:

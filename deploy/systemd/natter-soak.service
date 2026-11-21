@@ -1,0 +1,32 @@
+[Unit]
+Description=Natter passive health sample (one-shot)
+Documentation=file:///opt/natter/docs/OPERATIONS_RUNBOOK.md
+# Sampling is read-only and must keep working while the host is being restarted.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=natter
+Group=natter
+WorkingDirectory=/opt/natter
+# Only the proxy file matters here; secrets are not needed for /health.
+EnvironmentFile=-/etc/natter/proxy.env
+Environment=NATTER_HEALTH_PORT=5099
+Environment=NATTER_STATE_DIR=/var/lib/natter
+# One sample per invocation; the timer decides the cadence.
+ExecStart=/opt/natter/scripts/soak-sample.sh --once --out-dir /var/log/natter
+# Sampling must never accumulate failures that page an operator at 3am.
+SuccessExitStatus=0
+TimeoutStartSec=30
+
+LogsDirectory=natter
+LogsDirectoryMode=0700
+ReadWritePaths=/var/log/natter
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+UMask=0077
