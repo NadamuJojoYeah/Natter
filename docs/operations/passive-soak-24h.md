@@ -179,17 +179,42 @@ journalctl -u natter --since "<lastDisconnectAt 前 2 分钟>" --until "<lastDis
 docker compose -f deploy/docker/compose.yaml logs --since 10m natter
 ```
 
-### 6.1 仍未适配的地方（需要扩大写作用域）
+### 6.1 断连归因统计口径（已适配 lastDisconnectError/Code）
 
-`scripts/soak-report.py` 的 `samplesWithDisconnectButNoReason` **仍在用旧口径**（`lastDisconnectAt` 有值且 `lastError == null`）。对修复后的 host，这个口径会把"有 `lastDisconnectError` 的正常断连"也算成"无原因"，从而**高估**静默断连数。
+`soak-report.py` 现在按**载荷版本**判定静默断连，不再只看 `lastError`：
 
-判定方法（在适配前临时使用）：
+| 载荷 | 判定 | 计入字段 |
+| --- | --- | --- |
+| 有 `lastDisconnectError` 且有值 | 断连**有原因** | `disconnectsWithReason.newPayload` |
+| 有该字段但为空 | 断连**真静默**（修复后仍无原因 → 判定 FAIL） | `silentDisconnects.newPayload` |
+| 无该字段（旧 host / 旧抓取） | **legacy**：`lastError` 有值=有原因，否则静默 | `disconnectsWithReason.legacyPayload` / `silentDisconnects.legacyPayload` |
 
-```bash
-# 直接看新字段有没有值，而不是看 lastError
-jq -r 'select(.upstreams) | .sampledAt as $t
-       | .upstreams[] | select((.source|startswith("discord")) and .lastDisconnectAt != null)
-       | [$t, (.lastDisconnectCode // "null"), (.lastDisconnectError // "null")] | @tsv' soak-*.jsonl
+两个关键修正：
+
+1. **按断连事件去重**：`lastDisconnectAt` 是粘性字段，之后每个样本都会重复同一个时间戳。按样本计数会把一次断连放大成 N 次；现在按 `lastDisconnectAt` 归并成事件，新增 `distinctDisconnects`。
+2. **旧口径会把修复后的 host 误判**：只看 `lastError == null` 会把"有 `lastDisconnectError` 的正常重连"算成静默；现在新载荷优先，legacy 仅在字段缺失时启用。
+
+真实历史数据的前后对比（同一文件）：
+
+```text
+# 旧口径（只看 lastError）: samplesWithDisconnectButNoReason = 21（样本数，重复放大）
+# 新口径: legacy silent = 3 个事件、attributed = 0；payload versions: new=0 legacy=29
+python3 scripts/soak-report.py artifacts/ops/tier1-run1/var/log/natter/soak-wake-2026-11-17.jsonl --interval 300
 ```
 
-适配 soak-report.py 属后续任务（本任务的写作用域只有 `scripts/ops-health-alert.sh` 与 `docs/operations/`）。
+自检（无需真实数据）：
+
+```bash
+python3 scripts/soak-report.py --self-test
+# 5 个场景 / 13 条断言：新载荷有原因、新载荷静默→FAIL、旧载荷静默、旧载荷 lastError 归因、无断连
+```
+
+JSON 里新增字段：
+
+```json
+{"distinctDisconnects": 3,
+ "silentDisconnects": {"newPayload": 0, "legacyPayload": 3},
+ "disconnectsWithReason": {"newPayload": 0, "legacyPayload": 0},
+ "payloadVersions": {"new": 0, "legacy": 29},
+ "disconnectReasons": [{"code": "ws_closed", "error": "gateway closed (1006)", "samples": 1}]}
+```

@@ -320,9 +320,12 @@ repeat poll             -> alerts=0          # 不会重复提示
 > `MissingMethodException: Natter.Chat.UpstreamHealth..ctor(...9 args)`。原因是插件目录 `lib/` 里带的是**host 程序集的私有副本**
 > （`Natter.Chat.dll` 等），旧插件引用的还是 9 参数构造。重新用当前源码 staging（`plugins-fresh`，md5 与 host 一致）后 `/health` 立即恢复 200。
 > **规则：插件 `lib/` 必须与 host 来自同一次构建**，升级时不要只换 host 不换插件。
-> 建议后续在 `scripts/stage-tier1-plugins.sh` 增加"插件 lib 中 Natter.*.dll 与 `--host-dir` 同名文件哈希一致性"校验（超出本任务写作用域，需扩大）。
+> **已闭环（task-9）**：`scripts/stage-tier1-plugins.sh` 新增 `--host-dir <host 发布目录>`，对插件 `lib/` 中与 host 同名的 `Natter.*.dll` 比对 SHA-256；
+> 不一致时 **exit 8 并逐行列出 `plugin / assembly / 两侧 sha`**，且不部署该插件（`not deployed: ...`），避免把旧插件 lib 交给新 host。实测：
+> 同源构建 → `hostParity.comparedFiles=24, mismatches=0` exit 0；把 host 的 `Natter.Chat.dll`/`Natter.Abstractions.dll` 换成旧版 → 8 个文件全部列出、4 个插件全部 not deployed、exit 8；
+> `--host-dir` 指到空目录 → 在 staging 之前就 exit 3（不留半成品）。
 
-**遗留**：`scripts/soak-report.py` 的 `samplesWithDisconnectButNoReason` 仍是旧口径，对修复后的样本会高估"静默断连"；适配它超出本任务写作用域（`scripts/ops-health-alert.sh` + `docs/operations/`），已在 [24h soak §6.1](passive-soak-24h.md) 记录临时判定方法并列为后续项。
+**已闭环（task-9）**：`scripts/soak-report.py` 已适配 `lastDisconnectError/Code`——新载荷优先、legacy 仅在字段缺失时启用，并按断连事件去重（`distinctDisconnects`）。旧口径把同一文件的静默数报成 21（样本重复放大），新口径为 3 个 legacy 事件。详见 [24h soak §6.1](passive-soak-24h.md)。
 
 ---
 
@@ -394,7 +397,7 @@ written: .../live.env (600)   backup: live.env.bak.20261121-161500 (0600)
 | 24h 完整采样 | **未达成** | 历史最长 13.99 h / 覆盖 17.3%；timer 已交付，需生产机跑满 24h 并用 `soak-report.py` 判定 |
 | 真实 secret 轮换 | **BLOCKED（平台权限）** | 流程与脚本已实测；控制台操作需账号权限 |
 | OBS-019 代码修复 | **已完成**（engineer，18:00） | 新增 `lastDisconnectError`/`lastDisconnectCode` 持久字段；运维告警已适配（§5.4） |
-| `soak-report.py` 断连口径 | **待适配** | 仍按 `lastError` 统计静默断连，新样本会高估；需扩大写作用域 |
+| `soak-report.py` 断连口径 | **已完成**（task-9） | 新载荷优先 `lastDisconnectError/Code`，legacy 回退，事件去重；`--self-test` 5 场景 |
 | 容器内 Discord 出网 | **环境相关** | 本机依赖 hosts 劫持 + 私有 CA；生产需容器可直达 Discord 或显式代理，否则 `ws_connect` 超时 |
 | 真人回归（P4） | **待人工** | `/ask` `/remember` `/memory` `/forget` `/reset`、DM、guild @bot、钉钉消息 |
 | DingTalk/Spark 容器化 | 未验证 | `--build-arg TIER2=true` 已支持 staging，未做运行验证（本机 Tier 1 优先） |
@@ -405,6 +408,10 @@ written: .../live.env (600)   backup: live.env.bak.20261121-161500 (0600)
 ## 10. 交接命令
 
 ```bash
+# 0) 发布 + staging（插件必须与 host 同源，--host-dir 会做 SHA-256 校验）
+dotnet publish src/Natter.Cli/Natter.Cli.csproj -c Release -o /opt/natter
+./scripts/stage-tier1-plugins.sh -o /opt/natter/plugins -c Release --host-dir /opt/natter
+
 # 1) 构建并验证镜像（任一有 docker 的机器）
 docker build -f deploy/docker/Dockerfile -t natter:tier1 .
 deploy/docker/verify-image.sh --image natter:tier1 --build \
