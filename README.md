@@ -245,6 +245,7 @@ Android 产物位于 `artifacts/android/`。示例构建使用默认调试签名
 - [P3 Context & Memory 开发文档](docs/P3_CONTEXT_MEMORY.md)：Prompt/Context/Memory 契约、profile 扩展、SQLite 摘要/记忆、NPS contribution 与验收。
 - [P4 Tier 1 产品化](docs/P4_TIER1_PRODUCTIZATION.md)：Discord 命令 UX、memory 用户入口、DeepSeek 稳定性、serve 部署/备份/24h soak 与发布闸门。
 - [P5 Agent Task Runtime](docs/P5_AGENT_TASK_RUNTIME.md)：AgentTask、TaskStore、Worker、Tools、取消/超时/重启恢复与安全边界。
+- [Prompt Compiler 设计](docs/PROMPT_COMPILER.md)：片段、预设、来源、排序、关闭/启用、版本与 host 安全边界。
 - [P5 验收测试计划](docs/testing/2026-11-18-p5-acceptance.md)：/task、lease、重启幂等、工具 allowlist 与健康指标。
 - [WebConsole 插件设计](docs/WEBCONSOLE_PLUGIN_DESIGN.md)：只读诊断、配置编辑、受限命令终端、认证/反向代理与 ASP.NET Core 加载风险。
 - [WebConsole 插件使用](docs/WEBCONSOLE_PLUGIN.md)：staging、配置、反向代理、排障与已知限制。
