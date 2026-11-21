@@ -539,19 +539,19 @@ public sealed partial class P5FollowupTests
     }
 
     [Fact]
-    public async Task Http_fetch_private_host_becomes_reachable_once_allowlisted_documented_gap()
+    public async Task Http_fetch_private_metadata_host_is_rejected_even_when_allowlisted()
     {
-        // P5 验收计划 §3.5 的已知缺口：SSRF 边界只有 host allowlist + HTTPS，
-        // 没有私网 IP / DNS rebinding 防护。allowlist 一旦写进元数据地址就会真的发请求。
+        // OBS-P5F-4 修复后：allowlist 之外还有私网/元数据地址门禁，即便运维误把元数据地址写进
+        // NATTER_HTTP_FETCH_HOSTS 也不会真的发请求。
         var handler = new CountingHandler(HttpStatusCode.OK, "iam-credentials");
         using var http = new HttpClient(handler);
         var tool = new HttpFetchTool(http, new HashSet<string>(["169.254.169.254"], StringComparer.OrdinalIgnoreCase));
 
         var result = await tool.ExecuteAsync(new ToolRequest("https://169.254.169.254/latest/meta-data/iam/"));
 
-        Assert.True(result.Ok);
-        Assert.Equal(1, handler.Calls);
-        // 结论：生产配置的 NATTER_HTTP_FETCH_HOSTS 必须由运维锁定，禁止指向私网/元数据地址。
+        Assert.False(result.Ok);
+        Assert.Equal("address_not_allowed", result.ErrorCode);
+        Assert.Equal(0, handler.Calls);
     }
 
     [Fact]
@@ -772,6 +772,9 @@ public sealed partial class P5FollowupTests
         await runtime.EnqueueAsync(task);
         await WaitAsync(async () =>
             (await store.GetAsync(task.TaskId)) is { Status: AgentTaskStatus.Completed } item ? item : null);
+        // The status transition and the metrics increment are two statements; wait for the metric
+        // instead of assuming both happened, otherwise the test flakes under parallel load.
+        await WaitUntilAsync(() => Task.FromResult(metrics.Snapshot().Completed == 1));
 
         var snapshot = metrics.Snapshot();
         Assert.Equal(1, snapshot.Created);

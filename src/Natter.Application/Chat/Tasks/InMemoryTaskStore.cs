@@ -99,7 +99,14 @@ public sealed class InMemoryTaskStore : ITaskStore
         {
             var expired = _tasks.Values
                 .Where(task => task.Status == AgentTaskStatus.Running && task.LeaseExpiresAt is { } expiry && expiry <= now)
-                .Select(task => task with { Status = AgentTaskStatus.Expired, UpdatedAt = now, Version = task.Version + 1 })
+                .Select(task => task with
+                {
+                    Status = AgentTaskStatus.Expired,
+                    LeaseOwner = null,
+                    LeaseExpiresAt = null,
+                    UpdatedAt = now,
+                    Version = task.Version + 1,
+                })
                 .ToArray();
             foreach (var task in expired)
                 _tasks[task.TaskId] = task;

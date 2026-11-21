@@ -122,7 +122,8 @@ public sealed class SqliteTaskStore : ITaskStore
         await using var connection = await _database.OpenAsync(cancellationToken).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            UPDATE agent_tasks SET status = 'Expired', updated_at = $now, version = version + 1
+            UPDATE agent_tasks SET status = 'Expired', lease_owner = NULL, lease_expires_at = NULL,
+                updated_at = $now, version = version + 1
             WHERE status = 'Running' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $now
             RETURNING task_id;
             """;

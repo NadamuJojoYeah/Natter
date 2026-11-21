@@ -24,7 +24,7 @@ public sealed class TaskRuntimeTests
         var completed = await WaitAsync(async () =>
             (await store.GetAsync(task.TaskId)) is { Status: AgentTaskStatus.Completed } item ? item : null);
         Assert.Equal("done", completed.ResultText);
-        await Task.Delay(100);
+        await WaitUntilAsync(() => Task.FromResult(dispatcher.Commands.Count >= 1));
         Assert.Single(dispatcher.Commands);
         Assert.Equal("done", Assert.IsType<MessageSendCommand>(dispatcher.Commands[0]).Payload.Content.Text);
         await runtime.DisposeAsync();
@@ -49,6 +49,109 @@ public sealed class TaskRuntimeTests
         var cancelled = await WaitAsync(async () =>
             (await store.GetAsync(task.TaskId)) is { Status: AgentTaskStatus.Cancelled } item ? item : null);
         Assert.Equal("cancelled", cancelled.ErrorCode);
+        await WaitUntilAsync(() => Task.FromResult(dispatcher.Commands.Count >= 1));
+        Assert.Single(dispatcher.Commands);
+        await runtime.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task Expired_lease_claim_clears_lease_fields_in_memory()
+    {
+        var store = new InMemoryTaskStore();
+        var task = NewTask(Source.Create("discord", "discord", "bot"));
+        await store.CreateAsync(task);
+        Assert.True(await store.TryAcquireLeaseAsync(task.TaskId, "owner", TimeSpan.FromMinutes(1)));
+        await store.TransitionAsync(task.TaskId, AgentTaskStatus.Running, task.Version);
+
+        var expired = await store.ClaimExpiredLeasesAsync(DateTimeOffset.UtcNow.AddMinutes(2));
+
+        var claimed = Assert.Single(expired);
+        Assert.Equal(AgentTaskStatus.Expired, claimed.Status);
+        Assert.Null(claimed.LeaseOwner);
+        Assert.Null(claimed.LeaseExpiresAt);
+        var stored = await store.GetAsync(task.TaskId);
+        Assert.Null(stored!.LeaseOwner);
+        Assert.Null(stored.LeaseExpiresAt);
+    }
+
+    [Fact]
+    public async Task Expired_lease_claim_clears_lease_fields_in_sqlite()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "natter-task-" + Guid.NewGuid().ToString("N"), "natter.db");
+        var store = new Natter.Infrastructure.Chat.SqliteTaskStore(path);
+        var task = NewTask(Source.Create("discord", "discord", "bot"));
+        await store.CreateAsync(task);
+        Assert.True(await store.TryAcquireLeaseAsync(task.TaskId, "owner", TimeSpan.FromMinutes(1)));
+        await store.TransitionAsync(task.TaskId, AgentTaskStatus.Running, task.Version);
+
+        var expired = await store.ClaimExpiredLeasesAsync(DateTimeOffset.UtcNow.AddMinutes(2));
+
+        var claimed = Assert.Single(expired);
+        Assert.Equal(AgentTaskStatus.Expired, claimed.Status);
+        Assert.Null(claimed.LeaseOwner);
+        Assert.Null(claimed.LeaseExpiresAt);
+        var stored = await store.GetAsync(task.TaskId);
+        Assert.Null(stored!.LeaseOwner);
+        Assert.Null(stored.LeaseExpiresAt);
+    }
+
+    [Fact]
+    public async Task Result_delivery_is_compensated_after_the_first_attempt_fails()
+    {
+        var store = new InMemoryTaskStore();
+        var dispatcher = new FlakyDispatcher(failuresBeforeSuccess: 2);
+        var worker = new ImmediateWorker("done");
+        var profiles = new RuntimeProfileStore(null);
+        var runtime = new TaskDispatcher(
+            store,
+            worker,
+            new ProfileResolver(profiles),
+            profiles,
+            dispatcher,
+            new ChatCommandFactory(new TestClock()),
+            resultSendAttempts: 1,
+            resultRetryInterval: TimeSpan.FromMilliseconds(40));
+
+        var task = NewTask(Source.Create("discord", "discord", "bot"));
+        await store.CreateAsync(task);
+        await runtime.EnqueueAsync(task);
+
+        await WaitUntilAsync(() => Task.FromResult(dispatcher.DeliveredCount >= 1));
+        Assert.Equal(3, dispatcher.Attempts);
+        Assert.Single(dispatcher.Commands);
+        Assert.Equal(
+            "done",
+            Assert.IsType<MessageSendCommand>(dispatcher.Commands[0]).Payload.Content.Text);
+        Assert.Equal(AgentTaskStatus.Completed, (await store.GetAsync(task.TaskId))!.Status);
+
+        // A delivered result is not sent again by the compensation loop.
+        await Task.Delay(150);
+        Assert.Single(dispatcher.Commands);
+        await runtime.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task Result_delivery_retries_within_the_first_attempt_window()
+    {
+        var store = new InMemoryTaskStore();
+        var dispatcher = new FlakyDispatcher(failuresBeforeSuccess: 2);
+        var worker = new ImmediateWorker("done");
+        var profiles = new RuntimeProfileStore(null);
+        var runtime = new TaskDispatcher(
+            store,
+            worker,
+            new ProfileResolver(profiles),
+            profiles,
+            dispatcher,
+            new ChatCommandFactory(new TestClock()),
+            resultSendAttempts: 3);
+
+        var task = NewTask(Source.Create("discord", "discord", "bot"));
+        await store.CreateAsync(task);
+        await runtime.EnqueueAsync(task);
+
+        await WaitUntilAsync(() => Task.FromResult(dispatcher.DeliveredCount >= 1));
+        Assert.Equal(3, dispatcher.Attempts);
         Assert.Single(dispatcher.Commands);
         await runtime.DisposeAsync();
     }
@@ -218,6 +321,36 @@ public sealed class TaskRuntimeTests
         {
             await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
             return new TaskResult("never");
+        }
+    }
+
+    private sealed class FlakyDispatcher(int failuresBeforeSuccess) : IChatCommandDispatcher
+    {
+        private int _remainingFailures = failuresBeforeSuccess;
+
+        public int Attempts { get; private set; }
+
+        public List<ChatCommand> Commands { get; } = [];
+
+        public int DeliveredCount
+        {
+            get
+            {
+                lock (Commands)
+                    return Commands.Count;
+            }
+        }
+
+        public ValueTask<ChatAck> ExecuteAsync(ChatCommand command, CancellationToken cancellationToken = default)
+        {
+            Attempts++;
+            if (Interlocked.Decrement(ref _remainingFailures) >= 0)
+                throw new InvalidOperationException("transport down");
+
+            lock (Commands)
+                Commands.Add(command);
+
+            return ValueTask.FromResult(ChatAck.Success(command));
         }
     }
 
