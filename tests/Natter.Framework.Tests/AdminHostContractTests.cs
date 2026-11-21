@@ -650,6 +650,65 @@ public sealed class AdminHostContractTests
         await probe.Host.StopAsync();
     }
 
+    // ---------------------------------------------------------------- plugin CLI command snapshot (task-6)
+
+    [Fact]
+    public async Task Constructing_the_admin_runner_during_activation_does_not_freeze_cli_commands()
+    {
+        var baseline = await CountBuiltInCommandsAsync();
+
+        var webConsole = new CliContributionPlugin("web status");
+        var greeting = new CliContributionPlugin("greet");
+
+        var webConsoleManifest = AdminManifest(
+            "natter.test.webconsole-like",
+            permissions:
+            [
+                PluginPermissions.AdminRead,
+                PluginPermissions.AdminConfigWrite,
+                PluginPermissions.AdminCommandExecute,
+                PluginPermissions.CliCommands,
+            ],
+            capabilities: ["admin:diagnostics"],
+            contributions: [new PluginContribution { Type = PluginContributionTypes.CliCommand, Id = "web.status" }],
+            entryType: typeof(CliContributionPlugin));
+
+        var greetingManifest = AdminManifest(
+            "natter.test.greet",
+            permissions: [PluginPermissions.CliCommands],
+            contributions: [new PluginContribution { Type = PluginContributionTypes.CliCommand, Id = "greet" }],
+            entryType: typeof(CliContributionPlugin));
+
+        await using var probe = await BuildMultiPluginHostAsync(
+            (webConsoleManifest, webConsole),
+            (greetingManifest, greeting));
+
+        var registry = probe.Host.Services.GetRequiredService<CliCommandRegistry>();
+        Assert.True(registry.TryGet("web status", out _));
+        Assert.True(registry.TryGet("greet", out _));
+        Assert.Equal(baseline + 2, registry.CommandCount);
+
+        // The admin plugin keeps the runner; the plugin without admin.command.execute keeps 501.
+        var webConsoleProvider = Assert.IsAssignableFrom<IServiceProvider>(webConsole.Provider);
+        Assert.NotNull(webConsoleProvider.GetService<IAdminCommandRunner>());
+        var greetingProvider = Assert.IsAssignableFrom<IServiceProvider>(greeting.Provider);
+        Assert.Null(greetingProvider.GetService<IAdminCommandRunner>());
+
+        var runner = probe.Host.Services.GetRequiredService<IAdminCommandRunner>();
+
+        var doctor = await runner.RunAsync("doctor", ["--json"]);
+        Assert.True(doctor.Executed);
+        Assert.Equal(CliExitCodes.Success, doctor.ExitCode);
+        using (var document = JsonDocument.Parse(doctor.Stdout))
+        {
+            Assert.Equal(baseline + 2, document.RootElement.GetProperty("commands").GetInt32());
+        }
+
+        var webStatus = await runner.RunAsync("web status", []);
+        Assert.True(webStatus.Succeeded);
+        Assert.Contains("web status ok", webStatus.Stdout);
+    }
+
     // ---------------------------------------------------------------- permission vocabulary
 
     [Fact]
@@ -766,7 +825,9 @@ public sealed class AdminHostContractTests
     private static PluginManifest AdminManifest(
         string id,
         string[]? permissions = null,
-        string[]? capabilities = null)
+        string[]? capabilities = null,
+        PluginContribution[]? contributions = null,
+        Type? entryType = null)
         => new()
         {
             SchemaVersion = 1,
@@ -778,11 +839,45 @@ public sealed class AdminHostContractTests
             Entry = new PluginEntry
             {
                 Assembly = "Natter.Framework.Tests.dll",
-                Type = typeof(AdminProbePlugin).AssemblyQualifiedName!,
+                Type = (entryType ?? typeof(AdminProbePlugin)).AssemblyQualifiedName!,
             },
             Permissions = permissions?.ToList(),
             Capabilities = capabilities?.ToList(),
+            Contributions = contributions?.ToList(),
         };
+
+    private static async Task<int> CountBuiltInCommandsAsync()
+    {
+        var builder = NatterApplicationBuilder.Create()
+            .AddNatterFramework()
+            .AddModule<CliCoreCompositionModule>();
+
+        await using var host = builder.Build();
+        await host.StartAsync();
+        return host.Services.GetRequiredService<CliCommandRegistry>().CommandCount;
+    }
+
+    private static async Task<ProbeHost> BuildMultiPluginHostAsync(
+        params (PluginManifest Manifest, INatterPlugin Plugin)[] plugins)
+    {
+        var workspace = new AdminWorkspace();
+        var builder = NatterApplicationBuilder.Create()
+            .AddNatterFramework()
+            .AddModule<CliCoreCompositionModule>()
+            .ConfigureOptions(options =>
+            {
+                options.PluginConfigDirectory = workspace.ConfigDir;
+                options.StateDirectory = workspace.StateDir;
+            })
+            .ConfigureAdmin(options => options.CommandAllowlist.Add("web status"));
+
+        foreach (var (manifest, plugin) in plugins)
+            builder.AddEmbeddedNpsPlugin(manifest, plugin);
+
+        var host = builder.Build();
+        await host.StartAsync();
+        return new ProbeHost(host, workspace);
+    }
 
     private static async Task<ProbeHost> BuildProbeHostAsync(AdminProbePlugin plugin, PluginManifest manifest)
     {
@@ -836,6 +931,43 @@ public sealed class AdminHostContractTests
 
         public ValueTask DeactivateAsync(IPluginContext context, CancellationToken cancellationToken = default)
             => ValueTask.CompletedTask;
+    }
+
+    /// <summary>NPS plugin that contributes one CLI command (used to emulate WebConsole/greet).</summary>
+    public sealed class CliContributionPlugin(string commandName) : INatterPlugin
+    {
+        public IServiceProvider? Provider { get; private set; }
+
+        public ValueTask ConfigureAsync(IPluginContext context, CancellationToken cancellationToken = default)
+        {
+            context.Contributions.AddCliCommand(new CliCommandDescriptor
+            {
+                Name = commandName,
+                Description = "Admin bridge regression command.",
+                Origin = "test",
+                HandlerFactory = _ => new FixedOutputHandler(commandName + " ok"),
+            });
+
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask ActivateAsync(IPluginContext context, CancellationToken cancellationToken = default)
+        {
+            Provider = context.Services.Provider;
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask DeactivateAsync(IPluginContext context, CancellationToken cancellationToken = default)
+            => ValueTask.CompletedTask;
+
+        private sealed class FixedOutputHandler(string output) : ICliCommandHandler
+        {
+            public ValueTask<int> ExecuteAsync(CliInvocation invocation, CancellationToken cancellationToken = default)
+            {
+                invocation.Console.Out.WriteLine(output);
+                return ValueTask.FromResult(CliExitCodes.Success);
+            }
+        }
     }
 
     private sealed class FakePluginCatalog(params PluginDescriptor[] plugins) : IPluginCatalog

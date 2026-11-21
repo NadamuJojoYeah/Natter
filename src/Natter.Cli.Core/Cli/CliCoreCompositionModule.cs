@@ -22,7 +22,6 @@ public sealed class CliCoreCompositionModule : ICompositionModule
         services.AddSingleton<CliCommandRegistry>();
         services.AddSingleton<CliRunner>();
         services.AddSingleton<IAdminCommandRunner>(provider => new CliAdminCommandRunner(
-            provider.GetRequiredService<CliCommandRegistry>(),
             provider,
             provider.GetRequiredService<ConsoleAccessor>(),
             provider.GetService<AdminOptions>() ?? new AdminOptions(),

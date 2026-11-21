@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Natter.Application.Admin;
 using Natter.Cli.Abstractions;
@@ -15,7 +16,6 @@ namespace Natter.Cli.Core;
 /// </summary>
 public sealed class CliAdminCommandRunner : IAdminCommandRunner
 {
-    private readonly CliCommandRegistry _registry;
     private readonly IServiceProvider _services;
     private readonly ConsoleAccessor _consoleAccessor;
     private readonly AdminOptions _options;
@@ -25,7 +25,6 @@ public sealed class CliAdminCommandRunner : IAdminCommandRunner
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     public CliAdminCommandRunner(
-        CliCommandRegistry registry,
         IServiceProvider services,
         ConsoleAccessor consoleAccessor,
         AdminOptions options,
@@ -33,7 +32,6 @@ public sealed class CliAdminCommandRunner : IAdminCommandRunner
         IAdminAuditSink audit,
         ILogger<CliAdminCommandRunner> logger)
     {
-        _registry = registry ?? throw new ArgumentNullException(nameof(registry));
         _services = services ?? throw new ArgumentNullException(nameof(services));
         _consoleAccessor = consoleAccessor ?? throw new ArgumentNullException(nameof(consoleAccessor));
         _options = options ?? throw new ArgumentNullException(nameof(options));
@@ -64,7 +62,7 @@ public sealed class CliAdminCommandRunner : IAdminCommandRunner
                 cancellationToken).ConfigureAwait(false);
         }
 
-        if (!_registry.TryGet(normalizedCommand, out var descriptor))
+        if (!ResolveCommandRegistry().TryGet(normalizedCommand, out var descriptor))
         {
             return await RejectAsync(
                 normalizedCommand,
@@ -182,6 +180,16 @@ public sealed class CliAdminCommandRunner : IAdminCommandRunner
 
         return result;
     }
+
+    /// <summary>
+    /// Resolves the command registry on first use instead of during construction. The registry
+    /// snapshots NPS <c>cli.command</c> contributions for plugins that are already Activated, so
+    /// constructing it while a plugin is still activating (the admin bridge resolves this runner
+    /// from <c>NpsPluginRuntime.BuildPluginProvider</c>) would cache an incomplete command list for
+    /// the lifetime of the host and hide every plugin CLI command.
+    /// </summary>
+    private CliCommandRegistry ResolveCommandRegistry()
+        => _services.GetRequiredService<CliCommandRegistry>();
 
     private async ValueTask<AdminCommandResult> RejectAsync(
         string command,
