@@ -107,6 +107,8 @@ internal sealed class WebConsoleHarness : IDisposable
 {
     public const string Token = "test-token-0123456789abcdef";
 
+    public const string ViewerToken = "test-viewer-token-0123456789abcdef";
+
     private WebConsoleHarness(
         WebConsoleOptions options,
         IWebConsoleHostPort hostPort,
@@ -135,6 +137,9 @@ internal sealed class WebConsoleHarness : IDisposable
 
         var preview = WebConsoleConfig.Build(config, "test", null, options);
         var tokens = new WebConsoleTokenAuthenticator(Token);
+        var viewerTokens = string.IsNullOrEmpty(options.ViewerToken)
+            ? null
+            : new WebConsoleTokenAuthenticator(WebConsoleHarness.ViewerToken);
         var assets = WebConsoleStaticAssets.Load(Path.Combine(directory, "wwwroot"));
 
         AdminConfig = adminConfig;
@@ -153,11 +158,13 @@ internal sealed class WebConsoleHarness : IDisposable
             Audit,
             tokens,
             assets,
+            viewerTokens is { IsUsable: true },
             Clock);
 
         Handler = new WebConsoleRequestHandler(
             options,
             tokens,
+            viewerTokens,
             new WebConsoleSessionStore(Clock),
             new WebConsoleLoginThrottle(Clock),
             new WebConsoleOriginPolicy(options.PublicBaseUrl, options.Port),
@@ -252,6 +259,10 @@ internal sealed class WebConsoleHarness : IDisposable
 
         return new WebConsoleHttpRequest(method, path, query, headers, body ?? string.Empty, ip, false);
     }
+
+    /// <summary>Logs in with the configured viewer secret (requires <c>viewerToken</c> in options).</summary>
+    public Task<LoginResult> LoginViewerAsync(IReadOnlyDictionary<string, string>? extraHeaders = null)
+        => LoginAsync(ViewerToken, extraHeaders);
 
     public async Task<LoginResult> LoginAsync(
         string? token = null,

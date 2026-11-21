@@ -54,6 +54,8 @@ const ids = [
   "config-editor", "config-doc", "config-load", "config-validate", "config-save",
   "config-status", "config-text", "config-diff", "config-undo",
   "command-console", "command-name", "command-args", "command-run", "command-status", "command-output",
+  "role-badge", "log-level", "log-source", "log-q", "log-limit", "log-query", "log-prev", "log-next",
+  "log-export-text", "log-export-jsonl", "log-status", "log-entries",
 ];
 const elements = new Map(ids.map((id) => [id, new FakeNode()]));
 const document = {
@@ -228,7 +230,13 @@ async function fetchStub(url, options = {}) {
 
   if (url === "/api/session" && (options.method ?? "GET") === "GET") {
     sessionCalls++;
-    return respond(200, { authenticated: true, csrf: "csrf-token", role: "admin" });
+    return respond(200, {
+      authenticated: true,
+      csrf: "csrf-token",
+      role: "admin",
+      permissions: { read: true, write: true, command: true },
+      viewerLoginEnabled: false,
+    });
   }
 
   if (url === "/api/snapshot") {
@@ -256,6 +264,27 @@ async function fetchStub(url, options = {}) {
 
   if (url === "/api/commands") {
     return respond(200, { command: "health", args: ["--json"], executed: true, exitCode: 0, stdout: "{\"status\":\"ok\"}", stderr: "", truncated: false, outputBytes: 15, durationMs: 12, timedOut: false });
+  }
+
+  if (url.startsWith("/api/logs?")) {
+    return respond(200, {
+      generatedAt: "2026-11-18T02:30:00Z",
+      query: { limit: 200, offset: 0, order: "desc", includeAudit: true, levels: ["trace", "debug", "information", "warning", "error", "critical"] },
+      total: 2,
+      returned: 2,
+      offset: 0,
+      limit: 200,
+      hasMore: false,
+      nextOffset: null,
+      hostLogs: {
+        available: true,
+        data: [
+          { timestamp: "2026-11-18T02:29:00Z", level: "Information", source: "Natter.Host", message: "host started" },
+          { timestamp: "2026-11-18T02:29:30Z", level: "Warning", source: "Natter.Upstream", message: "reconnect scheduled" },
+        ],
+      },
+      audit: [],
+    });
   }
 
   return respond(404, { error: { code: "not_found", message: "not found" } });
@@ -328,7 +357,10 @@ assert(
   elements.get("config-text").value.includes("schemaVersion"),
   "loading a document should fill the editor",
 );
-assert(elements.get("config-undo").children.length === 1, "undo list should render the snapshot row");
+assert(
+  elements.get("config-undo").children.length === 2,
+  "undo panel should render the retention note plus the snapshot row",
+);
 
 elements.get("command-name").value = "health";
 elements.get("command-args").value = "--json";
@@ -337,6 +369,34 @@ await new Promise((resolve) => setTimeout(resolve, 40));
 assert(
   elements.get("command-output").textContent.includes("status"),
   "command output should render stdout",
+);
+
+// Hardening (task-14): role badge, log filtering panel, export affordance.
+assert(elements.get("role-badge").textContent === "admin", "role badge should show the session role");
+assert(elements.get("log-entries").children.length === 1, "log panel should render one table");
+assert(
+  elements.get("log-status").textContent.includes("匹配 2 条"),
+  "log status should report the filtered total",
+);
+assert(elements.get("log-prev").disabled === true, "prev page is disabled on the first page");
+assert(elements.get("log-next").disabled === true, "next page is disabled when there is no more data");
+assert(
+  elements.get("config-undo").children.length >= 1,
+  "undo panel should render its retention note",
+);
+
+elements.get("log-q").value = "reconnect";
+elements.get("log-query").listeners.click();
+await new Promise((resolve) => setTimeout(resolve, 40));
+assert(
+  elements.get("log-status").textContent.includes("匹配"),
+  "querying logs should refresh the status line",
+);
+
+elements.get("log-export-jsonl").listeners.click();
+assert(
+  elements.get("log-status").textContent.includes("/api/logs/export?format=jsonl"),
+  "export should build a redacted export URL",
 );
 
 assert(sessionCalls === 1, "bootstrap should call /api/session exactly once");
@@ -349,5 +409,8 @@ console.log(JSON.stringify({
   configRedacted: config.includes("redacted=2"),
   configDocuments: docSelect.children.length,
   commandOutput: elements.get("command-output").textContent.includes("status"),
+  role: elements.get("role-badge").textContent,
+  logRows: elements.get("log-entries").children.length,
+  logStatus: elements.get("log-status").textContent,
   auditTable: elements.get("audit").children.length,
 }, null, 2));

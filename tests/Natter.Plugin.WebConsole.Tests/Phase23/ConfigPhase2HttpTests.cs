@@ -232,8 +232,23 @@ public sealed class ConfigPhase2HttpTests
     [Fact]
     public async Task Save_keeps_phase1_gating_order()
     {
-        // Write disabled wins over a missing store.
-        using (var disabled = WebConsoleHarness.Create())
+        // Read-only wins over everything else and uses the unified code.
+        using (var readOnly = WebConsoleHarness.Create())
+        {
+            var login = await readOnly.LoginAsync();
+            var response = await readOnly.Handler.HandleAsync(readOnly.Request(
+                "POST", "/api/config/profiles", body: Body("{}"), cookie: login.Cookie, csrf: login.Csrf));
+            Assert.Equal(403, response.StatusCode);
+            Assert.Equal("console.read_only", Code(response));
+        }
+
+        // Writable console with the config editor switched off keeps its feature code.
+        using (var disabled = WebConsoleHarness.Create(new WebConsoleOptions
+        {
+            Port = 5090,
+            ReadOnly = false,
+            AllowConfigWrite = false,
+        }))
         {
             var login = await disabled.LoginAsync();
             var response = await disabled.Handler.HandleAsync(disabled.Request(

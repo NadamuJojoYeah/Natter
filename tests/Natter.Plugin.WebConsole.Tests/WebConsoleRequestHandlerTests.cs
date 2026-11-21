@@ -137,10 +137,11 @@ public sealed class WebConsoleRequestHandlerTests
         Assert.Equal(403, withoutCsrf.StatusCode);
         Assert.Equal("csrf.invalid", LoginResult.Json(withoutCsrf).GetProperty("error").GetProperty("code").GetString());
 
+        // readOnly=true now reports the unified console.read_only code (see task-14).
         var readonlyResponse = await harness.Handler.HandleAsync(harness.Request(
             "POST", "/api/config/profiles", body: "{}", cookie: login.Cookie, csrf: login.Csrf));
         Assert.Equal(403, readonlyResponse.StatusCode);
-        Assert.Equal("config.write_disabled",
+        Assert.Equal("console.read_only",
             LoginResult.Json(readonlyResponse).GetProperty("error").GetProperty("code").GetString());
 
         using var writable = WebConsoleHarness.Create(new WebConsoleOptions
