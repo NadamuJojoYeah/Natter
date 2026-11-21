@@ -1,0 +1,215 @@
+using System.Text.Json.Serialization;
+using Natter.Chat;
+
+namespace Natter.Application.Chat;
+
+/// <summary>
+/// Prompt Compiler P1/P2 contracts (docs/PROMPT_COMPILER.md). A prompt is a recipe of
+/// fragments + a preset, compiled by the host into a <see cref="PromptPlan"/> and a
+/// <see cref="PromptBundle"/>. Fragments stay in the source (config/file/plugin) even when a
+/// preset disables them, so disabling is always reversible and never deletes text.
+/// </summary>
+public static class PromptCompilerDefaults
+{
+    /// <summary>Built-in preset/provider id kept for the default profile (no profile migration).</summary>
+    public const string StaticPresetId = "host#static";
+
+    /// <summary>Preset id used when a library does not declare a default preset.</summary>
+    public const string FallbackPresetId = "default";
+
+    public const int FragmentMaxCharacters = 8000;
+
+    public const int TotalMaxCharacters = 12000;
+
+    /// <summary>Upper bound on fragments a single plugin/library may contribute.</summary>
+    public const int PluginMaxFragments = 64;
+
+    public const int VariableMaxCharacters = 200;
+}
+
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum PromptFragmentSource
+{
+    Inline,
+    File,
+    Plugin,
+    HostBuiltin,
+}
+
+/// <summary>One addressable prompt fragment. The text is never written to normal logs.</summary>
+public sealed record PromptFragment(
+    string Id,
+    string Text,
+    PromptFragmentSource Source,
+    int Order,
+    bool EnabledByDefault = true,
+    bool CanDisable = true,
+    bool Mandatory = false,
+    int MaxCharacters = PromptCompilerDefaults.FragmentMaxCharacters,
+    string? Version = null,
+    IReadOnlyList<string>? Tags = null);
+
+/// <summary>Preset entry referencing a fragment; <see cref="Enabled"/> false disables only, never deletes.</summary>
+public sealed record PromptSectionRef(
+    string FragmentId,
+    int? Order = null,
+    bool? Enabled = null,
+    string? Source = null,
+    string? OverrideText = null,
+    string? Reason = null);
+
+/// <summary>Versioned recipe. <see cref="Extends"/> inherits base sections (child overrides by fragment id).</summary>
+public sealed record PromptPreset(
+    string Id,
+    string Version,
+    IReadOnlyList<PromptSectionRef>? Sections,
+    string? Extends = null,
+    string? Locale = null,
+    IReadOnlyDictionary<string, string>? Variables = null);
+
+/// <summary>Diagnostics-only record for a disabled fragment: id/source/reason/hash, never the text.</summary>
+public sealed record DisabledPromptFragment(
+    string Id,
+    PromptFragmentSource Source,
+    string Reason,
+    string Hash);
+
+/// <summary>Compiled prompt recipe. <see cref="Fragments"/> is the final, ordered, enabled list.</summary>
+public sealed record PromptPlan(
+    string PresetId,
+    string PresetVersion,
+    IReadOnlyList<PromptFragment> Fragments,
+    IReadOnlyList<DisabledPromptFragment> Disabled,
+    string Hash,
+    IReadOnlyList<string> Warnings)
+{
+    /// <summary>One-line diagnostic; contains ids/counts/hash only, never prompt text or variable values.</summary>
+    public string Explain
+        => $"preset={PresetId} v={PresetVersion} fragments={Fragments.Count} disabled={Disabled.Count} hash={Hash}";
+}
+
+/// <summary>Compilation failure. <see cref="Code"/> is a stable <c>prompt.*</c> code.</summary>
+public sealed class PromptCompilationException(string code, string message)
+    : InvalidOperationException($"{code}: {message}")
+{
+    public string Code { get; } = code;
+}
+
+/// <summary>Stable codes used by host and tests.</summary>
+public static class PromptCompilerCodes
+{
+    public const string FragmentInvalid = "prompt.fragment_invalid";
+    public const string FragmentDuplicate = "prompt.fragment_duplicate";
+    public const string FragmentMissing = "prompt.fragment_missing";
+    public const string FragmentReserved = "prompt.fragment_reserved";
+    public const string FragmentSourceForbidden = "prompt.fragment_source_forbidden";
+    public const string FragmentNotDisableable = "prompt.fragment_not_disableable";
+    public const string PluginMandatoryForbidden = "prompt.fragment_mandatory_forbidden";
+    public const string PluginFragmentLimit = "prompt.fragment_limit";
+    public const string PresetInvalid = "prompt.preset_invalid";
+    public const string PresetDuplicate = "prompt.preset_duplicate";
+    public const string PresetMissing = "prompt.preset_missing";
+    public const string PresetCycle = "prompt.preset_cycle";
+    public const string VariableMissing = "prompt.variable_missing";
+    public const string VariableNotAllowed = "prompt.variable_not_allowed";
+
+    public const string MandatoryIgnored = "prompt.mandatory_ignored";
+    public const string FragmentTruncated = "prompt.fragment_truncated";
+    public const string BudgetExceeded = "prompt.budget_exceeded";
+    public const string SourceMismatch = "prompt.fragment_source_mismatch";
+}
+
+public enum PromptMissingVariableBehavior
+{
+    Warning,
+    Error,
+}
+
+/// <summary>Length budgets applied at compile time. Defaults match the documented 8000 / 12000.</summary>
+public sealed record PromptBudget(
+    int MaxCharacters = PromptCompilerDefaults.TotalMaxCharacters,
+    int MaxFragmentCharacters = PromptCompilerDefaults.FragmentMaxCharacters)
+{
+    /// <summary>No truncation. Used by the <c>host#static</c> adapter so profile text is byte-identical to P0.</summary>
+    public static PromptBudget Unbounded { get; } = new(int.MaxValue, int.MaxValue);
+}
+
+/// <summary>
+/// Input to the host composer. Callers only provide data (presets/fragments); the composer always
+/// injects the host mandatory safety fragment, so a plugin cannot remove or replace it.
+/// </summary>
+public sealed record PromptComposeRequest(
+    RuntimeProfile Profile,
+    IReadOnlyList<PromptPreset>? Presets,
+    IReadOnlyList<PromptFragment>? Fragments,
+    string? PresetId = null,
+    PromptBudget? Budget = null,
+    string? Locale = null,
+    string? Platform = null,
+    string? Protocol = null,
+    string? ConversationKind = null,
+    string? UserName = null,
+    IReadOnlyDictionary<string, string>? Variables = null,
+    IReadOnlyList<string>? DisabledFragmentIds = null,
+    PromptMissingVariableBehavior MissingVariables = PromptMissingVariableBehavior.Warning)
+{
+    /// <summary>Builds a host request from an <see cref="IPromptProvider"/> call.</summary>
+    public static PromptComposeRequest FromPromptRequest(
+        PromptRequest request,
+        IReadOnlyList<PromptPreset>? presets,
+        IReadOnlyList<PromptFragment>? fragments,
+        string? presetId = null,
+        PromptBudget? budget = null,
+        PromptMissingVariableBehavior missingVariables = PromptMissingVariableBehavior.Warning)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var variables = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var pair in request.Profile.Prompt.Variables ?? new Dictionary<string, string>())
+            variables[pair.Key] = pair.Value;
+        foreach (var pair in request.Variables ?? new Dictionary<string, string>())
+            variables[pair.Key] = pair.Value;
+
+        return new PromptComposeRequest(
+            request.Profile,
+            presets,
+            fragments,
+            PresetId: string.IsNullOrWhiteSpace(presetId) ? null : presetId,
+            Budget: budget,
+            Locale: request.Locale ?? request.Profile.Prompt.Locale,
+            Platform: request.Source.Platform,
+            Protocol: request.Source.Protocol,
+            ConversationKind: request.Conversation.Kind.ToString(),
+            UserName: request.User.Name,
+            Variables: variables,
+            DisabledFragmentIds: request.Profile.Prompt.DisabledFragments,
+            MissingVariables: missingVariables);
+    }
+}
+
+/// <summary>Target facts exposed to <see cref="IPromptFragmentProvider"/> implementations.</summary>
+public sealed record PromptFragmentContext(
+    RuntimeProfile Profile,
+    string? PresetId,
+    string? Locale,
+    string Platform,
+    string Protocol,
+    ConversationKind ConversationKind,
+    IReadOnlyDictionary<string, string> Variables);
+
+/// <summary>Plugin contribution point for fragments (P3 wires this into the host pipeline).</summary>
+public interface IPromptFragmentProvider
+{
+    ValueTask<IReadOnlyList<PromptFragment>> GetFragmentsAsync(
+        PromptFragmentContext context,
+        CancellationToken cancellationToken = default);
+}
+
+/// <summary>Host-owned compiler contract: plugins provide data, the host compiles and appends safety.</summary>
+public interface IPromptComposer
+{
+    ValueTask<PromptPlan> ComposeAsync(PromptComposeRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>Materializes the plan into the legacy <see cref="PromptBundle"/> shape.</summary>
+    PromptBundle ToBundle(PromptPlan plan);
+}

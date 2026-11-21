@@ -174,7 +174,13 @@ public sealed class HostContextPipeline(
                 [],
                 messages.Sum(message => message.Text?.Length ?? 0),
                 "recent-only-fallback",
-                new ContextDiagnostics(recent.Count, 0, false, 0, fallback ?? "assembler:" + ex.GetType().Name));
+                new ContextDiagnostics(
+                    recent.Count,
+                    0,
+                    false,
+                    0,
+                    fallback ?? "assembler:" + ex.GetType().Name,
+                    prompt.PlanHash));
         }
     }
 }

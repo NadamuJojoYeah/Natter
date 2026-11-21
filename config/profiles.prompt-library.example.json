@@ -1,0 +1,90 @@
+{
+  "$schema": "./profiles.schema.json",
+  "schemaVersion": 1,
+  "defaultProfile": "tier1-default",
+  "profiles": [
+    {
+      "id": "tier1-default",
+      "supportTier": 1,
+      "match": {
+        "protocols": ["discord"],
+        "platforms": ["discord"],
+        "guilds": [],
+        "conversations": [],
+        "actors": []
+      },
+      "ai": {
+        "provider": "natter.feature.ai.deepseek#deepseek",
+        "model": "deepseek-flash"
+      },
+      "prompt": {
+        "provider": "host#static",
+        "version": "default",
+        "systemPrompt": "You are Natter, a concise assistant."
+      },
+      "context": {
+        "assembler": "host#recent-window",
+        "maxInputCharacters": 12000,
+        "maxMemoryItems": 8,
+        "maxSummaryCharacters": 1200
+      },
+      "memory": {
+        "store": "host#sqlite",
+        "retriever": "host#recent",
+        "extractor": "host#explicit"
+      },
+      "history": {
+        "scope": "conversation",
+        "maxMessages": 20,
+        "maxCharacters": 24000
+      },
+      "policy": {
+        "enabled": true
+      }
+    },
+    {
+      "id": "tier1-prompt-library",
+      "supportTier": 1,
+      "match": {
+        "protocols": ["discord"],
+        "platforms": ["discord"],
+        "guilds": ["REPLACE_WITH_GUILD_ID"],
+        "conversations": [],
+        "actors": []
+      },
+      "ai": {
+        "provider": "natter.feature.ai.deepseek#deepseek",
+        "model": "deepseek-flash"
+      },
+      "prompt": {
+        "provider": "natter.prompt.library#default",
+        "preset": "tier1-default",
+        "version": "2026-11-21",
+        "locale": "zh-CN",
+        "disabledFragments": ["legacy-style"],
+        "variables": {
+          "locale": "zh-CN"
+        }
+      },
+      "context": {
+        "assembler": "host#recent-window",
+        "maxInputCharacters": 12000,
+        "maxMemoryItems": 8,
+        "maxSummaryCharacters": 1200
+      },
+      "memory": {
+        "store": "host#sqlite",
+        "retriever": "host#recent",
+        "extractor": "host#explicit"
+      },
+      "history": {
+        "scope": "conversation",
+        "maxMessages": 20,
+        "maxCharacters": 24000
+      },
+      "policy": {
+        "enabled": true
+      }
+    }
+  ]
+}

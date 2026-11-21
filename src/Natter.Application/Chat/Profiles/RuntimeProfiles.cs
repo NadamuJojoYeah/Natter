@@ -67,6 +67,18 @@ public sealed class ProfilePrompt
     public string Version { get; init; } = "default";
 
     public string? SystemPrompt { get; init; }
+
+    /// <summary>Preset id selected inside the prompt provider (Prompt Compiler P2). Optional.</summary>
+    public string? Preset { get; init; }
+
+    /// <summary>Locale used for preset selection when the runtime request has no locale.</summary>
+    public string? Locale { get; init; }
+
+    /// <summary>Profile-level fragment overrides; disabling never deletes the fragment source.</summary>
+    public List<string> DisabledFragments { get; init; } = [];
+
+    /// <summary>Preset variable defaults (only whitelisted names are substituted at compile time).</summary>
+    public Dictionary<string, string> Variables { get; init; } = new(StringComparer.Ordinal);
 }
 
 public sealed class ProfileContextSettings

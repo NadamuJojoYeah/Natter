@@ -14,11 +14,23 @@ public sealed record PromptRequest(
 
 public sealed record PromptSection(string Id, string Text, int Order);
 
+/// <summary>
+/// Legacy provider output kept for compatibility. <see cref="PlanHash"/> / <see cref="Plan"/> are
+/// filled by the Prompt Compiler; <see cref="SafetyAppended"/> tells the context assembler that the
+/// host mandatory safety block is already part of <see cref="SystemPrompt"/>.
+/// </summary>
 public sealed record PromptBundle(
     string SystemPrompt,
     string? Persona,
     string Version,
-    IReadOnlyList<PromptSection>? Sections = null);
+    IReadOnlyList<PromptSection>? Sections = null)
+{
+    public string? PlanHash { get; init; }
+
+    public PromptPlan? Plan { get; init; }
+
+    public bool SafetyAppended { get; init; }
+}
 
 public interface IPromptProvider
 {
@@ -49,7 +61,8 @@ public sealed record ContextDiagnostics(
     int MemoryCount,
     bool SummaryIncluded,
     int TrimmedCharacters,
-    string? FallbackReason = null);
+    string? FallbackReason = null,
+    string? PromptPlanHash = null);
 
 public sealed record ContextBundle(
     IReadOnlyList<ChatMessage> Messages,

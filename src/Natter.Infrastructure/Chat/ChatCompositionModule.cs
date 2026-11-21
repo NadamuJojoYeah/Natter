@@ -104,7 +104,10 @@ public sealed class ChatCompositionModule : ICompositionModule
                 : new SqliteConversationStore(Path.Combine(
                     Path.GetFullPath(context.Options.StateDirectory),
                     "natter.db")));
-        services.AddSingleton<Natter.Application.Chat.IPromptProvider, Natter.Application.Chat.HostStaticPromptProvider>();
+        services.AddSingleton<Natter.Application.Chat.IPromptComposer, Natter.Application.Chat.PromptComposer>();
+        services.AddSingleton<Natter.Application.Chat.IPromptProvider>(provider =>
+            new Natter.Application.Chat.HostStaticPromptProvider(
+                provider.GetRequiredService<Natter.Application.Chat.IPromptComposer>()));
         services.AddSingleton<Natter.Application.Chat.IContextAssembler, Natter.Application.Chat.HostRecentWindowContextAssembler>();
         services.AddSingleton<Natter.Application.Chat.IMemoryStore>(_ =>
             string.IsNullOrWhiteSpace(context.Options.StateDirectory)
