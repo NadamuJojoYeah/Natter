@@ -12,3 +12,6 @@ artifacts/
 TestResults/
 .packages/
 .nuget-http/
+
+# Local agent-team briefs and session projections (not repository content)
+.team/
