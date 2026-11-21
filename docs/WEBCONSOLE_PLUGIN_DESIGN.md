@@ -526,6 +526,14 @@ DeactivateAsync
 
 ## 12. 审计与日志
 
+### 12.0 审计落盘位置（2026-11-21 修正）
+
+审计日志属于**运行期状态**，不写插件包：`$NATTER_STATE_DIR/webconsole/audit/webconsole-audit.jsonl`，
+目录 0700 / 文件 0600；只有 `NATTER_STATE_DIR` 缺失时才回落 `<插件目录>/audit`（并打 warning），
+回落且不可写 → 激活失败 `webconsole.audit-unwritable`。systemd `ProtectSystem=strict` 与只读容器因此都不需要放宽插件目录。
+`WebConsoleAuditPaths` 负责解析，`web status` 输出 `audit.root`（`state-directory` / `plugin-directory`），健康检查 `audit-root` 报 `degraded` 表示回落。
+
+
 审计事件：
 
 - 登录成功/失败；
@@ -536,6 +544,8 @@ DeactivateAsync
 - 终端拒绝；
 - 角色拒绝（`auth.role_denied`）、只读拒绝（`console.read_only`）；
 - 日志查看/导出（`logs.view`/`logs.export`，只记 limit/匹配数/行数，不记内容）。
+
+审计文件超过 1 MiB 轮转为 `.1`；目录 0700、文件 0600；长期留存与跨主机采集由运维负责。
 
 日志字段：
 
@@ -625,7 +635,8 @@ time, user, ip, action, target, result, duration
 - [x] `/api/logs` 过滤（level/source/q/since/until）、分页（limit/offset/order）、`/api/logs/export`（text/jsonl，脱敏 + 有界）；
 - [x] 只读/关闭态统一错误码（`console.read_only` → `config.write_disabled`/`command.disabled`），`/validate` 在只读与 viewer 下可用；
 - [x] 备份路径/undo 文案（会话内快照上限与 TTL、宿主备份手动恢复）、viewer 禁用按钮与原因提示；
-- [x] ui-smoke 覆盖角色徽章、日志面板、导出 URL。
+- [x] ui-smoke 覆盖角色徽章、日志面板、导出 URL；
+- [x] audit 目录改到 `$NATTER_STATE_DIR/webconsole/audit`（0700/0600，回落插件目录时 warning + `audit-unwritable`），只读插件挂载可用。
 
 ### Phase 4：可选 sidecar
 
@@ -677,6 +688,8 @@ Phase 1 状态见 §18；未达成项都对应 [缺口文档](WEBCONSOLE_HOST_AP
 ---
 
 ## 18. Phase 1 实现映射（2026-11-18）
+
+> 审计路径修正（2026-11-21）：`WebConsoleAuditPaths`（state 根解析 + 回落 warning）、`WebConsoleAuditStore.EnsurePrivateDirectory`（目录链 0700）、`WebConsoleRuntime`（`audit-unwritable` 启动错误码 + `audit` 状态块）。测试：`tests/Natter.Plugin.WebConsole.Tests/Phase23/AuditPathTests.cs`、`WebConsoleRuntimeTests`。
 
 > 角色/日志硬化映射（2026-11-21）：`WebConsoleAuthorization`（访问分类 + 统一错误码）、`WebConsoleCredentials`（viewer 凭据解析）、`WebConsoleLogsPolicy`（过滤/分页/导出边界）、`WebConsoleRequestHandler` 的 `logs`/`logs/export` 路由与角色闸门、`wwwroot` 角色徽章与日志面板。测试见 `tests/Natter.Plugin.WebConsole.Tests/Phase23/{RoleEnforcementTests,LogsFilterExportTests,LogsPolicyTests,ReadOnlyCodesTests}.cs`。
 

@@ -246,6 +246,8 @@ ValueTask<AdminCommandResult> RunAsync(string command, IReadOnlyList<string> arg
 
 **轮转归属**：宿主缓冲按 `AdminOptions.MaxLogEntries` 自动淘汰；插件审计超过 1 MiB 轮转为 `.1`。长期留存/采集/轮转策略属于运维文档范围（本插件不实现文件轮转）。
 
+**审计落盘位置**：插件的审计 JSONL 写在 `$NATTER_STATE_DIR/webconsole/audit/`（0700/0600），不写插件包目录；这是插件自己的状态目录约定，与宿主 admin 契约无关。`NATTER_STATE_DIR` 缺失时回落 `<插件目录>/audit` 并告警，只读挂载下以 `webconsole.audit-unwritable` 激活失败。
+
 ## 8. 对验收的影响
 
 | 验收项（设计 §15） | 状态 | 说明 |

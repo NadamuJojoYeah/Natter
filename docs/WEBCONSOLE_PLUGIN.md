@@ -154,6 +154,36 @@ openssl rand -base64 48
 
 把值放进宿主的 secret 来源，不要写进 `config.json`、Caddy/Nginx 配置或 shell history。
 
+### 4.4 审计目录与可写 state 根（systemd / Docker）
+
+插件包目录通常是**只读**的（systemd `ProtectSystem=strict`、容器只读层、`/opt/natter/plugins`），
+因此审计日志写到 **state 根**，不再写插件目录：
+
+```text
+$NATTER_STATE_DIR/webconsole/audit/webconsole-audit.jsonl
+```
+
+| 场景 | 配置 | 实际路径 |
+| --- | --- | --- |
+| systemd | `Environment=NATTER_STATE_DIR=/var/lib/natter`（并 `ReadWritePaths=/var/lib/natter`） | `/var/lib/natter/webconsole/audit/` |
+| Docker/Compose | `-e NATTER_STATE_DIR=/state -v natter-state:/state` | `/state/webconsole/audit/` |
+| 裸 `dotnet natter`（无 env） | — | 回落 `<插件目录>/audit/`（只读挂载下会失败） |
+
+- `<NATTER_STATE_DIR>/webconsole` 与 `.../audit` 由插件创建并设为 **0700**，文件 **0600**；已存在的 state 根（例如 `/var/lib/natter`）权限**不会被改动**；
+- 只在缺失时才回落插件目录，并且启动时打 warning（提示设置 `NATTER_STATE_DIR`），`web status` 的 `audit.root` 会显示 `plugin-directory`；
+- 回落且目录不可写时，插件激活失败并给出可操作错误码 **`webconsole.audit-unwritable`**（提示设 `NATTER_STATE_DIR`，而不是放宽 `/opt`）；
+- `web status --json` 新增：
+
+```json
+"audit": { "path": "/var/lib/natter/webconsole/audit/webconsole-audit.jsonl",
+           "directory": "/var/lib/natter/webconsole/audit",
+           "root": "state-directory", "warning": null }
+```
+
+- 健康检查多了 `audit-root`：`state-directory` → `ok`，回落插件目录 → `degraded`；
+- 轮转：单个审计文件超过 1 MiB 轮转为 `webconsole-audit.jsonl.1`（只保留一份历史），长期留存由运维采集；
+- **不需要**放宽 `/opt/natter` 或插件目录权限。
+
 ---
 
 ## 5. 运行
@@ -317,7 +347,8 @@ natter-admin.example.com {
 - 静态资源白名单 + CSP `default-src 'none'`，无任意文件读取；
 - 不执行 shell、不拼命令行、不启动子进程；
 - 审计只记录摘要，不记录 token、secret、prompt/memory 正文或完整命令输出；
-- 审计目录 0700、文件 0600（Unix，best-effort）；只读挂载时 health 的 `audit` 检查变为 `error`；
+- 审计目录 0700、文件 0600（Unix，best-effort）；默认写在 `$NATTER_STATE_DIR/webconsole/audit`，只读挂载下不会改插件目录（见 §4.4）；
+- 只读挂载且没有 state 根时，激活直接失败并给 `webconsole.audit-unwritable`，而不是静默丢审计；
 - 反向代理下只信任 `trustedProxies` 的 `X-Forwarded-For` / `X-Forwarded-Proto`；后者为 `https` 时会话 cookie 加 `Secure`；
 - Phase 2/3 的校验端点不写文件、不执行命令；真正写入/执行在宿主 API 缺失时 501，不提供“临时替代路径”。
 
@@ -331,6 +362,8 @@ natter-admin.example.com {
 | 端口占用 | 可能自动进入 external 模式并记录 warning；以启动日志/`web status` 为准 | 改 `port` 或停掉占用进程 |
 | 插件 Failed，绑定非法 | `webconsole.bind-not-loopback` | 改回 `127.0.0.1` |
 | 插件 Failed，静态资源缺失 | `webconsole.static-assets-missing` | 重新 staging，确认 `wwwroot/` 完整 |
+| 插件 Failed，audit 不可写 | `webconsole.audit-unwritable` | 设置 `NATTER_STATE_DIR` 指向可写 state 根（systemd `/var/lib/natter`、容器 `/state`），不要放宽插件目录权限 |
+| `web status` 显示 `audit.root=plugin-directory` | 启动 warning `NATTER_STATE_DIR is not set` | 配置 `NATTER_STATE_DIR` 后重启宿主 |
 | 页面 health 灰显 | `host.health.unavailable` | 启动 `serve --health-port` 并核对 `hostHealthUrl` |
 | plugins 明细缺失 | `host.plugin_diagnostics.unavailable` | 宿主播接 `IPluginRuntimeDiagnostics`（缺口 G4） |
 | `/api/logs` 501 | `host.logs.unavailable` | 缺口 G8，暂用 `/api/audit` |
@@ -357,4 +390,5 @@ natter-admin.example.com {
 - 命令执行依赖宿主在进程内解析 CLI 命令（`admin.command.execute` 触发的命令表提前固化缺陷已由 `0f3d61c` 修复，见缺口文档 OBS-003）；
 - `external` 模式只做探测，不代理另一个实例的请求；
 - 单 token / 单角色（admin）；viewer 角色与多用户未实现；
-- 会话只存内存，插件重启后需要重新登录。
+- 会话只存内存，插件重启后需要重新登录；
+- 审计日志路径由 `NATTER_STATE_DIR` 决定；未设置时回落到插件目录（只读部署下不可用，会在激活阶段失败）。
