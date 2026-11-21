@@ -32,12 +32,30 @@ const ui = {
   commandRun: document.getElementById("command-run"),
   commandStatus: document.getElementById("command-status"),
   commandOutput: document.getElementById("command-output"),
+  roleBadge: document.getElementById("role-badge"),
+  logLevel: document.getElementById("log-level"),
+  logSource: document.getElementById("log-source"),
+  logQ: document.getElementById("log-q"),
+  logLimit: document.getElementById("log-limit"),
+  logQuery: document.getElementById("log-query"),
+  logPrev: document.getElementById("log-prev"),
+  logNext: document.getElementById("log-next"),
+  logExportText: document.getElementById("log-export-text"),
+  logExportJsonl: document.getElementById("log-export-jsonl"),
+  logStatus: document.getElementById("log-status"),
+  logEntries: document.getElementById("log-entries"),
 };
 
 let csrf = null;
 let configEtag = null;
 let configDocumentId = null;
 let adminStatus = null;
+let currentRole = "viewer";
+let rolePermissions = { read: true, write: false, command: false };
+let logOffset = 0;
+let logHasMore = false;
+let logNextOffset = null;
+const LOG_PAGE_SIZE_DEFAULT = 200;
 
 async function api(path, options = {}) {
   const method = options.method || "GET";
@@ -101,6 +119,29 @@ function formatTime(value) {
   }
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+}
+
+function applySession(session) {
+  if (!session || !session.authenticated) {
+    return;
+  }
+
+  currentRole = session.role || "viewer";
+  rolePermissions = session.permissions || { read: true, write: false, command: false };
+  ui.roleBadge.textContent = currentRole;
+  ui.roleBadge.className = `badge ${currentRole === "admin" ? "ok" : "degraded"}`;
+}
+
+function applyWritePermission() {
+  const canWrite = currentRole === "admin" && rolePermissions.write === true;
+  const canCommand = currentRole === "admin" && rolePermissions.command === true;
+
+  if (ui.configSave) {
+    ui.configSave.disabled = ui.configSave.disabled || !canWrite;
+  }
+  if (ui.commandRun && !canCommand) {
+    ui.commandRun.disabled = true;
+  }
 }
 
 function showLogin(message) {
@@ -360,12 +401,128 @@ function render(snapshot) {
   renderConfig(snapshot.config);
   fillDocumentSelect(snapshot);
   applyAdminAvailability(snapshot);
+  applyWritePermission();
+  queryLogs({ resetOffset: true }).catch((error) => setLogStatus(`日志加载失败：${error.message}`, true));
 
   ui.logs.textContent = snapshot.logs?.available
     ? "宿主日志已启用。"
     : `宿主日志不可用：${snapshot.logs?.reason || snapshot.logs?.gapCode || "unknown"}（使用审计流水替代）`;
 }
 
+
+function setLogStatus(message, isError) {
+  ui.logStatus.textContent = message;
+  ui.logStatus.className = isError ? "error" : "muted";
+}
+
+function logQueryString(includeOffset) {
+  const parts = [];
+  const limit = ui.logLimit.value || String(LOG_PAGE_SIZE_DEFAULT);
+
+  parts.push(`limit=${encodeURIComponent(limit)}`);
+  if (includeOffset && logOffset > 0) {
+    parts.push(`offset=${encodeURIComponent(String(logOffset))}`);
+  }
+  if (ui.logLevel.value) {
+    parts.push(`level=${encodeURIComponent(ui.logLevel.value)}`);
+  }
+  if (ui.logSource.value.trim()) {
+    parts.push(`source=${encodeURIComponent(ui.logSource.value.trim())}`);
+  }
+  if (ui.logQ.value.trim()) {
+    parts.push(`q=${encodeURIComponent(ui.logQ.value.trim())}`);
+  }
+
+  return parts.join("&");
+}
+
+function renderLogEntries(payload) {
+  ui.logEntries.replaceChildren();
+
+  const section = payload.hostLogs || {};
+  if (!section.available) {
+    ui.logEntries.appendChild(node(
+      "p",
+      `宿主日志不可用：${section.reason || section.gapCode || "unknown"}（审计流水仍可在下方查看）`,
+      "empty",
+    ));
+    return;
+  }
+
+  const entries = section.data || [];
+  if (!entries.length) {
+    ui.logEntries.appendChild(node("p", "没有匹配的日志行。", "empty"));
+    return;
+  }
+
+  ui.logEntries.appendChild(makeTable(
+    ["time", "level", "source", "message"],
+    entries.map((entry) => [
+      formatTime(entry.timestamp),
+      badge(entry.level === "Error" || entry.level === "Critical" ? "error" : entry.level === "Warning" ? "degraded" : "ok"),
+      entry.source,
+      entry.message,
+    ]),
+  ));
+}
+
+async function queryLogs(options = {}) {
+  const reset = options.resetOffset === true;
+  if (reset) {
+    logOffset = 0;
+  }
+
+  setLogStatus("查询中…", false);
+  try {
+    const payload = await api(`/api/logs?${logQueryString(true)}`);
+    renderLogEntries(payload);
+    logHasMore = payload.hasMore === true;
+    logNextOffset = payload.nextOffset ?? null;
+
+    const start = payload.total === 0 ? 0 : (payload.offset || 0) + 1;
+    const end = (payload.offset || 0) + (payload.returned || 0);
+    setLogStatus(
+      `匹配 ${payload.total} 条，显示 ${start}–${end}（每页 ${payload.limit}，order=${payload.query?.order || "desc"}）`
+        + (logHasMore ? "，还有更多" : ""),
+      false,
+    );
+
+    ui.logPrev.disabled = (payload.offset || 0) === 0;
+    ui.logNext.disabled = !logHasMore;
+  } catch (error) {
+    setLogStatus(`${error.code || "error"}：${error.message}`, true);
+    ui.logPrev.disabled = true;
+    ui.logNext.disabled = true;
+  }
+}
+
+function exportLogs(format) {
+  const url = `/api/logs/export?format=${encodeURIComponent(format)}&${logQueryString(false)}`;
+  setLogStatus(`已开始导出：${url}（内容已脱敏，单次最多 5000 行 / 1 MiB）`, false);
+
+  // Same-origin navigation is what triggers the attachment download in a browser; tests run
+  // without a location object, so guard it instead of failing the render.
+  const location = globalThis?.location;
+  if (location && typeof location.assign === "function") {
+    location.assign(url);
+  }
+}
+
+function nextLogPage() {
+  if (!logHasMore) {
+    return;
+  }
+
+  const limit = Number(ui.logLimit.value || LOG_PAGE_SIZE_DEFAULT);
+  logOffset = logNextOffset ?? logOffset + limit;
+  queryLogs().catch((error) => setLogStatus(`翻页失败：${error.message}`, true));
+}
+
+function previousLogPage() {
+  const limit = Number(ui.logLimit.value || LOG_PAGE_SIZE_DEFAULT);
+  logOffset = Math.max(0, logOffset - limit);
+  queryLogs().catch((error) => setLogStatus(`翻页失败：${error.message}`, true));
+}
 
 function setConfigStatus(message, isError) {
   ui.configStatus.textContent = message;
@@ -411,20 +568,29 @@ function fillDocumentSelect(snapshot) {
 
 function renderUndo(entries) {
   ui.configUndo.replaceChildren();
+  ui.configUndo.appendChild(node(
+    "p",
+    "会话内快照：每文档最多 8 条、全局 32 条、30 分钟后失效；控制台不读取宿主备份内容，"
+      + "宿主备份需在服务器上手动恢复（路径由保存响应给出）。",
+    "doc",
+  ));
 
   if (!entries.length) {
-    ui.configUndo.appendChild(node("p", "没有可恢复的内存快照（宿主备份请按路径手动恢复）。", "empty"));
+    ui.configUndo.appendChild(node("p", "当前没有可回滚的会话内快照。", "empty"));
     return;
   }
+
+  const canRollback = currentRole === "admin" && rolePermissions.write === true;
 
   for (const entry of entries) {
     const row = node("div", undefined, "undo-row");
     row.appendChild(node("span", `${entry.undoId} · ${formatTime(entry.recordedAt)} · ${entry.sizeBytes} B`, "muted"));
     if (entry.backupPath) {
-      row.appendChild(node("span", ` 宿主备份：${entry.backupPath}`, "doc"));
+      row.appendChild(node("span", ` 宿主备份（手动恢复）：${entry.backupPath}`, "doc"));
     }
-    const button = node("button", "回滚到此处");
+    const button = node("button", canRollback ? "回滚到此处" : "回滚（需 admin）");
     button.type = "button";
+    button.disabled = !canRollback;
     button.addEventListener("click", () => rollbackConfig(entry.undoId));
     row.appendChild(button);
     ui.configUndo.appendChild(row);
@@ -514,8 +680,12 @@ async function saveConfig() {
       body: { content: ui.configText.value, etag: configEtag },
     });
     configEtag = payload.eTag;
+    const backup = payload.backupPath
+      ? `宿主备份 ${payload.backupPath}（服务器端手动恢复）`
+      : "新建文档，无宿主备份";
     setConfigStatus(
-      `已保存 · etag=${payload.eTag} · 备份=${payload.backupPath || "（新建，无备份）"} · ${describeReloadHint(payload)}`,
+      `已保存 · etag=${payload.eTag} · ${backup} · ${describeReloadHint(payload)}`
+        + (payload.undoId ? ` · 可回滚快照 ${payload.undoId}` : ""),
       false,
     );
     renderValidation({ valid: true, source: "host", eTag: payload.eTag, sizeBytes: 0, containsSecretLiteral: false, issues: [], diff: payload.diff });
@@ -549,6 +719,10 @@ async function rollbackConfig(undoId) {
     setConfigStatus(`已回滚到快照 ${undoId} · etag=${saved.eTag || "?"}`, false);
     await loadConfigDocument();
   } catch (error) {
+    if (error.code === "config.undo_empty") {
+      setConfigStatus("没有可回滚的会话内快照（可能已超过 30 分钟或已被使用）；请用宿主备份路径手动恢复。", true);
+      return;
+    }
     setConfigStatus(`${error.code || "error"}：${error.message}`, true);
   }
 }
@@ -566,8 +740,10 @@ function applyAdminAvailability(snapshot) {
 
   if (!configAvailable) {
     setConfigStatus(`配置编辑不可用：${snapshot.config?.writeGapCode || "host.admin_config.unavailable"}`, true);
+  } else if (currentRole !== "admin") {
+    setConfigStatus("viewer 只读会话：可以查看与校验，保存/回滚需要 admin 角色。", true);
   } else if (!writeEnabled) {
-    setConfigStatus("配置编辑只读：readOnly=false 且 allowConfigWrite=true 才能保存。", true);
+    setConfigStatus("只读模式：readOnly=true（统一返回 console.read_only），或 allowConfigWrite=false。", true);
   } else {
     setConfigStatus(`宿主配置已接入（${snapshot.config?.writeGapCode || "可写"}）。`, false);
   }
@@ -577,11 +753,15 @@ function applyAdminAvailability(snapshot) {
   ui.commandRun.disabled = !commandAvailable || !commandEnabled;
   ui.commandName.disabled = !commandEnabled;
   ui.commandArgs.disabled = !commandEnabled;
-  ui.commandStatus.textContent = commandEnabled
-    ? (commandAvailable
+  if (currentRole !== "admin") {
+    ui.commandStatus.textContent = "viewer 只读会话：命令执行需要 admin 角色（服务端强制）。";
+  } else if (commandEnabled) {
+    ui.commandStatus.textContent = commandAvailable
       ? `允许命令：${(adminStatus.commandAllowlist || []).join(", ") || "（空）"} · 超时 ${adminStatus.commandTimeoutSeconds}s`
-      : `命令控制台不可用：${adminStatus.commandGapCode || "host.admin_command.unavailable"}`)
-    : "命令控制台已由插件配置禁用。";
+      : `命令控制台不可用：${adminStatus.commandGapCode || "host.admin_command.unavailable"}`;
+  } else {
+    ui.commandStatus.textContent = "命令控制台已禁用：readOnly=true 或 allowCommandConsole=false。";
+  }
   ui.commandStatus.className = commandEnabled && commandAvailable ? "muted" : "error";
 }
 
@@ -636,6 +816,7 @@ async function bootstrap() {
   try {
     const session = await api("/api/session");
     csrf = session.csrf;
+    applySession(session);
     showDashboard();
     await load();
   } catch (error) {
@@ -656,6 +837,7 @@ ui.loginForm.addEventListener("submit", async (event) => {
   try {
     const session = await api("/api/session", { method: "POST", body: { token: ui.token.value } });
     csrf = session.csrf;
+    applySession(session);
     ui.token.value = "";
     showDashboard();
     await load();
@@ -693,6 +875,15 @@ ui.commandRun.addEventListener("click", () => {
     ui.commandRun.disabled = false;
   });
 });
+
+ui.logQuery.addEventListener("click", () => {
+  queryLogs({ resetOffset: true }).catch((error) => setLogStatus(`查询失败：${error.message}`, true));
+});
+
+ui.logPrev.addEventListener("click", previousLogPage);
+ui.logNext.addEventListener("click", nextLogPage);
+ui.logExportText.addEventListener("click", () => exportLogs("text"));
+ui.logExportJsonl.addEventListener("click", () => exportLogs("jsonl"));
 
 ui.refresh.addEventListener("click", () => {
   load().catch((error) => {

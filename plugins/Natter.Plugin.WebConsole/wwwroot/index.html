@@ -27,6 +27,7 @@
         <p class="muted" id="subtitle"></p>
       </div>
       <div class="actions">
+        <span id="role-badge" class="badge">—</span>
         <button id="refresh" type="button">刷新</button>
         <button id="logout" type="button" class="secondary">退出</button>
       </div>
@@ -99,7 +100,39 @@
         <div id="audit"></div>
       </article>
       <article class="panel wide">
-        <h2>宿主日志</h2>
+        <h2>日志（过滤 / 分页 / 导出）</h2>
+        <div class="editor-bar">
+          <label for="log-level">级别≥</label>
+          <select id="log-level">
+            <option value="">全部</option>
+            <option value="debug">debug</option>
+            <option value="information">information</option>
+            <option value="warning">warning</option>
+            <option value="error">error</option>
+            <option value="critical">critical</option>
+          </select>
+          <label for="log-source">来源</label>
+          <input id="log-source" type="text" autocomplete="off" placeholder="Natter.Host">
+          <label for="log-q">搜索</label>
+          <input id="log-q" type="text" autocomplete="off" placeholder="关键字">
+          <label for="log-limit">每页</label>
+          <select id="log-limit">
+            <option value="50">50</option>
+            <option value="100">100</option>
+            <option value="200" selected>200</option>
+            <option value="500">500</option>
+          </select>
+          <button id="log-query" type="button">查询</button>
+          <button id="log-prev" type="button" class="secondary">上一页</button>
+          <button id="log-next" type="button" class="secondary">下一页</button>
+          <button id="log-export-text" type="button" class="secondary">导出文本</button>
+          <button id="log-export-jsonl" type="button" class="secondary">导出 JSONL</button>
+        </div>
+        <p id="log-status" class="muted" role="status"></p>
+        <div id="log-entries"></div>
+      </article>
+      <article class="panel wide">
+        <h2>宿主日志状态</h2>
         <p id="logs" class="muted"></p>
       </article>
     </div>

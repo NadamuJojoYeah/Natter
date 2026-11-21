@@ -16,6 +16,12 @@ public sealed class WebConsoleOptions
 
     public string Token { get; init; } = WebConsoleDefaults.TokenReference;
 
+    /// <summary>
+    /// Optional read-only credential. Empty/absent disables viewer logins; when set it must be the
+    /// <c>${secret:WEBCONSOLE_VIEWER_TOKEN}</c> reference and the secret provider must supply it.
+    /// </summary>
+    public string? ViewerToken { get; init; }
+
     public bool ReadOnly { get; init; } = true;
 
     public bool AllowConfigWrite { get; init; }
@@ -40,7 +46,9 @@ public static class WebConsoleDefaults
     public const string Bind = "127.0.0.1";
     public const int Port = 5090;
     public const string TokenReference = "${secret:WEBCONSOLE_TOKEN}";
+    public const string ViewerTokenReference = "${secret:WEBCONSOLE_VIEWER_TOKEN}";
     public const string TokenSecretName = "WEBCONSOLE_TOKEN";
+    public const string ViewerTokenSecretName = "WEBCONSOLE_VIEWER_TOKEN";
     public const string HostHealthUrl = "http://127.0.0.1:5099/health";
     public const int SessionMinutes = 60;
     public const int MaxLogLines = 500;
@@ -91,6 +99,16 @@ public static class WebConsoleOptionsValidator
                 "webconsole.token-reference-required",
                 $"token must be '{WebConsoleDefaults.TokenReference}'; plaintext tokens are not accepted."));
         }
+
+        if (!string.IsNullOrEmpty(options.ViewerToken)
+            && !string.Equals(options.ViewerToken, WebConsoleDefaults.ViewerTokenReference, StringComparison.Ordinal))
+        {
+            issues.Add(new WebConsoleOptionIssue(
+                "/viewerToken",
+                "webconsole.viewer-token-reference-required",
+                $"viewerToken must be empty or '{WebConsoleDefaults.ViewerTokenReference}'; plaintext tokens are not accepted."));
+        }
+
 
         if (!TryParseLoopbackUrl(options.HostHealthUrl, out var healthUri))
         {

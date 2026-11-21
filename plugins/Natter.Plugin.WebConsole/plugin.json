@@ -19,15 +19,35 @@
     "cli.commands",
     "admin.read",
     "admin.config.write",
-    "admin.command.execute"
+    "admin.command.execute",
+    "secrets:WEBCONSOLE_VIEWER_TOKEN"
   ],
   "secrets": [
-    { "name": "WEBCONSOLE_TOKEN", "required": true }
+    {
+      "name": "WEBCONSOLE_TOKEN",
+      "required": true
+    },
+    {
+      "name": "WEBCONSOLE_VIEWER_TOKEN",
+      "required": false
+    }
   ],
   "configSchema": "config.schema.json",
   "contributions": [
-    { "type": "cli.command", "id": "web.status" }
+    {
+      "type": "cli.command",
+      "id": "web.status"
+    }
   ],
-  "platforms": ["windows", "linux", "macos"],
-  "capabilities": ["admin:diagnostics", "admin:config", "admin:commands", "cli:web.status"]
+  "platforms": [
+    "windows",
+    "linux",
+    "macos"
+  ],
+  "capabilities": [
+    "admin:diagnostics",
+    "admin:config",
+    "admin:commands",
+    "cli:web.status"
+  ]
 }

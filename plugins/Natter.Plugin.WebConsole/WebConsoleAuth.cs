@@ -134,6 +134,62 @@ public sealed class WebConsoleTokenAuthenticator
     }
 }
 
+/// <summary>
+/// Resolves the optional read-only credential. Kept separate from the runtime so the resolution rules
+/// (missing secret, unusable value, identical to the admin token) are unit-testable without binding a
+/// listener.
+/// </summary>
+public static class WebConsoleCredentials
+{
+    public const string ViewerSecretMissing = "webconsole.viewer-token-missing";
+    public const string ViewerTokenUnusable = "webconsole.viewer-token-unusable";
+    public const string ViewerTokenDuplicatesAdmin = "webconsole.viewer-token-duplicates-admin";
+
+    public static WebConsoleTokenAuthenticator? ResolveViewer(
+        string? viewerTokenReference,
+        Natter.Plugin.Abstractions.IPluginSecrets secrets,
+        WebConsoleTokenAuthenticator admin,
+        out string? problem)
+    {
+        problem = null;
+
+        if (string.IsNullOrEmpty(viewerTokenReference))
+            return null;
+
+        string? raw;
+        try
+        {
+            raw = secrets.Get(WebConsoleDefaults.ViewerTokenSecretName);
+        }
+        catch (Natter.Plugin.Abstractions.PluginSecretException)
+        {
+            problem = ViewerSecretMissing;
+            return null;
+        }
+
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            problem = ViewerSecretMissing;
+            return null;
+        }
+
+        var viewer = new WebConsoleTokenAuthenticator(raw);
+        if (!viewer.IsUsable)
+        {
+            problem = ViewerTokenUnusable;
+            return null;
+        }
+
+        if (admin.Verify(raw))
+        {
+            problem = ViewerTokenDuplicatesAdmin;
+            return null;
+        }
+
+        return viewer;
+    }
+}
+
 /// <summary>Failed-login throttle: 5 failures per 5 minutes per client, plus a global cap.</summary>
 public sealed class WebConsoleLoginThrottle
 {

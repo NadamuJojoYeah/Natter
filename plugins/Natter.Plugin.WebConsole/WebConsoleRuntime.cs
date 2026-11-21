@@ -42,6 +42,9 @@ public sealed class WebConsoleRuntime : IAsyncDisposable
 
     public bool TokenConfigured { get; private set; }
 
+    /// <summary>True when a usable viewer secret is present; viewer logins create read-only sessions.</summary>
+    public bool ViewerLoginEnabled { get; private set; }
+
     /// <summary>Host admin contracts resolved at activation; empty when no <c>admin.*</c> permission.</summary>
     public WebConsoleAdminSurface AdminSurface { get; private set; } = WebConsoleAdminSurface.Empty;
 
@@ -72,6 +75,9 @@ public sealed class WebConsoleRuntime : IAsyncDisposable
 
         TokenConfigured = true;
 
+        var viewerAuthenticator = ResolveViewerAuthenticator(secrets, authenticator);
+        ViewerLoginEnabled = viewerAuthenticator is { IsUsable: true };
+
         var auditDirectory = Path.Combine(_identity.PluginDirectory, WebConsoleDefaults.AuditDirectoryName);
         _audit = new WebConsoleAuditStore(auditDirectory, _clock);
 
@@ -96,11 +102,13 @@ public sealed class WebConsoleRuntime : IAsyncDisposable
             _audit,
             authenticator,
             assets,
+            viewerAuthenticator is { IsUsable: true },
             _clock);
 
         var handler = new WebConsoleRequestHandler(
             _options,
             authenticator,
+            viewerAuthenticator,
             _sessions,
             new WebConsoleLoginThrottle(_clock),
             origins,
@@ -144,6 +152,23 @@ public sealed class WebConsoleRuntime : IAsyncDisposable
         _audit.Write("plugin.start", "system", null, url, "ok", TimeSpan.Zero);
         _log.Information(
             $"webconsole ready: url={url} health={_options.HostHealthUrl} audit={_audit.FilePath}");
+    }
+
+    /// <summary>
+    /// Resolves the optional viewer secret; a missing or colliding credential only disables viewer
+    /// logins (the admin console keeps working) and is reported through the <c>viewer-login</c> check.
+    /// </summary>
+    private WebConsoleTokenAuthenticator? ResolveViewerAuthenticator(
+        IPluginSecrets secrets,
+        WebConsoleTokenAuthenticator admin)
+    {
+        var viewer = WebConsoleCredentials.ResolveViewer(_options.ViewerToken, secrets, admin, out var problem);
+
+        if (problem is null)
+            return viewer;
+
+        _log.Warning($"webconsole viewer login disabled: {problem} ({WebConsoleDefaults.ViewerTokenSecretName})");
+        return null;
     }
 
     private void CleanUpAfterFailedStart()
@@ -210,6 +235,12 @@ public sealed class WebConsoleRuntime : IAsyncDisposable
                 runtime = "httplistener",
             },
             tokenConfigured = TokenConfigured,
+            roles = new
+            {
+                adminLoginEnabled = TokenConfigured,
+                viewerLoginEnabled = ViewerLoginEnabled,
+                readOnly = _options.ReadOnly,
+            },
             hostHealthUrl = _options.HostHealthUrl,
             admin = new
             {

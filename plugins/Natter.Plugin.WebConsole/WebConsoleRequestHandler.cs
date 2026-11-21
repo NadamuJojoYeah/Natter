@@ -27,6 +27,7 @@ public sealed class WebConsoleRequestHandler
 
     private readonly WebConsoleOptions _options;
     private readonly WebConsoleTokenAuthenticator _tokens;
+    private readonly WebConsoleTokenAuthenticator? _viewerTokens;
     private readonly WebConsoleSessionStore _sessions;
     private readonly WebConsoleLoginThrottle _throttle;
     private readonly WebConsoleOriginPolicy _origins;
@@ -40,6 +41,7 @@ public sealed class WebConsoleRequestHandler
     public WebConsoleRequestHandler(
         WebConsoleOptions options,
         WebConsoleTokenAuthenticator tokens,
+        WebConsoleTokenAuthenticator? viewerTokens,
         WebConsoleSessionStore sessions,
         WebConsoleLoginThrottle throttle,
         WebConsoleOriginPolicy origins,
@@ -52,6 +54,7 @@ public sealed class WebConsoleRequestHandler
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _tokens = tokens ?? throw new ArgumentNullException(nameof(tokens));
+        _viewerTokens = viewerTokens;
         _sessions = sessions ?? throw new ArgumentNullException(nameof(sessions));
         _throttle = throttle ?? throw new ArgumentNullException(nameof(throttle));
         _origins = origins ?? throw new ArgumentNullException(nameof(origins));
@@ -61,6 +64,23 @@ public sealed class WebConsoleRequestHandler
         _assets = assets ?? throw new ArgumentNullException(nameof(assets));
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
         _log = log ?? throw new ArgumentNullException(nameof(log));
+    }
+
+    /// <summary>Compatibility overload: no viewer credential (viewer logins disabled).</summary>
+    public WebConsoleRequestHandler(
+        WebConsoleOptions options,
+        WebConsoleTokenAuthenticator tokens,
+        WebConsoleSessionStore sessions,
+        WebConsoleLoginThrottle throttle,
+        WebConsoleOriginPolicy origins,
+        WebConsoleDiagnostics diagnostics,
+        WebConsoleAdminGateway admin,
+        WebConsoleAuditStore audit,
+        WebConsoleStaticAssets assets,
+        TimeProvider clock,
+        IPluginLog log)
+        : this(options, tokens, null, sessions, throttle, origins, diagnostics, admin, audit, assets, clock, log)
+    {
     }
 
     public async ValueTask<WebConsoleHttpResponse> HandleAsync(
@@ -134,6 +154,18 @@ public sealed class WebConsoleRequestHandler
             return Error(403, "csrf.invalid", $"Missing or invalid {WebConsoleDefaults.CsrfHeaderName} header.");
         }
 
+        // Server-side role enforcement: the UI hides controls, this is the actual boundary.
+        var access = WebConsoleAuthorization.Classify(request.Method, request.Path);
+        if (!WebConsoleAuthorization.IsAllowed(session.Role, access))
+        {
+            Audit(request, "auth.role_denied", "denied", startedAt, request.Path, WebConsoleAuthorization.RoleName(session.Role));
+            return Error(
+                403,
+                WebConsoleAuthorization.ForbiddenCode,
+                $"This action requires the '{WebConsoleAuthorization.RequiredRoleName(access)}' role; "
+                + $"current role is '{WebConsoleAuthorization.RoleName(session.Role)}'.");
+        }
+
         var route = request.Path["/api/".Length..];
 
         switch (route)
@@ -165,19 +197,13 @@ public sealed class WebConsoleRequestHandler
             case "logs":
             {
                 RequireMethod(request, "GET");
-                var limit = ReadLimit(request, Math.Min(_options.MaxLogLines, 200));
-                var snapshot = await _diagnostics
-                    .CreateSnapshotAsync(Math.Min(_options.MaxLogLines, 200), cancellationToken)
-                    .ConfigureAwait(false);
+                return await HandleLogsAsync(request, startedAt, cancellationToken).ConfigureAwait(false);
+            }
 
-                Audit(request, "logs.view", "ok", startedAt, $"limit={limit}");
-                return WebConsoleHttpResponse.Json(200, new
-                {
-                    generatedAt = snapshot.GeneratedAt,
-                    limit,
-                    hostLogs = snapshot.Logs,
-                    audit = _audit.Read(limit),
-                });
+            case "logs/export":
+            {
+                RequireMethod(request, "GET");
+                return await HandleLogExportAsync(request, startedAt, cancellationToken).ConfigureAwait(false);
             }
 
             case "audit":
@@ -263,9 +289,16 @@ public sealed class WebConsoleRequestHandler
                 return WebConsoleHttpResponse.Json(200, new
                 {
                     authenticated = true,
-                    role = RoleName(session.Role),
+                    role = WebConsoleAuthorization.RoleName(session.Role),
                     csrf = session.Csrf,
                     expiresAt = session.ExpiresAt,
+                    permissions = new
+                    {
+                        read = true,
+                        write = session.Role == WebConsoleRole.Admin && !_options.ReadOnly,
+                        command = session.Role == WebConsoleRole.Admin && !_options.ReadOnly,
+                    },
+                    viewerLoginEnabled = _viewerTokens is { IsUsable: true },
                 });
             }
 
@@ -285,7 +318,7 @@ public sealed class WebConsoleRequestHandler
                 }
 
                 _sessions.Revoke(session.Id);
-                Audit(request, "auth.logout", "ok", startedAt, user: RoleName(session.Role));
+                Audit(request, "auth.logout", "ok", startedAt, user: WebConsoleAuthorization.RoleName(session.Role));
 
                 return WebConsoleHttpResponse.Json(
                     200,
@@ -339,7 +372,15 @@ public sealed class WebConsoleRequestHandler
                 });
         }
 
-        if (!_tokens.Verify(token))
+        // Admin is checked first: a leaked viewer token can never be escalated by guessing the
+        // admin one, and identical secrets are rejected at activation (see WebConsoleRuntime).
+        var role = _tokens.Verify(token)
+            ? WebConsoleRole.Admin
+            : _viewerTokens is { IsUsable: true } viewer && viewer.Verify(token)
+                ? WebConsoleRole.Viewer
+                : (WebConsoleRole?)null;
+
+        if (role is null)
         {
             _throttle.RecordFailure(client);
             Audit(request, "auth.login", "denied", startedAt);
@@ -347,19 +388,26 @@ public sealed class WebConsoleRequestHandler
         }
 
         _throttle.Reset(client);
-        var session = _sessions.Create(WebConsoleRole.Admin, TimeSpan.FromMinutes(_options.SessionMinutes));
+        var session = _sessions.Create(role.Value, TimeSpan.FromMinutes(_options.SessionMinutes));
         var secureCookie = IsSecureRequest(request);
 
-        Audit(request, "auth.login", "ok", startedAt, user: RoleName(session.Role));
+        Audit(request, "auth.login", "ok", startedAt, user: WebConsoleAuthorization.RoleName(session.Role));
 
         return WebConsoleHttpResponse.Json(
             200,
             new
             {
                 authenticated = true,
-                role = RoleName(session.Role),
+                role = WebConsoleAuthorization.RoleName(session.Role),
                 csrf = session.Csrf,
                 expiresAt = session.ExpiresAt,
+                permissions = new
+                {
+                    read = true,
+                    write = session.Role == WebConsoleRole.Admin && !_options.ReadOnly,
+                    command = session.Role == WebConsoleRole.Admin && !_options.ReadOnly,
+                },
+                viewerLoginEnabled = _viewerTokens is { IsUsable: true },
             },
             new Dictionary<string, string>
             {
@@ -368,6 +416,121 @@ public sealed class WebConsoleRequestHandler
                     _options.SessionMinutes * 60,
                     secureCookie),
             });
+    }
+
+    private async ValueTask<WebConsoleHttpResponse> HandleLogsAsync(
+        WebConsoleHttpRequest request,
+        DateTimeOffset startedAt,
+        CancellationToken cancellationToken)
+    {
+        if (!WebConsoleLogsPolicy.TryParse(
+                ParseQuery(request.Query),
+                _options.MaxLogLines,
+                out var query,
+                out var error))
+        {
+            Audit(request, "logs.view", "invalid", startedAt);
+            return Error(400, "logs.invalid_query", error!);
+        }
+
+        var snapshot = await _diagnostics
+            .CreateSnapshotAsync(Math.Min(_options.MaxLogLines, WebConsoleLogsPolicy.MaxLimit), cancellationToken)
+            .ConfigureAwait(false);
+
+        var page = WebConsoleLogsPolicy.Page(snapshot.Logs.Data ?? [], query);
+        var audit = query.IncludeAudit ? FilterAudit(request, query) : null;
+
+        Audit(
+            request,
+            "logs.view",
+            "ok",
+            startedAt,
+            $"limit={query.Limit} offset={query.Offset} level={query.Level ?? "*"} matched={page.Total}");
+
+        return WebConsoleHttpResponse.Json(200, new
+        {
+            generatedAt = snapshot.GeneratedAt,
+            query = new
+            {
+                query.Limit,
+                query.Offset,
+                query.Level,
+                query.Source,
+                query.Search,
+                since = query.Since,
+                until = query.Until,
+                order = query.Descending ? "desc" : "asc",
+                query.IncludeAudit,
+                levels = WebConsoleLogsPolicy.Levels,
+            },
+            total = page.Total,
+            returned = page.Entries.Count,
+            offset = page.Offset,
+            limit = page.Limit,
+            hasMore = page.HasMore,
+            nextOffset = page.NextOffset,
+            hostLogs = snapshot.Logs with { Data = page.Entries },
+            audit,
+        });
+    }
+
+    private async ValueTask<WebConsoleHttpResponse> HandleLogExportAsync(
+        WebConsoleHttpRequest request,
+        DateTimeOffset startedAt,
+        CancellationToken cancellationToken)
+    {
+        var raw = ParseQuery(request.Query);
+
+        if (!WebConsoleLogsPolicy.TryParse(raw, WebConsoleLogsPolicy.MaxExportLines, out var query, out var error))
+        {
+            Audit(request, "logs.export", "invalid", startedAt);
+            return Error(400, "logs.invalid_query", error!);
+        }
+
+        raw.TryGetValue("format", out var format);
+        format = string.IsNullOrWhiteSpace(format) ? "text" : format.Trim().ToLowerInvariant();
+        if (format is not ("text" or "txt" or "jsonl" or "ndjson"))
+        {
+            Audit(request, "logs.export", "invalid", startedAt);
+            return Error(400, "logs.invalid_format", "format must be 'text' or 'jsonl'.");
+        }
+
+        var snapshot = await _diagnostics
+            .CreateSnapshotAsync(Math.Min(_options.MaxLogLines, WebConsoleLogsPolicy.MaxLimit), cancellationToken)
+            .ConfigureAwait(false);
+
+        var filtered = (snapshot.Logs.Data ?? []).Where(entry => WebConsoleLogsPolicy.Matches(entry, query));
+        var export = WebConsoleLogsPolicy.Export(filtered, format);
+
+        var extension = export.ContentType.StartsWith("application/x-ndjson", StringComparison.Ordinal) ? "ndjson" : "log";
+        var fileName = $"webconsole-logs-{_clock.GetUtcNow():yyyyMMdd'T'HHmmss'Z'}.{extension}";
+
+        Audit(request, "logs.export", "ok", startedAt, $"format={format} lines={export.Lines} truncated={export.Truncated}");
+
+        return WebConsoleHttpResponse.Text(
+            200,
+            export.ContentType,
+            export.Body,
+            new Dictionary<string, string>
+            {
+                ["Content-Disposition"] = $"attachment; filename=\"{fileName}\"",
+                ["X-WebConsole-Export-Lines"] = export.Lines.ToString(CultureInfo.InvariantCulture),
+                ["X-WebConsole-Export-Truncated"] = export.Truncated ? "true" : "false",
+            });
+    }
+
+    /// <summary>Audit lines honour <c>q</c> only; paging a JSONL audit tail is not a documented feature.</summary>
+    private IReadOnlyList<WebConsoleAuditEntry> FilterAudit(WebConsoleHttpRequest request, WebConsoleLogQuery query)
+    {
+        var entries = _audit.Read(Math.Clamp(query.Limit, 1, WebConsoleLogsPolicy.MaxLimit));
+        if (string.IsNullOrEmpty(query.Search))
+            return entries;
+
+        return entries
+            .Where(entry =>
+                (entry.Action ?? string.Empty).IndexOf(query.Search, StringComparison.OrdinalIgnoreCase) >= 0
+                || (entry.Target ?? string.Empty).IndexOf(query.Search, StringComparison.OrdinalIgnoreCase) >= 0)
+            .ToArray();
     }
 
     private async ValueTask<WebConsoleHttpResponse> SnapshotAsync(
@@ -428,7 +591,7 @@ public sealed class WebConsoleRequestHandler
         {
             "GET" => await HandleConfigReadAsync(request, documentId, startedAt, cancellationToken).ConfigureAwait(false),
             "POST" => await HandleConfigSaveAsync(request, documentId, startedAt, cancellationToken).ConfigureAwait(false),
-            _ => Error(405, "method.not_allowed", "Method not allowed."),
+            _ => MethodNotAllowed("GET", "POST"),
         };
     }
 
@@ -482,10 +645,16 @@ public sealed class WebConsoleRequestHandler
         if (!WebConsoleConfigEditPolicy.IsAllowedId(documentId))
             return Error(400, "config.id_invalid", "Config id must be 'profiles' or 'plugin:<plugin-id>'.");
 
-        if (_options.ReadOnly || !_options.AllowConfigWrite)
+        if (DenyReadOnly(request, WebConsoleAccess.Manage, "console.read_only", startedAt, documentId) is { } readOnly)
+            return readOnly;
+
+        if (!_options.AllowConfigWrite)
         {
             Audit(request, "config.rollback", "denied", startedAt, documentId);
-            return Error(403, "config.write_disabled", "Config writing is disabled by plugin configuration.");
+            return Error(
+                403,
+                WebConsoleAuthorization.ConfigWriteDisabledCode,
+                "Config writing is disabled by plugin configuration (allowConfigWrite=false).");
         }
 
         if (BodyTooLarge(request, WebConsoleDefaults.MaxAdminBodyBytes))
@@ -514,10 +683,16 @@ public sealed class WebConsoleRequestHandler
         if (!WebConsoleConfigEditPolicy.IsAllowedId(documentId))
             return Error(400, "config.id_invalid", "Config id must be 'profiles' or 'plugin:<plugin-id>'.");
 
-        if (_options.ReadOnly || !_options.AllowConfigWrite)
+        if (DenyReadOnly(request, WebConsoleAccess.Manage, "console.read_only", startedAt, documentId) is { } readOnly)
+            return readOnly;
+
+        if (!_options.AllowConfigWrite)
         {
             Audit(request, "config.write", "denied", startedAt, documentId);
-            return Error(403, "config.write_disabled", "Config writing is disabled by plugin configuration.");
+            return Error(
+                403,
+                WebConsoleAuthorization.ConfigWriteDisabledCode,
+                "Config writing is disabled by plugin configuration (allowConfigWrite=false).");
         }
 
         if (BodyTooLarge(request, WebConsoleDefaults.MaxAdminBodyBytes))
@@ -705,12 +880,18 @@ public sealed class WebConsoleRequestHandler
         }
 
         if (!string.Equals(request.Method, "POST", StringComparison.Ordinal))
-            return Error(405, "method.not_allowed", "Method not allowed.");
+            return MethodNotAllowed("GET", "POST");
 
-        if (!_options.AllowCommandConsole || _options.ReadOnly)
+        if (DenyReadOnly(request, WebConsoleAccess.Manage, "console.read_only", startedAt) is { } readOnly)
+            return readOnly;
+
+        if (!_options.AllowCommandConsole)
         {
             Audit(request, "command.run", "denied", startedAt);
-            return Error(403, "command.disabled", "Command console is disabled by plugin configuration.");
+            return Error(
+                403,
+                WebConsoleAuthorization.CommandDisabledCode,
+                "Command console is disabled by plugin configuration (allowCommandConsole=false).");
         }
 
         if (BodyTooLarge(request, WebConsoleDefaults.MaxCommandBodyBytes))
@@ -758,10 +939,14 @@ public sealed class WebConsoleRequestHandler
     {
         RequireMethod(request, "POST");
 
-        if (!_options.AllowCommandConsole || _options.ReadOnly)
+        // A pure allowlist decision: never executes, so read-only mode does not block it.
+        if (!_options.AllowCommandConsole)
         {
             Audit(request, "command.validate", "denied", startedAt);
-            return Error(403, "command.disabled", "Command console is disabled by plugin configuration.");
+            return Error(
+                403,
+                WebConsoleAuthorization.CommandDisabledCode,
+                "Command console is disabled by plugin configuration (allowCommandConsole=false).");
         }
 
         if (BodyTooLarge(request, WebConsoleDefaults.MaxCommandBodyBytes))
@@ -937,6 +1122,36 @@ public sealed class WebConsoleRequestHandler
         });
 
     /// <summary>Maps a gateway failure to the documented error envelope, keeping any partial result.</summary>
+    /// <summary>
+    /// Unified read-only refusal used by every mutating endpoint. It runs after the HTTP method
+    /// check so a wrong verb still reports 405, and after the role check so viewer sessions see
+    /// <c>auth.forbidden</c> instead of a mode hint.
+    /// </summary>
+    private WebConsoleHttpResponse? DenyReadOnly(
+        WebConsoleHttpRequest request,
+        WebConsoleAccess access,
+        string action,
+        DateTimeOffset startedAt,
+        string? target = null,
+        string? user = null)
+    {
+        if (WebConsoleAuthorization.GateCode(_options, access) is not { } code)
+            return null;
+
+        Audit(request, action, "denied", startedAt, target, user);
+        return Error(403, code, "The console is running in read-only mode; mutating endpoints are disabled.");
+    }
+
+    /// <summary>405 with the documented Allow header; used where a route accepts more than one verb.</summary>
+    private static WebConsoleHttpResponse MethodNotAllowed(params string[] allowedMethods)
+    {
+        var allow = string.Join(", ", allowedMethods);
+        return WebConsoleHttpResponse.Json(
+            405,
+            new { error = new { code = "method.not_allowed", message = "Method not allowed.", doc = WebConsoleDefaults.DefaultDocumentationFile } },
+            new Dictionary<string, string> { ["Allow"] = allow });
+    }
+
     private static WebConsoleHttpResponse Failure(WebConsoleAdminFailure failure, object? result = null)
         => WebConsoleHttpResponse.Json(failure.StatusCode, new
         {
@@ -950,8 +1165,6 @@ public sealed class WebConsoleRequestHandler
             result,
         });
 
-    private static string RoleName(WebConsoleRole role)
-        => role == WebConsoleRole.Admin ? "admin" : "viewer";
 }
 
 /// <summary>Thrown when a route exists but the HTTP method is wrong; mapped to 405 by the handler.</summary>
