@@ -26,7 +26,7 @@
 | systemd | BLOCKED（root/PID1） | **仍 BLOCKED**，但已给出可执行安装器 + 只读取证器 + BLOCKED 证据 |
 | 24h soak | 进行中（14h 后被打断） | **未达成**（13.99h / 17.3% 覆盖）；工具与口径已交付 |
 | secret 轮换 | BLOCKED（平台权限） | **流程+脚本就绪并实测**；真实平台轮换仍 BLOCKED |
-| OBS-019 断连归因 | 未闭环 | **运维侧可观测性补齐**（告警规则 + 证据）；代码修复建议交回工程师 |
+| OBS-019 断连归因 | 未闭环 | **运维侧可观测性补齐**（告警规则 + 证据）；代码修复建议交回工程师 → **18:00 engineer 已修复，运维告警已适配（见 §5.4）** |
 | Discord 3s 交互 | 已定位为出口 RTT | **文档化 + 探针工具**；新增容器场景的三层差异实测 |
 
 ---
@@ -226,7 +226,7 @@ result: PASS
 
 ---
 
-## 5. OBS-019（断连原因不可见）：运维侧证据 + 告警（不改 src）
+## 5. OBS-019（断连原因不可见）：运维侧证据 + 告警（后续已由 engineer 修复并适配）
 
 ### 5.1 证据
 
@@ -237,7 +237,7 @@ result: PASS
 `scripts/ops-health-alert.sh`：
 
 - 读 loopback `/health` 或快照文件，与上次基线比较，输出人类可读或 `--json`；
-- 规则：`status-not-healthy`、`plugin-failed`、`upstream-disconnected`、`reconnect`（增量）、**`disconnect-without-reason`（OBS-019）**、`interaction-ack-timeout`、`send-failures`、`tier1-provider-unavailable`、`task-failed`；
+- 规则（§5.4 已升级为新字段优先）：`status-not-healthy`、`plugin-failed`、`upstream-disconnected`、**断连归因三态**、`reconnect-counter-reset`、`interaction-ack-timeout`、`send-failures`、`tier1-provider-unavailable`、`task-failed`；
 - 首次运行视为基线（不误报），状态存 0600；
 - 退出码：`0` 无告警 / `1` 有告警 / `3` 无快照。
 
@@ -263,6 +263,66 @@ checked at ... status=healthy alerts=0                       exit=0
 3. 顺带把 `lastDisconnectAt` 与 `lastDisconnectError` 配对输出，便于告警直接引用（现在只能靠时间戳去翻日志）。
 
 > 运维侧不阻断：`ops-health-alert.sh` 已经能把"断过但没原因"变成显式告警，并给出对应时间窗的日志检索命令。
+
+### 5.4 后续（2026-11-21 18:00）：代码已修复，运维告警已适配
+
+engineer 已在 `/health` 增加 **`lastDisconnectError` / `lastDisconnectCode`**，断连时写入、**跨 Ready 保留**；`lastError` 保持"当前错误"语义（`OnReady` 仍清空）。运维侧随之改造 `scripts/ops-health-alert.sh`，不再用 `lastError` 判断断连归因：
+
+| 载荷 | 告警 id | 说明 |
+| --- | --- | --- |
+| `lastDisconnectError` 有值 | `disconnect` | 断连有原因，消息带 `code=` + `error=` |
+| 有该字段但为 null | `disconnect-without-reason` | 新 host 但本次断连无消息（少见） |
+| 无该字段（旧样本） | `disconnect-without-reason-legacy` | 旧载荷，原因只能靠日志 |
+
+同时修复了旧告警的两个问题：
+
+1. **重复/误导提示**：旧规则 `lastDisconnectAt != null && lastError == null` 会在修复后的 host 上把"有原因的正常重连"报成"无原因"；新规则优先读原因字段，一次重连只出一条；
+2. **计数器重置**：新增 `reconnect-counter-reset`，host 重启导致 `reconnectCount` 归零时显式提示（避免被误读成重连风暴）。
+
+自检（无需 host/网络/secret）：
+
+```bash
+./scripts/ops-health-alert.sh --self-test
+# ok baseline is silent / reconnect with reason / without message / legacy sample /
+#    no repeat on unchanged snapshot / current error is not a disconnect /
+#    reconnect counter reset / interaction ack timeout
+# self-test passed (8 cases)
+```
+
+真实历史样本回归（`artifacts/ops/p4.5/closeout/2026-11-21/obs019-adapt/`）：
+
+```text
+legacy 载荷（无 lastDisconnectError 字段）→ disconnect-without-reason-legacy（提示翻日志）
+同一快照补上 reason 字段        → disconnect（code=ws_closed error=gateway closed (1006)）
+同一快照再轮询一次              → alerts=0（不重复）
+```
+
+真实 host 验证（含修复的 `publish` + 同源 staging，2026-11-21 18:09）：
+
+```json
+{"status":"healthy","plugins":{"activated":6,"failed":0},
+ "upstreams":[{"source":"dingtalk:...","connected":true,"reconnectCount":0,
+               "lastDisconnectAt":null,"lastDisconnectCode":null,"lastDisconnectError":null,"lastError":null},
+              {"source":"discord:...","connected":true,"reconnectCount":0,
+               "lastDisconnectAt":null,"lastDisconnectCode":null,"lastDisconnectError":null,"lastError":null}]}
+```
+
+`/health` 200，两个 upstream 都带上了新字段。用这份真实载荷做基线、再叠加一次合成断连（`reconnectCount` 1、`code=ws_closed`、`error=gateway closed (1006)`）：
+
+```text
+baseline                -> alerts=0
+after disconnect        -> [warning] disconnect: ... reconnected 1 time(s); last disconnect ...
+                            code=ws_closed error=gateway closed (1006)
+repeat poll             -> alerts=0          # 不会重复提示
+```
+
+> **踩坑记录（运维侧，非代码缺陷）**：验证时先用 16:08 staging 的插件配 18:03 的 host，`/health` 返回 **500**、CLI `health` 抛
+> `MissingMethodException: Natter.Chat.UpstreamHealth..ctor(...9 args)`。原因是插件目录 `lib/` 里带的是**host 程序集的私有副本**
+> （`Natter.Chat.dll` 等），旧插件引用的还是 9 参数构造。重新用当前源码 staging（`plugins-fresh`，md5 与 host 一致）后 `/health` 立即恢复 200。
+> **规则：插件 `lib/` 必须与 host 来自同一次构建**，升级时不要只换 host 不换插件。
+> 建议后续在 `scripts/stage-tier1-plugins.sh` 增加"插件 lib 中 Natter.*.dll 与 `--host-dir` 同名文件哈希一致性"校验（超出本任务写作用域，需扩大）。
+
+**遗留**：`scripts/soak-report.py` 的 `samplesWithDisconnectButNoReason` 仍是旧口径，对修复后的样本会高估"静默断连"；适配它超出本任务写作用域（`scripts/ops-health-alert.sh` + `docs/operations/`），已在 [24h soak §6.1](passive-soak-24h.md) 记录临时判定方法并列为后续项。
 
 ---
 
@@ -333,7 +393,8 @@ written: .../live.env (600)   backup: live.env.bak.20261121-161500 (0600)
 | `docker compose up` 原命令 | **未执行（环境）** | 本机无 compose 插件；镜像与等价参数已验证，CI 覆盖 compose 校验 |
 | 24h 完整采样 | **未达成** | 历史最长 13.99 h / 覆盖 17.3%；timer 已交付，需生产机跑满 24h 并用 `soak-report.py` 判定 |
 | 真实 secret 轮换 | **BLOCKED（平台权限）** | 流程与脚本已实测；控制台操作需账号权限 |
-| OBS-019 代码修复 | **交回工程师** | 需新增 `lastDisconnectError` 持久字段；运维侧告警已可先兜住 |
+| OBS-019 代码修复 | **已完成**（engineer，18:00） | 新增 `lastDisconnectError`/`lastDisconnectCode` 持久字段；运维告警已适配（§5.4） |
+| `soak-report.py` 断连口径 | **待适配** | 仍按 `lastError` 统计静默断连，新样本会高估；需扩大写作用域 |
 | 容器内 Discord 出网 | **环境相关** | 本机依赖 hosts 劫持 + 私有 CA；生产需容器可直达 Discord 或显式代理，否则 `ws_connect` 超时 |
 | 真人回归（P4） | **待人工** | `/ask` `/remember` `/memory` `/forget` `/reset`、DM、guild @bot、钉钉消息 |
 | DingTalk/Spark 容器化 | 未验证 | `--build-arg TIER2=true` 已支持 staging，未做运行验证（本机 Tier 1 优先） |

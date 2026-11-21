@@ -120,7 +120,7 @@ cat /etc/ssl/certs/ca-certificates.crt /etc/ca-certificates/trust-source/anchors
 会命中的关键规则：
 
 - `interaction-ack-timeout`：`lastError` 含 `interaction_defer_failed` → **critical**
-- `upstream-disconnected` / `reconnect` / `disconnect-without-reason`（OBS-019）
+- `upstream-disconnected` / `disconnect`（带 `lastDisconnectCode`/`Error`） / `disconnect-without-reason`（新 host 无消息） / `disconnect-without-reason-legacy`（旧载荷） / `reconnect-counter-reset`
 - `send-failures`：`sendFailures` 增长 → critical
 
 ---

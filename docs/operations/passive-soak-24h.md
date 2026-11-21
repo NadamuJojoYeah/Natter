@@ -147,14 +147,31 @@ python3 /opt/natter/scripts/soak-report.py /var/log/natter/soak-*.jsonl --interv
 
 ---
 
-## 6. 与告警配合
+## 6. 与告警配合（OBS-019 已修复，2026-11-21 适配）
 
 ```bash
-# 每 5 分钟：状态/断连/发送失败/OBS-019
+# 每 5 分钟：状态/断连/发送失败/interaction 超时
 */5 * * * * /opt/natter/scripts/ops-health-alert.sh --state /var/lib/natter/log/alert-state.json
+
+# 改规则后先自检（无需 host / 网络 / secret）
+./scripts/ops-health-alert.sh --self-test
 ```
 
-`ops-health-alert.sh` 输出 `disconnect-without-reason` 时，说明发生了 **OBS-019**：host 在 `OnReady` 里把 `LastError` 清空了。此时用日志补齐原因：
+断连原因的读取顺序（P4.5 follow-up 之后）：
+
+| 采样载荷 | 告警 id | 含义 |
+| --- | --- | --- |
+| 有 `lastDisconnectError` 且有值 | `disconnect` | **断连有原因**：消息里带 `code=` + `error=` |
+| 有该字段但为 `null` | `disconnect-without-reason` | 新版本 host 但该次断连没给消息（少见），仍需翻日志 |
+| **没有**该字段（旧版本 / 旧样本） | `disconnect-without-reason-legacy` | 旧载荷，原因只能靠日志 |
+
+要点：
+
+- **不再用 `lastError` 判断断连归因**。`lastError` 仍是"当前错误"语义，`OnReady` 会清空；它只用于 `interaction-ack-timeout` / `upstream-error` 这类实时错误告警；
+- 每次 `reconnectCount` 增量只出 **一条**告警（同一快照重复轮询不会再报），避免 OBS-019 时代的重复提示；
+- `reconnectCount` 变小 → `reconnect-counter-reset`（host 重启）。soak 里出现它，说明采样窗口内有重启，需在审计结论里扣除。
+
+只有落到"无原因"两种分支时才需要翻日志：
 
 ```bash
 journalctl -u natter --since "<lastDisconnectAt 前 2 分钟>" --until "<lastDisconnectAt 后 1 分钟>" --no-pager
@@ -162,4 +179,17 @@ journalctl -u natter --since "<lastDisconnectAt 前 2 分钟>" --until "<lastDis
 docker compose -f deploy/docker/compose.yaml logs --since 10m natter
 ```
 
-根治需要代码侧新增 `lastDisconnectError`（已作为交回工程师的建议，见收口记录 §5）。
+### 6.1 仍未适配的地方（需要扩大写作用域）
+
+`scripts/soak-report.py` 的 `samplesWithDisconnectButNoReason` **仍在用旧口径**（`lastDisconnectAt` 有值且 `lastError == null`）。对修复后的 host，这个口径会把"有 `lastDisconnectError` 的正常断连"也算成"无原因"，从而**高估**静默断连数。
+
+判定方法（在适配前临时使用）：
+
+```bash
+# 直接看新字段有没有值，而不是看 lastError
+jq -r 'select(.upstreams) | .sampledAt as $t
+       | .upstreams[] | select((.source|startswith("discord")) and .lastDisconnectAt != null)
+       | [$t, (.lastDisconnectCode // "null"), (.lastDisconnectError // "null")] | @tsv' soak-*.jsonl
+```
+
+适配 soak-report.py 属后续任务（本任务的写作用域只有 `scripts/ops-health-alert.sh` 与 `docs/operations/`）。
