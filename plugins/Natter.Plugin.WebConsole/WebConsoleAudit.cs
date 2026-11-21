@@ -12,7 +12,10 @@ public sealed record WebConsoleAuditEntry(
     string Result,
     long DurationMs);
 
-/// <summary>Append-only JSONL audit store inside the plugin directory (design §12).</summary>
+/// <summary>
+/// Append-only JSONL audit store (design §12). The directory is created 0700 and the file 0600
+/// (best effort on Unix); callers pass a writable location resolved by <see cref="WebConsoleAuditPaths"/>.
+/// </summary>
 public sealed class WebConsoleAuditStore : IDisposable
 {
     private const long MaxFileBytes = 1024 * 1024;
@@ -32,8 +35,7 @@ public sealed class WebConsoleAuditStore : IDisposable
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(directory);
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
-        Directory.CreateDirectory(directory);
-        TrySetDirectoryPermissions(directory);
+        EnsurePrivateDirectory(directory);
         _path = System.IO.Path.Combine(directory, WebConsoleDefaults.AuditFileName);
     }
 
@@ -161,6 +163,32 @@ public sealed class WebConsoleAuditStore : IDisposable
 
         var archived = _path + ".1";
         File.Move(_path, archived, overwrite: true);
+    }
+
+    /// <summary>
+    /// Creates the directory chain and tightens every level it created to 0700. A state root such as
+    /// <c>/var/lib/natter</c> is usually created by the service manager and is left untouched.
+    /// </summary>
+    private static void EnsurePrivateDirectory(string directory)
+    {
+        var missing = new List<string>();
+        var current = Path.GetFullPath(directory);
+
+        while (!string.IsNullOrEmpty(current) && !Directory.Exists(current))
+        {
+            missing.Add(current);
+            current = Path.GetDirectoryName(current);
+        }
+
+        missing.Reverse();
+        foreach (var path in missing)
+        {
+            Directory.CreateDirectory(path);
+            TrySetDirectoryPermissions(path);
+        }
+
+        if (missing.Count == 0)
+            TrySetDirectoryPermissions(Path.GetFullPath(directory));
     }
 
     private static void TrySetDirectoryPermissions(string directory)

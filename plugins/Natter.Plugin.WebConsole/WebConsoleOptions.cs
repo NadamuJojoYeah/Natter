@@ -61,6 +61,8 @@ public static class WebConsoleDefaults
     public const string SessionCookieName = "natter_webconsole";
     public const string CsrfHeaderName = "X-WebConsole-CSRF";
     public const string AuditDirectoryName = "audit";
+    public const string AuditStateDirectoryName = "webconsole";
+    public const string StateDirectoryEnvironmentVariable = "NATTER_STATE_DIR";
     public const string AuditFileName = "webconsole-audit.jsonl";
     public const string DefaultDocumentationFile = "docs/WEBCONSOLE_HOST_API_GAP.md";
 }

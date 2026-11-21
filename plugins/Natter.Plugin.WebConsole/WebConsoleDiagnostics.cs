@@ -80,6 +80,7 @@ public sealed class WebConsoleDiagnostics
     private readonly WebConsoleTokenAuthenticator _tokens;
     private readonly WebConsoleStaticAssets _assets;
     private readonly bool _viewerLoginEnabled;
+    private readonly WebConsoleAuditLocation? _auditLocation;
     private readonly TimeProvider _clock;
     private readonly DateTimeOffset _startedAt;
 
@@ -94,7 +95,8 @@ public sealed class WebConsoleDiagnostics
         WebConsoleTokenAuthenticator tokens,
         WebConsoleStaticAssets assets,
         bool viewerLoginEnabled,
-        TimeProvider clock)
+        TimeProvider clock,
+        WebConsoleAuditLocation? auditLocation = null)
     {
         _identity = identity ?? throw new ArgumentNullException(nameof(identity));
         _options = options ?? throw new ArgumentNullException(nameof(options));
@@ -106,6 +108,7 @@ public sealed class WebConsoleDiagnostics
         _tokens = tokens ?? throw new ArgumentNullException(nameof(tokens));
         _assets = assets ?? throw new ArgumentNullException(nameof(assets));
         _viewerLoginEnabled = viewerLoginEnabled;
+        _auditLocation = auditLocation;
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
         _startedAt = clock.GetUtcNow();
     }
@@ -161,7 +164,15 @@ public sealed class WebConsoleDiagnostics
                     ? "not configured"
                     : _viewerLoginEnabled ? "enabled (read-only role)" : "webconsole.viewer-token-missing"),
             new("static-assets", "ok", $"{_assets.Files.Count} whitelisted assets"),
-            new("audit", auditWritable ? "ok" : "error", auditError),
+            new("audit", auditWritable ? "ok" : "error", auditError ?? _audit.FilePath),
+            new(
+                "audit-root",
+                _auditLocation is null || _auditLocation.Root == WebConsoleAuditRoot.StateDirectory
+                    ? "ok"
+                    : "degraded",
+                _auditLocation is null
+                    ? _audit.FilePath
+                    : $"{WebConsoleAuditPaths.RootName(_auditLocation.Root)}: {_auditLocation.Directory}"),
             new("host.health", host.Health.Available ? "ok" : "degraded", host.Health.GapCode ?? host.Health.Reason),
             new("host.plugins", host.Plugins.Available ? "ok" : "degraded", host.Plugins.Data?.Source ?? host.Plugins.GapCode),
             new("host.admin_config", admin.ConfigStoreAvailable ? "ok" : "degraded", admin.ConfigGapCode ?? "available"),
