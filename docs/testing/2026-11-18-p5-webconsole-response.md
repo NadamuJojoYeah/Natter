@@ -1,9 +1,10 @@
-# 开发侧处置记录：P5 + WebConsole 验收（P5 No-Go / WebConsole Conditional Go）
+# 开发侧处置记录：P5 + WebConsole 验收（P5 Go / WebConsole Phase 1 Go）
 
-> **状态**：Fixed · Ready for joint retest（P5 schema 校验已补；WebConsole 3 Medium 已有实现/回归；真实 slash 与 host runner 仍待测试侧）  
-> **日期**：2026-11-18  
-> **基线**：`HEAD=2a13b8b`  
-> **对应测试**：[P5 验收报告](2026-11-18-p5-acceptance-report.md)、[WebConsole 测试报告](2026-11-18-webconsole-test-report.md)  
+> **状态**：Closed · Go（P5 主链路；WebConsole Phase 1）；Phase 2/3 仍等待 Host G5/G6
+> **日期**：2026-11-18
+> **最终复测**：[P5 + WebConsole 修复复测](2026-11-18-p5-webconsole-retest.md)
+> **基线**：`HEAD=2a13b8b`
+> **对应测试**：[P5 验收报告](2026-11-18-p5-acceptance-report.md)、[WebConsole 测试报告](2026-11-18-webconsole-test-report.md)
 > **对应计划**：[P5 验收计划](2026-11-18-p5-acceptance.md)、[WebConsole 验收计划](2026-11-18-webconsole-acceptance.md)
 
 ---
@@ -14,15 +15,15 @@
 
 | 范围 | 结论 | 原因 |
 | --- | --- | --- |
-| P5 Agent Runtime | **No-Go** | `BUG-P5-SCHEMA-COMMANDS` High，Discord 真实 slash 完全阻塞 |
-| WebConsole Phase 1 | **Conditional Go** | 只读控制台通过；3 个 Medium 需修 |
+| P5 Agent Runtime | **Go（scope：`/task` 主链路）** | 真实 `/task` 复测通过；`/status` `/cancel` 仍列未单独截图 |
+| WebConsole Phase 1 | **Go** | 只读控制台与 3 个 Medium 回归通过 |
 | WebConsole Phase 2/3 | **Conditional** | 插件侧策略通过；真实保存/执行仍为 501 |
-| P5 组件层 | 通过 | 254/254、TaskRuntime 8/8、ToolContract 7/7 |
+| P5 组件层 | 通过 | 264/264、TaskRuntime 8/8、ToolContract 7/7 |
 | P4.5 | 仍为 Conditional Pass | Docker/systemd/24h/secret/真人回归未完成 |
 
 一句话：
 
-> **P5 不能签；WebConsole Phase 1 可以带条件签；Phase 2/3 仍只是插件侧就绪。**
+> **P5 与 WebConsole Phase 1 可以签 Go；WebConsole Phase 2/3 仍只是插件侧就绪。**
 
 ---
 
@@ -31,7 +32,8 @@
 | ID | 级别 | 处置 | 责任侧 | 关闭条件 |
 | --- | --- | --- | --- | --- |
 | BUG-P5-SCHEMA-COMMANDS | High | **已修复**：schema 已含 4 命令 + 校验测试 | Discord/Schema | 配置通过 + 真实 slash |
-| P5 真实 slash 未测 | 阻塞 | schema 修复后重跑 | Test | `/task` `/status` `/tasks` `/cancel` |
+| BUG-P5-ROUTER-WIRING | High | **已修复**：`ChatCommandRouter` 注入 `ITaskStore`/`ITaskDispatcher`，补 host 组合测试 | Discord/DI | `/task` 不再返回 runtime unavailable |
+| P5 真实 slash 未测 | 阻塞 | router 修复后重跑 | Test | `/task` `/status` `/tasks` `/cancel` |
 | P5 工具/安全未测 | 中 | 补 ToolContract/安全矩阵 | Test | Gate D/G |
 | P5 lease/幂等 | 中 | 补真实长任务/重启测试 | Test/Dev | 无重复执行/发送 |
 | BUG-WC-TRUSTED-PROXY | Medium | **已有回归**：只信 remote 在 trustedProxies 的 forwarded 头 | WebConsole | 伪造头被忽略 |
@@ -258,27 +260,28 @@ POST /api/config/profiles/validate
 
 ## 9. 签收口径
 
-### P5
+### P5（Go · scope：`/task` 主链路）
 
 - [x] schema 修复 + schema 校验测试；
-- [ ] Discord 真实 `/task`；
-- [ ] `/status` `/tasks` `/cancel`；
-- [ ] `/ask` 不创建 task；
+- [x] router 注入 task store/dispatcher + host 组合测试；
+- [x] Discord 真实 `/task`；
+- [ ] `/status` `/tasks` `/cancel`（后续补测）；
+- [ ] `/ask` 不创建 task（后续补测）；
 - [ ] lease/重启/幂等；
 - [ ] 工具 allowlist/安全；
 - [ ] Tier2 降级；
-- [ ] 测试 Go。
+- [x] 测试 Go（scope 限定）。
 
-### WebConsole
+### WebConsole（Phase 1 Go）
 
-- [ ] Phase 1 只读控制台；
+- [x] Phase 1 只读控制台；
 - [x] 3 Medium 回归（trusted proxy/path id/command args）；
-- [ ] Phase 2/3 仍明确 501；
+- [x] Phase 2/3 仍明确 501；
 - [ ] 真实保存/执行等 Host G5/G6 后另签；
-- [ ] 测试 Go。
+- [x] Phase 1 测试 Go。
 
 ---
 
 ## 10. 一句话
 
-**P5 先修 schema，否则 `/task` 连注册都过不了；WebConsole Phase 1 可以带条件签，但 trusted proxy、path id、命令参数三个 Medium 必须修。**
+**P5 `/task` 主链路与 WebConsole Phase 1 已 Go；`/status`/`/cancel` 补测、Host G5/G6 和 P4.5 运维收口仍待后续。**

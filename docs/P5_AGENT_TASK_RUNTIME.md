@@ -543,7 +543,7 @@ errorCode
 | AI-backed worker | 已实现（复用 ProfileAware responder；无 provider 时降级 deterministic clock worker；task conversation 隔离） | `AiTaskWorker.cs` |
 | 真实 Tier1/Tier2 task | 未执行 | — |
 
-测试：`Natter.Framework.Tests` **263/263**；AI worker 复用 ProfileAware，无 provider 时走 clock tool fallback。
+测试：`Natter.Framework.Tests` **264/264**；AI worker 复用 ProfileAware，无 provider 时走 clock tool fallback。
 
 ## 15. 验收标准
 

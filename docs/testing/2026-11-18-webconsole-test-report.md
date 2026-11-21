@@ -1,9 +1,10 @@
 # 2026-11-18 · WebConsole 插件验收测试（测试侧）
 
-> **开发侧处置**：[P5 + WebConsole 联合处置记录](2026-11-18-p5-webconsole-response.md)（Phase 1 Conditional Go；3 Medium 待修）。
+> **开发侧处置**：[P5 + WebConsole 联合处置记录](2026-11-18-p5-webconsole-response.md)。
 
-> **状态**：Phase 1 基本通过；Phase 2/3 插件侧通过；发现 3 Medium + 4 Low  
-> **基线**：`HEAD=2a13b8b`  
+> **状态**：Phase 1 Go；Phase 2/3 Conditional（真实保存/执行等待 Host G5/G6）
+> **基线**：`HEAD=2a13b8b`
+> **最终复测**：[P5 + WebConsole 修复复测](2026-11-18-p5-webconsole-retest.md)
 > **证据**：`artifacts/webconsole-test/2026-11-18-1200/`（`host.log`、`curl/`、`audit/`）
 
 ## 1. 前置
@@ -69,6 +70,6 @@
 
 ## 6. 结论
 
-- **Phase 1 只读控制台：可 Go**（认证/CSRF/静态/CSP/snapshot/审计/安全头通过）。
+- **Phase 1 只读控制台：Go**（认证/CSRF/静态/CSP/snapshot/审计/安全头通过）。
 - **Phase 2/3：插件侧策略可验证**（validate/secret/ETag/write_disabled/command.not_allowed/501 语义）；真实保存/执行仍为 501，符合文档口径。
-- **3 个 Medium 需修**（trusted proxy、path id、命令参数校验）后才建议签完整 Go；Low 可随手修。
+- **3 个 Medium 已关闭**（trusted proxy、path id、命令参数校验）；Low 已按文档/语义收口，未阻塞 Phase 1。

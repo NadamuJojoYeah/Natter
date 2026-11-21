@@ -1,9 +1,10 @@
 # 2026-11-18 · P5 Agent Task Runtime 验收（测试侧，执行中）
 
-> **开发侧处置**：[P5 + WebConsole 联合处置记录](2026-11-18-p5-webconsole-response.md)（P5 No-Go；schema 修复后复测）。
+> **开发侧处置**：[P5 + WebConsole 联合处置记录](2026-11-18-p5-webconsole-response.md)。
 
-> **状态**：自动化通过；真实 slash/工具细节待补  
-> **基线**：`HEAD=2a13b8b`  
+> **状态**：Closed · Go（2026-11-21 真实 `/task` 复测通过；`/status`/`/cancel` 仍列未单独截图）
+> **基线**：`HEAD=2a13b8b`
+> **最终复测**：[P5 + WebConsole 修复复测](2026-11-18-p5-webconsole-retest.md)
 > **证据**：`artifacts/p5/2026-11-18-1200/`（`build.log`、`framework.log`、`live-skip.log`、`task-tests.log`）
 
 ## 1. Gate A（前置）
@@ -81,9 +82,10 @@ plugin failed natter.transport.discord phase=config code=invalid-config:
 | G 安全 | P5-070~076（跨 source、prompt 注入、私有 IP、shell 注入、日志、截断） |
 | H 真实 | P5-080~084（Discord `/task`、cancel、重启、`/ask`、钉钉 smoke） |
 
-## 4. 结论（暂定）
+## 4. 结论
 
-- 组件层与前置通过；不出具 Go/No-Go。
-- 需要：Discord 真实 `/task` 链路被 `BUG-P5-SCHEMA-COMMANDS`（High）阻塞；修复 schema 后重测。
-- 组件/health/权限通过；工具细节与安全用例仍待补。
-- 真实验收建议在重启会话清理残留后进行。
+- 组件层与前置通过（264/264）。
+- 历史阻塞 `BUG-P5-SCHEMA-COMMANDS` 与 `BUG-P5-ROUTER-WIRING` 已修复并复测。
+- 最终复测：Discord 真实 `/task` 主链路通过，`agent_tasks` 1 行 Completed、`task_events` 3 条、health task 计数正确。
+- `P5` 判定：**Go（scope：`/task` 主链路）**；`/status` `/cancel` 仍列未单独截图，后续补测。
+- 工具/安全/lease 长跑仍建议在 P5 后续迭代补齐。
