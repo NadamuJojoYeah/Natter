@@ -119,6 +119,15 @@ public interface IContributionRegistry
     void AddPromptProvider<TProvider>(string id)
         where TProvider : class, IPromptProvider;
 
+    /// <summary>
+    /// Contributes additional prompt fragments. The host aggregates/cleans them and always keeps
+    /// the mandatory host safety fragment last; a fragment cannot be mandatory or host-builtin.
+    /// </summary>
+    void AddPromptFragmentProvider<TProvider>(string id)
+        where TProvider : class, IPromptFragmentProvider
+        => throw new NotSupportedException(
+            "This contribution registry does not support 'prompt.fragment'.");
+
     void AddContextAssembler<TAssembler>(string id)
         where TAssembler : class, IContextAssembler;
 

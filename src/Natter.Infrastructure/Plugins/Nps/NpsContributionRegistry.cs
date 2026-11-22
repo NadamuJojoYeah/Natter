@@ -132,6 +132,14 @@ internal sealed class NpsContributionRegistry : IContributionRegistry
         Stage(PluginContributionTypes.PromptProvider, id, 0, typeof(IPromptProvider), typeof(TProvider), ServiceLifetime.Singleton, null);
     }
 
+    public void AddPromptFragmentProvider<TProvider>(string id)
+        where TProvider : class, IPromptFragmentProvider
+    {
+        Require(PluginContributionTypes.PromptFragment, id);
+        _services.Collection.TryAddSingleton<TProvider>();
+        Stage(PluginContributionTypes.PromptFragment, id, 0, typeof(IPromptFragmentProvider), typeof(TProvider), ServiceLifetime.Singleton, null);
+    }
+
     public void AddContextAssembler<TAssembler>(string id)
         where TAssembler : class, IContextAssembler
     {

@@ -575,6 +575,13 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
         {
             throw;
         }
+        catch (NpsContributionBindingException ex)
+        {
+            await FailDuringActivationAsync(
+                candidate,
+                new PluginErrorDescriptor("activate", ex.Code, ex.Message),
+                cancellationToken).ConfigureAwait(false);
+        }
         catch (Exception ex)
         {
             await FailDuringActivationAsync(
@@ -634,6 +641,11 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
         services.AddSingleton(_hostProvider.GetRequiredService<IDomainEventStream>());
         services.AddSingleton(_hostProvider.GetRequiredService<Natter.Application.Chat.IContextPipeline>());
         services.AddSingleton(_hostProvider.GetRequiredService<ILoggerFactory>());
+
+        // Host fragment aggregation is a read-only host service: plugins that contribute
+        // prompt.fragment resolve it through their own DI (no service location in the composer).
+        if (_hostProvider.GetService<Natter.Application.Chat.IPromptFragmentSource>() is { } fragmentSource)
+            services.AddSingleton(fragmentSource);
 
         if (candidate.Permissions?.Granted.Contains(PluginPermissions.ChatRead) == true)
             services.AddSingleton(_hostProvider.GetRequiredService<IChatEventSource>());
@@ -724,6 +736,24 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
                             candidate.Id,
                             () => (IChatResponder)factory.GetRequiredService(implementationType)));
                     active.Responders.Add((candidate.Id, registration.Id));
+                    break;
+                }
+
+                case PluginContributionTypes.PromptFragment:
+                {
+                    var catalog = _hostProvider!.GetRequiredService<Natter.Application.Chat.IContextComponentCatalog>();
+                    var reference = $"{candidate.Id}#{registration.Id}";
+                    var implementation = provider.GetRequiredService(registration.ImplementationType!);
+                    if (implementation is not Natter.Application.Chat.IPromptFragmentProvider fragmentProvider)
+                    {
+                        throw new NpsContributionBindingException(
+                            "fragment-provider-invalid",
+                            $"Contribution '{PluginContributionTypes.PromptFragment}/{registration.Id}' "
+                            + "must implement IPromptFragmentProvider.");
+                    }
+
+                    catalog.RegisterFragmentProvider(reference, fragmentProvider);
+                    active.ContextComponents.Add(reference);
                     break;
                 }
 
@@ -1019,6 +1049,12 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
 
         if (exception is not null)
             candidate.Log?.Error(exception, "Plugin {PluginId} failed: {ErrorMessage}", candidate.Id, message);
+    }
+
+    /// <summary>Contribution registration/binding failure with a stable diagnostic code.</summary>
+    private sealed class NpsContributionBindingException(string code, string message) : Exception(message)
+    {
+        public string Code { get; } = code;
     }
 
     private sealed record ActiveContributions(

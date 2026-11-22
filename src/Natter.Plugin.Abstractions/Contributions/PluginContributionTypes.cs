@@ -9,12 +9,13 @@ public static class PluginContributionTypes
     public const string CliCommand = "cli.command";
     public const string PortAdapter = "port.adapter";
     public const string PromptProvider = "prompt.provider";
+    public const string PromptFragment = "prompt.fragment";
     public const string ContextAssembler = "context.assembler";
     public const string MemoryStore = "memory.store";
 
     public static IReadOnlyList<string> All { get; } =
         [ChatUpstream, ChatResponder, ChatEventSubscriber, CliCommand, PortAdapter,
-         PromptProvider, ContextAssembler, MemoryStore];
+         PromptProvider, PromptFragment, ContextAssembler, MemoryStore];
 
     public static bool IsKnown(string? type)
         => type is not null && All.Contains(type, StringComparer.Ordinal);
