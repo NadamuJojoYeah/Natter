@@ -78,7 +78,8 @@ public sealed class SatoriMappingTests
         Assert.False(empty.Edit);
         Assert.False(empty.Delete);
         Assert.False(empty.Markdown);
-        Assert.Empty(empty.ConversationKinds);
+        Assert.Contains(ConversationKind.Direct, empty.ConversationKinds);
+        Assert.DoesNotContain(ConversationKind.Guild, empty.ConversationKinds);
 
         var streaming = SatoriCapabilityMapper.Map([], new SatoriCapabilityOptions
         {

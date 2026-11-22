@@ -160,7 +160,7 @@ public sealed class AiChatResponderTests
     }
 
     [Fact]
-    public async Task Timeout_produces_a_fallback_and_auth_error_does_not_reply()
+    public async Task Timeout_produces_a_fallback_and_auth_error_is_surfaced_with_a_code()
     {
         var (responder, _, source, _) = CreateResponder();
         var conversation = ChatTestData.Conversation("dm", ConversationKind.Direct);
@@ -182,11 +182,13 @@ public sealed class AiChatResponderTests
             ResponseFactory = _ => throw new DeepSeekException(DeepSeekErrorKind.Authentication, "denied"),
         };
         var authResponder = Build(authFake, maxHistoryMessages: 20);
-        var authCommand = await authResponder.RespondAsync(ChatTestData.CreatedEvent(
+        var authCommand = Assert.IsType<MessageSendCommand>(await authResponder.RespondAsync(ChatTestData.CreatedEvent(
             source,
             ChatTestData.Message(source, id: "m2", conversation: conversation, text: "two"),
-            "evt:auth"));
-        Assert.Null(authCommand);
+            "evt:auth")));
+        Assert.Contains("ai.authentication", authCommand.Payload.Content.Text, StringComparison.Ordinal);
+        Assert.Equal(1, authResponder.FailureCount);
+        Assert.Equal("ai.authentication", authResponder.LastFailureCode);
     }
 
     [Fact]
