@@ -109,6 +109,40 @@ if [[ ${#KEEP_DIRS[@]} -gt 0 ]]; then
   done
 fi
 
+# A running host keeps /opt/natter/natter mapped; copying over it fails with ETXTBSY.
+# Stop the unit first, and restore + restart if anything later fails.
+STOPPED=0
+cleanup_on_failure() {
+  local rc=$?
+  if [[ $rc -ne 0 && $STOPPED -eq 1 && $DRY_RUN -eq 0 ]]; then
+    echo "deploy failed (rc=$rc); rolling back and restarting $UNIT" >&2
+    local archive="$BACKUP_DIR/$(basename "$TARGET").tar.gz"
+    if [[ -f "$archive" ]]; then
+      tar -C "$(dirname "$TARGET")" -xzf "$archive" >/dev/null 2>&1 \
+        && echo "rollback: restored from $archive" >&2 \
+        || echo "rollback: FAILED to restore $archive" >&2
+    fi
+    systemctl start "$UNIT" >/dev/null 2>&1 \
+      && echo "rollback: $UNIT started" >&2 \
+      || echo "rollback: FAILED to start $UNIT" >&2
+  fi
+  exit $rc
+}
+trap cleanup_on_failure EXIT
+
+if [[ $RESTART -eq 1 && $DRY_RUN -eq 0 ]]; then
+  echo "stop: $UNIT (binary is mapped by the running host)"
+  systemctl stop "$UNIT" || die "cannot stop $UNIT" 5
+  STOPPED=1
+  # The unit may take a moment to release the executable mapping.
+  for _ in $(seq 1 20); do
+    if ! fuser "$TARGET/natter" >/dev/null 2>&1; then
+      break
+    fi
+    sleep 0.2
+  done
+fi
+
 echo "deploy: $RELEASE -> $TARGET"
 run install -d -m 0755 "$TARGET" || die "cannot create target" 5
 # Copy the release on top; do not delete unknown files (config, audit, local state may live here).
@@ -148,8 +182,9 @@ echo "verify: release marker files"
 }
 
 if [[ $RESTART -eq 1 ]]; then
-  echo "restart: $UNIT"
-  run systemctl restart "$UNIT" || die "restart failed" 5
+  echo "start: $UNIT"
+  run systemctl start "$UNIT" || die "start failed" 5
+  STOPPED=0
   if [[ $DRY_RUN -eq 0 ]]; then
     sleep 12
     if command -v curl >/dev/null 2>&1; then
