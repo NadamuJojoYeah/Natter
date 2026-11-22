@@ -293,6 +293,68 @@ chmod 600 "$out"
 > `natter health --json`（无 `--offline`）会启动完整 host 并新建 Discord 网关会话，和主实例抢同一个 bot 连接；cron 必须使用 loopback 或 `--offline`。
 > 主实例在跑时采样一律走 loopback `/health`，CLI 版本只用于人工排障。
 
+### 5.4 CLI 命令与 host 启动语义（S1-11）
+
+**默认不启动 host。** 只有显式声明"需要运行态"的命令才会 `StartAsync`，其余命令只读配置、state 库与插件元数据（`dotnet build` 级别的图构建不连接任何网关）。
+
+| 命令 | 启动 host | 需要它的原因 / 离线降级 |
+| --- | --- | --- |
+| `serve` | **是** | 长驻服务本体 |
+| `health`（不带 `--offline`） | **是** | 读运行态 uptime / upstream / provider；`health --offline` 走静态视图 |
+| `upstreams` | **是** | 读 upstream 的**实时**连接状态；加 `--no-host` 退化为静态列表 |
+| `events list` / `events watch` / `events clear` | **是** | 操作运行中的内存事件日志 |
+| `exec` | **是** | 在同一个 host 内跑多条命令 |
+| `demo` | **是** | 端到端演练运行中的 host |
+| `discord status`（插件命令） | **是** | 读 Discord 网关状态 |
+| `plugins graph` / `plugins contributions` / `plugins permissions` / `plugins doctor` | **是** | 读**已激活**插件的图/贡献/授权/诊断 |
+| `memory list` / `memory export` / `memory import` / `remember` / `forget` | **是** | 读写 host 打开的 memory store |
+| 其余全部：`plugins list` / `plugins inspect` / `plugins config validate`、`plugins store *`（list/install/enable/disable/rollback/uninstall/cleanup）、`doctor`、`ports`、`version`、`help`、`satori status`、`ai status`、**插件贡献命令的默认值** | **否** | 只读配置/state/插件元数据（如 `plugins list` 显示的是扫描结果 `Discovered`，激活态需启动 host）；插件若要运行态可用 `ICliHostRequirementProvider` 声明 |
+
+> 未解析的命令（不在内置表、也没声明规则）按**插件命令**处理 → 会启动 host 让插件有机会注册；若最终无人提供，命令报 `Unknown command`。
+> `ai status` 属于插件命令的默认档：主实例在跑时它不会启动第二个 host；若它确实需要运行态，由插件自带规则或改用 loopback `/health`。
+
+为什么这样设计：`plugins list`、`upstreams`、`ai status` 这类巡检命令以前也会拉起完整 host，**主实例运行时执行它们会建立第二条网关会话，导致其中一条被 Discord 断开**。现在读命令不再产生写副作用。
+
+#### 主实例在跑时执行"需要 host"的命令
+
+需要 host 的命令与 `serve` 共用 `<state-dir>/.lock`，因此**第二个进程会被拒绝**而不是抢会话：
+
+```bash
+$ natter --state-dir /var/lib/natter upstreams --json
+error: HL-CLI-HOST-BUSY: another Natter instance is using state directory '/var/lib/natter'.
+       'upstreams' needs a running host (...), and starting a second host would open a second
+       gateway session (one of them would be disconnected by Discord).
+       options:
+         - inspect the running instance: curl -s http://127.0.0.1:5099/health | jq
+         - run this command without a host: natter upstreams --no-host   (output is degraded)
+         - or stop the running instance first: sudo systemctl stop natter
+$ echo $?
+3
+```
+
+- **退出码 `3` = `HL-CLI-HOST-BUSY`**（与 `1` 一般失败、`2` 用法错误区分，脚本可直接判断）；
+- 不会静默返回空数据：拒绝时给错误码 + 提示，降级时给 note。
+
+#### 逃生口
+
+| 方式 | 作用 |
+| --- | --- |
+| `--no-host`（全局） | 任何命令都不启动 host；需要运行态的命令打印降级 note |
+| `--offline`（`health` 专有） | 等价于对 `health` 不启动 host，输出 `status=offline` 的静态视图 |
+
+```bash
+natter --state-dir /var/lib/natter plugins list --json      # 安全：不建网关会话
+natter --state-dir /var/lib/natter upstreams --no-host      # 显式降级
+natter --state-dir /var/lib/natter health --offline --json  # 静态健康视图
+```
+
+#### 巡检推荐顺序
+
+1. 服务在跑：`curl -s http://127.0.0.1:5099/health | jq`（零副作用）；
+2. 服务在跑且想看插件状态：`natter plugins list --detail`（离线，安全）；
+3. 服务停了想排障：`natter health --offline --json`、`natter doctor --json`、`natter plugins inspect <dir>`；
+4. 确实要看运行态：先停实例，或直接读 loopback `/health`。
+
 ---
 
 ## 6. 日志
