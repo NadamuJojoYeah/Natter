@@ -129,7 +129,7 @@ public sealed partial class P5FollowupTests
         await WaitUntilAsync(async () => (await store.GetAsync(task.TaskId))?.Status == AgentTaskStatus.Running);
 
         var denied = await ReplyAsync(router, Slash(source, conversation, stranger, "cancel", new() { ["task"] = task.TaskId }));
-        Assert.Contains("not owned", denied);
+        Assert.Equal("Not task owner.", denied);
         Assert.Equal(AgentTaskStatus.Running, (await store.GetAsync(task.TaskId))!.Status);
 
         var allowed = await ReplyAsync(router, Slash(source, conversation, owner, "cancel", new() { ["task"] = task.TaskId }));
@@ -141,7 +141,7 @@ public sealed partial class P5FollowupTests
         // 终态之后 cancel 只回一句话，不再改状态、不再发第二条结果。
         Assert.False(await runtime.RequestCancelAsync(task.TaskId, owner.Id));
         var afterTerminal = await ReplyAsync(router, Slash(source, conversation, owner, "cancel", new() { ["task"] = task.TaskId }));
-        Assert.Contains("not owned", afterTerminal);
+        Assert.Equal("Task already cancelled.", afterTerminal);
         await WaitForCommandsAsync(recorder, 1);
         Assert.Single(recorder.Commands);
     }
