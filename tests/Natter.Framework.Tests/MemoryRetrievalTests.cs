@@ -36,6 +36,48 @@ public sealed class MemoryRetrievalTests
     }
 
     [Fact]
+    public async Task Scope_visibility_boundaries_are_explicit()
+    {
+        using var temp = new TempDirectory();
+        var store = new SqliteMemoryStore(temp.Combine("natter.db"));
+        var otherConversation = new Conversation("c2", ConversationKind.Direct);
+        var sameGuild = new Conversation("g2", ConversationKind.Guild, GuildId: "g1");
+        var otherGuild = new Conversation("g3", ConversationKind.Guild, GuildId: "g2");
+
+        await Write(store, Alice, MemoryScopeType.User, "actor boundary marker");
+        await Write(store, Alice, MemoryScopeType.Conversation, "conversation boundary marker");
+        var guildSourceConversation = new Conversation("g1", ConversationKind.Guild, GuildId: "g1");
+        await store.WriteAsync(new MemoryWriteRequest(Discord, guildSourceConversation, Alice, MemoryScopeType.Guild, "fact", "guild boundary marker"));
+        await Write(store, Alice, MemoryScopeType.Global, "global boundary marker");
+
+        // User: isolated per actor (other scopes are a union by design).
+        var bobHits = await Search(store, Bob, null, "boundary");
+        Assert.DoesNotContain(bobHits, item => item.ScopeType == MemoryScopeType.User);
+        // Conversation: same conversation visible, another conversation not.
+        var otherConversationHits = await store.SearchAsync(new MemoryQuery(Discord, otherConversation, Alice, 20) { Query = "boundary" });
+        Assert.DoesNotContain(otherConversationHits, item => item.ScopeType == MemoryScopeType.Conversation);
+        // Guild: same guild visible to another member, other guild not.
+        var guildHits = await store.SearchAsync(new MemoryQuery(Discord, sameGuild, Bob, 20) { Query = "boundary" });
+        Assert.Contains(guildHits, item => item.ScopeType == MemoryScopeType.Guild);
+        var otherGuildHits = await store.SearchAsync(new MemoryQuery(Discord, otherGuild, Bob, 20) { Query = "boundary" });
+        Assert.DoesNotContain(otherGuildHits, item => item.ScopeType == MemoryScopeType.Guild);
+        // Global: documented as visible to every user of the source.
+        var globalHits = await store.SearchAsync(new MemoryQuery(Discord, otherGuild, Bob, 20) { Query = "boundary" });
+        Assert.Contains(globalHits, item => item.ScopeType == MemoryScopeType.Global);
+    }
+
+    [Fact]
+    public void Global_is_not_a_default_write_scope()
+    {
+        var profile = new RuntimeProfile
+        {
+            Id = "p",
+            Memory = new ProfileMemory { Scope = "global" },
+        };
+        Assert.Equal(MemoryScopeType.User, MemoryScope.DefaultWriteScope(profile));
+    }
+
+    [Fact]
     public async Task Scope_kinds_filter_independently()
     {
         using var temp = new TempDirectory();
@@ -112,18 +154,105 @@ public sealed class MemoryRetrievalTests
     // ------------------------------------------------------------------ FTS / decay
 
     [Fact]
-    public async Task Chinese_retrieval_uses_fts_and_never_throws_when_degraded()
+    public async Task Chinese_two_character_words_are_retrievable_with_pretokenization()
     {
         using var temp = new TempDirectory();
         var store = new SqliteMemoryStore(temp.Combine("natter.db"));
-        await Write(store, Alice, MemoryScopeType.User, "项目期限是下周五，需要提前评审");
+        await Write(store, Alice, MemoryScopeType.User, "我喜欢吃苹果，也喜欢住在杭州西湖区");
 
-        Assert.Contains(SqliteSchema.FtsTokenizer, new[] { "trigram", "unicode61" });
-        var hits = await Search(store, Alice, MemoryScopeType.User, "项目期限");
-        if (SqliteSchema.FtsTokenizer == "trigram")
-            Assert.Single(hits);
+        if (string.Equals(SqliteSchema.FtsMode, "pretokenized", StringComparison.Ordinal))
+        {
+            Assert.NotEmpty(await Search(store, Alice, MemoryScopeType.User, "苹果"));
+            Assert.NotEmpty(await Search(store, Alice, MemoryScopeType.User, "喜欢"));
+            Assert.NotEmpty(await Search(store, Alice, MemoryScopeType.User, "杭州"));
+            Assert.NotEmpty(await Search(store, Alice, MemoryScopeType.User, "西湖区"));
+        }
         else
+        {
+            // Degraded mode: trigram cannot index two-character words. This is a known limitation,
+            // recorded as an executable assertion rather than prose.
             Assert.NotNull(SqliteSchema.FtsWarning);
+            Assert.Equal("trigram", SqliteSchema.FtsMode);
+            Assert.Empty(await Search(store, Alice, MemoryScopeType.User, "苹果"));
+        }
+    }
+
+    [Fact]
+    public async Task Trigram_known_limitation_for_two_character_chinese_queries()
+    {
+        using var temp = new TempDirectory();
+        await using var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={temp.Combine("trigram.db")}");
+        await connection.OpenAsync();
+        await using (var create = connection.CreateCommand())
+        {
+            create.CommandText = "CREATE VIRTUAL TABLE fts USING fts5(text, tokenize='trigram');";
+            await create.ExecuteNonQueryAsync();
+        }
+        await using (var insert = connection.CreateCommand())
+        {
+            insert.CommandText = "INSERT INTO fts(text) VALUES ('我喜欢吃苹果');";
+            await insert.ExecuteNonQueryAsync();
+        }
+
+        await using var query = connection.CreateCommand();
+        query.CommandText = "SELECT COUNT(*) FROM fts WHERE fts MATCH '苹果';";
+        var twoCharacter = Convert.ToInt32(await query.ExecuteScalarAsync());
+        await using var three = connection.CreateCommand();
+        three.CommandText = "SELECT COUNT(*) FROM fts WHERE fts MATCH '吃苹果';";
+        var threeCharacter = Convert.ToInt32(await three.ExecuteScalarAsync());
+
+        Assert.Equal(0, twoCharacter);   // Q8: the known trigram limitation, pinned.
+        Assert.True(threeCharacter >= 1);
+    }
+
+    [Fact]
+    public async Task Schema_v6_backfills_pretokenized_index_for_old_rows()
+    {
+        using var temp = new TempDirectory();
+        var path = temp.Combine("natter.db");
+        var store = new SqliteMemoryStore(path);
+        var item = await Write(store, Alice, MemoryScopeType.User, "我喜欢吃苹果");
+
+        await using (var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={path}"))
+        {
+            await connection.OpenAsync();
+            await using var damage = connection.CreateCommand();
+            damage.CommandText = "UPDATE memory_items SET text_index = NULL; DELETE FROM memory_fts; PRAGMA user_version = 5;";
+            await damage.ExecuteNonQueryAsync();
+        }
+
+        var reopened = new SqliteMemoryStore(path);
+        if (string.Equals(SqliteSchema.FtsMode, "pretokenized", StringComparison.Ordinal))
+        {
+            var hits = await Search(reopened, Alice, MemoryScopeType.User, "苹果");
+            Assert.Contains(hits, hit => hit.MemoryId == item.MemoryId);
+        }
+        else
+        {
+            Assert.NotNull(SqliteSchema.FtsWarning);
+        }
+    }
+
+    [Fact]
+    public async Task Pretokenized_index_expansion_is_bounded()
+    {
+        using var temp = new TempDirectory();
+        var path = temp.Combine("natter.db");
+        var store = new SqliteMemoryStore(path);
+        for (var index = 0; index < 50; index++)
+            await Write(store, Alice, MemoryScopeType.User, "我喜欢吃苹果和杭州西湖区的风景" + index);
+
+        await using var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={path}");
+        await connection.OpenAsync();
+        await using var query = connection.CreateCommand();
+        query.CommandText = "SELECT SUM(LENGTH(text)), SUM(LENGTH(text_index)) FROM memory_items;";
+        await using var reader = await query.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        var raw = reader.GetInt64(0);
+        var indexed = reader.GetInt64(1);
+        var ratio = (double)indexed / Math.Max(1, raw);
+        Console.WriteLine($"MEMORY_INDEX_EXPANSION_RATIO={ratio:F2}");
+        Assert.True(ratio < 6.0, $"index expansion {ratio:F2}x");
     }
 
     [Fact]

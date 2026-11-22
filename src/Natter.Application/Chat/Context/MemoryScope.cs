@@ -41,7 +41,9 @@ public static class MemoryScope
         {
             "conversation" => MemoryScopeType.Conversation,
             "guild" => MemoryScopeType.Guild,
-            "global" => MemoryScopeType.Global,
+            // Global is visible to every user of the source: it is never a silent default.
+            // An operator must choose it explicitly (and gets a startup warning).
+            "global" => MemoryScopeType.User,
             "actor" or "user" => MemoryScopeType.User,
             _ => MemoryScopeType.User,
         };

@@ -6,6 +6,69 @@ namespace Natter.Application.Chat;
 /// </summary>
 public static class MemoryScoring
 {
+    /// <summary>
+    /// Pre-tokenization for the FTS index (P6 Q8): CJK runs become bi-grams plus singles so any
+    /// two-character Chinese word is indexed; non-CJK text is split on whitespace/punctuation.
+    /// </summary>
+    public static IReadOnlyList<string> TokenizeForIndex(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return [];
+
+        var tokens = new List<string>();
+        var cjk = new System.Text.StringBuilder();
+        var word = new System.Text.StringBuilder();
+
+        void FlushCjk()
+        {
+            if (cjk.Length == 0)
+                return;
+
+            var run = cjk.ToString();
+            for (var index = 0; index + 1 < run.Length; index++)
+                tokens.Add(run.Substring(index, 2));
+            foreach (var character in run)
+                tokens.Add(character.ToString());
+            cjk.Clear();
+        }
+
+        void FlushWord()
+        {
+            if (word.Length == 0)
+                return;
+            tokens.Add(word.ToString().ToLowerInvariant());
+            word.Clear();
+        }
+
+        foreach (var character in text)
+        {
+            if (IsCjk(character))
+            {
+                FlushWord();
+                cjk.Append(character);
+                continue;
+            }
+
+            FlushCjk();
+            if (char.IsLetterOrDigit(character))
+                word.Append(character);
+            else
+                FlushWord();
+        }
+
+        FlushCjk();
+        FlushWord();
+        return tokens.Distinct(StringComparer.Ordinal).ToArray();
+    }
+
+    /// <summary>Space-separated pre-tokenized copy stored in memory_items.text_index.</summary>
+    public static string BuildIndexText(string? text) => string.Join(' ', TokenizeForIndex(text));
+
+    public static bool IsCjk(char character)
+        => character is >= '\u3400' and <= '\u4DBF'
+           or >= '\u4E00' and <= '\u9FFF'
+           or >= '\uF900' and <= '\uFAFF';
+
     public static IReadOnlyList<string> Tokenize(string? text)
     {
         if (string.IsNullOrWhiteSpace(text))

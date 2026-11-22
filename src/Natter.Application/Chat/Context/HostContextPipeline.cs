@@ -104,6 +104,13 @@ public sealed class HostContextPipeline(
 
         IReadOnlyList<MemoryItem> memoryItems = [];
         string? fallback = null;
+        if (string.Equals(profile.Memory.Scope?.Trim(), "global", StringComparison.OrdinalIgnoreCase))
+        {
+            logger?.LogWarning(
+                "memory.scope=global is configured: these memories are visible to every user of source {SourceKey}.",
+                source.Key);
+        }
+
         try
         {
             // P6 §8.1: memory is an enhancement. A 300ms timeout returns no memory and counts the

@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using Natter.Application.Chat;
 
 namespace Natter.Infrastructure.Chat;
 
@@ -8,13 +9,16 @@ namespace Natter.Infrastructure.Chat;
 /// </summary>
 internal static class SqliteSchema
 {
-    public const int CurrentVersion = 5;
+    public const int CurrentVersion = 6;
 
     /// <summary>Tokenizer actually used by memory_fts (trigram when the runtime supports it).</summary>
     public static string FtsTokenizer { get; private set; } = "trigram";
 
-    /// <summary>Non-null when trigram is unavailable and the schema degraded to unicode61.</summary>
+    /// <summary>Non-null when the preferred FTS mode was unavailable and we degraded.</summary>
     public static string? FtsWarning { get; private set; }
+
+    /// <summary>pretokenized (default) | trigram | unicode61 (last-resort fallback).</summary>
+    public static string FtsMode { get; private set; } = "pretokenized";
 
     /// <summary>Connection-level pragmas that must be identical for every store.</summary>
     public static void Prepare(SqliteConnection connection)
@@ -208,9 +212,113 @@ internal static class SqliteSchema
             current = 5;
         }
 
+        if (current < 6)
+        {
+            current = UpgradeToPretokenizedFts(connection);
+        }
+
         using var setVersion = connection.CreateCommand();
         setVersion.CommandText = $"PRAGMA user_version = {current};";
         setVersion.ExecuteNonQuery();
+    }
+
+    private static int UpgradeToPretokenizedFts(SqliteConnection connection)
+    {
+        // P6 Q8: trigram cannot index 2-character Chinese words at all. The default is now a
+        // pre-tokenized copy column indexed with unicode61; trigram stays as the degraded mode.
+        if (!ColumnExists(connection, "memory_items", "text_index"))
+            Execute(connection, "ALTER TABLE memory_items ADD COLUMN text_index TEXT NULL;");
+
+        try
+        {
+            using (var select = connection.CreateCommand())
+            {
+                select.CommandText = "SELECT memory_id, text FROM memory_items WHERE text_index IS NULL OR text_index = '';";
+                var updates = new List<(string Id, string Index)>();
+                using (var reader = select.ExecuteReader())
+                {
+                    while (reader.Read())
+                        updates.Add((reader.GetString(0), MemoryScoring.BuildIndexText(reader.GetString(1))));
+                }
+
+                using var update = connection.CreateCommand();
+                update.CommandText = "UPDATE memory_items SET text_index = $index WHERE memory_id = $id;";
+                var idParameter = update.Parameters.Add("$id", SqliteType.Text);
+                var indexParameter = update.Parameters.Add("$index", SqliteType.Text);
+                foreach (var (id, index) in updates)
+                {
+                    idParameter.Value = id;
+                    indexParameter.Value = index;
+                    update.ExecuteNonQuery();
+                }
+            }
+
+            Execute(connection, """
+                DROP TRIGGER IF EXISTS memory_fts_ai;
+                DROP TRIGGER IF EXISTS memory_fts_au;
+                DROP TRIGGER IF EXISTS memory_fts_ad;
+                DROP TABLE IF EXISTS memory_fts;
+                CREATE VIRTUAL TABLE memory_fts USING fts5(memory_id UNINDEXED, text_index, tokenize='unicode61');
+                CREATE TRIGGER memory_fts_ai AFTER INSERT ON memory_items BEGIN
+                    INSERT INTO memory_fts(memory_id, text_index) VALUES (new.memory_id, new.text_index);
+                END;
+                CREATE TRIGGER memory_fts_au AFTER UPDATE OF text, text_index ON memory_items BEGIN
+                    DELETE FROM memory_fts WHERE memory_id = old.memory_id;
+                    INSERT INTO memory_fts(memory_id, text_index) VALUES (new.memory_id, new.text_index);
+                END;
+                CREATE TRIGGER memory_fts_ad AFTER DELETE ON memory_items BEGIN
+                    DELETE FROM memory_fts WHERE memory_id = old.memory_id;
+                END;
+                INSERT INTO memory_fts(memory_id, text_index)
+                SELECT memory_id, text_index FROM memory_items WHERE text_index IS NOT NULL;
+                """);
+            FtsMode = "pretokenized";
+            FtsTokenizer = "unicode61";
+            FtsWarning = null;
+            return 6;
+        }
+        catch (Exception exception) when (exception is SqliteException or InvalidOperationException or IOException or UnauthorizedAccessException)
+        {
+            // Backfill failure must never fail startup: degrade to trigram over the raw text.
+            FtsWarning = $"memory pre-tokenization backfill failed ({exception.GetType().Name}); degraded to trigram";
+            try
+            {
+                Execute(connection, """
+                    DROP TRIGGER IF EXISTS memory_fts_ai;
+                    DROP TRIGGER IF EXISTS memory_fts_au;
+                    DROP TRIGGER IF EXISTS memory_fts_ad;
+                    DROP TABLE IF EXISTS memory_fts;
+                    CREATE VIRTUAL TABLE memory_fts USING fts5(memory_id UNINDEXED, text, tokenize='trigram');
+                    CREATE TRIGGER memory_fts_ai AFTER INSERT ON memory_items BEGIN
+                        INSERT INTO memory_fts(memory_id, text) VALUES (new.memory_id, new.text);
+                    END;
+                    CREATE TRIGGER memory_fts_au AFTER UPDATE OF text ON memory_items BEGIN
+                        DELETE FROM memory_fts WHERE memory_id = old.memory_id;
+                        INSERT INTO memory_fts(memory_id, text) VALUES (new.memory_id, new.text);
+                    END;
+                    CREATE TRIGGER memory_fts_ad AFTER DELETE ON memory_items BEGIN
+                        DELETE FROM memory_fts WHERE memory_id = old.memory_id;
+                    END;
+                    INSERT INTO memory_fts(memory_id, text) SELECT memory_id, text FROM memory_items;
+                    """);
+                FtsMode = "trigram";
+                FtsTokenizer = "trigram";
+            }
+            catch (SqliteException)
+            {
+                Execute(connection, """
+                    DROP TRIGGER IF EXISTS memory_fts_ai;
+                    DROP TRIGGER IF EXISTS memory_fts_au;
+                    DROP TRIGGER IF EXISTS memory_fts_ad;
+                    DROP TABLE IF EXISTS memory_fts;
+                    CREATE VIRTUAL TABLE memory_fts USING fts5(memory_id UNINDEXED, text, tokenize='unicode61');
+                    """);
+                FtsMode = "unicode61";
+                FtsTokenizer = "unicode61";
+            }
+
+            return 6;
+        }
     }
 
     private static string? ExistingFtsSql(SqliteConnection connection)

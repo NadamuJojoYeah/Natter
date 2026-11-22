@@ -113,9 +113,9 @@ public sealed class SqliteMemoryStore : IMemoryStore
         await using var insert = connection.CreateCommand();
         insert.CommandText = """
             INSERT INTO memory_items
-                (memory_id, scope_type, scope_id, subject_id, kind, text, data_json, confidence,
+                (memory_id, scope_type, scope_id, subject_id, kind, text, text_index, data_json, confidence,
                  sensitivity, user_confirmed, source_message_ids_json, created_at, updated_at, expires_at, version)
-            VALUES ($id, $scope_type, $scope, $subject, $kind, $text, $data, $confidence,
+            VALUES ($id, $scope_type, $scope, $subject, $kind, $text, $index, $data, $confidence,
                     $sensitivity, $confirmed, $sources, $created, $updated, $expires, $version);
             """;
         AddParameters(insert, item);
@@ -137,7 +137,9 @@ public sealed class SqliteMemoryStore : IMemoryStore
 
         await using var connection = await _database.OpenAsync(cancellationToken).ConfigureAwait(false);
 
-        var tokens = MemoryScoring.Tokenize(query.Query);
+        var tokens = string.Equals(SqliteSchema.FtsMode, "pretokenized", StringComparison.Ordinal)
+            ? MemoryScoring.TokenizeForIndex(query.Query)
+            : MemoryScoring.Tokenize(query.Query);
         if (tokens.Count > 0)
         {
             try
@@ -323,9 +325,9 @@ public sealed class SqliteMemoryStore : IMemoryStore
             command.CommandText = request.Overwrite
                 ? """
                   INSERT INTO memory_items
-                      (memory_id, scope_type, scope_id, subject_id, kind, text, data_json, confidence,
+                      (memory_id, scope_type, scope_id, subject_id, kind, text, text_index, data_json, confidence,
                        sensitivity, user_confirmed, source_message_ids_json, created_at, updated_at, expires_at, version)
-                  VALUES ($id, $scope_type, $scope, $subject, $kind, $text, $data, $confidence,
+                  VALUES ($id, $scope_type, $scope, $subject, $kind, $text, $index, $data, $confidence,
                           $sensitivity, $confirmed, $sources, $created, $updated, $expires, $version)
                   ON CONFLICT(memory_id) DO UPDATE SET
                       text=excluded.text, data_json=excluded.data_json, confidence=excluded.confidence,
@@ -334,9 +336,9 @@ public sealed class SqliteMemoryStore : IMemoryStore
                   """
                 : """
                   INSERT OR IGNORE INTO memory_items
-                      (memory_id, scope_type, scope_id, subject_id, kind, text, data_json, confidence,
+                      (memory_id, scope_type, scope_id, subject_id, kind, text, text_index, data_json, confidence,
                        sensitivity, user_confirmed, source_message_ids_json, created_at, updated_at, expires_at, version)
-                  VALUES ($id, $scope_type, $scope, $subject, $kind, $text, $data, $confidence,
+                  VALUES ($id, $scope_type, $scope, $subject, $kind, $text, $index, $data, $confidence,
                           $sensitivity, $confirmed, $sources, $created, $updated, $expires, $version);
                   """;
             AddParameters(command, item);
@@ -353,6 +355,7 @@ public sealed class SqliteMemoryStore : IMemoryStore
         command.Parameters.AddWithValue("$subject", (object?)item.SubjectId ?? DBNull.Value);
         command.Parameters.AddWithValue("$kind", item.Kind);
         command.Parameters.AddWithValue("$text", item.Text);
+        command.Parameters.AddWithValue("$index", MemoryScoring.BuildIndexText(item.Text));
         command.Parameters.AddWithValue("$data", (object?)item.DataJson ?? DBNull.Value);
         command.Parameters.AddWithValue("$confidence", item.Confidence);
         command.Parameters.AddWithValue("$sensitivity", item.Sensitivity);
