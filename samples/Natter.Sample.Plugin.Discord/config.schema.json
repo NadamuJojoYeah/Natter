@@ -55,6 +55,40 @@
     },
     "interactionTtlSeconds": { "type": "integer", "minimum": 1, "maximum": 900 },
     "readyTimeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 300 },
+    "reconnectWatchdog": {
+      "type": "boolean",
+      "description": "Default true. Rebuild the gateway transport when connected stays false past the threshold."
+    },
+    "reconnectWatchdogThresholdMs": {
+      "type": "integer",
+      "minimum": 5000,
+      "maximum": 600000,
+      "description": "Default 60000. Tolerated disconnected window before the watchdog rebuilds."
+    },
+    "reconnectWatchdogTickMs": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 60000,
+      "description": "Default 0 (auto: threshold/4 clamped). Watchdog poll interval."
+    },
+    "reconnectBackoffInitialMs": {
+      "type": "integer",
+      "minimum": 100,
+      "maximum": 60000,
+      "description": "Default 1000. First retry delay after a failed rebuild."
+    },
+    "reconnectBackoffMaxMs": {
+      "type": "integer",
+      "minimum": 100,
+      "maximum": 600000,
+      "description": "Default 60000. Upper bound for the exponential backoff."
+    },
+    "reconnectMaxAttempts": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100,
+      "description": "Default 10. After this many failed rebuilds the watchdog stops and flags manual intervention."
+    },
     "devGuildId": { "type": "string", "pattern": "^[0-9]+$" }
   }
 }
