@@ -1,6 +1,6 @@
 # Natter Prompt Compiler / Prompt Library 设计
 
-> **状态**：P1（host 契约 + 内置 composer）+ P2（Natter.Plugin.PromptLibrary）已实现；P3–P5 待做。默认 profile 仍使用 `host#static`。
+> **状态**：P1（host 契约 + 内置 composer）+ P2（Natter.Plugin.PromptLibrary）+ P3（`prompt.fragment` 聚合）已实现；P4–P5 待做。默认 profile 仍使用 `host#static`。
 > **日期**：2026-11-21
 > **定位**：把 prompt 从 profile 里的临时 `systemPrompt` 提升为可管理、可组合、可关闭、可版本化的 Prompt Compiler。
 > **关联**：[Context & Memory](P3_CONTEXT_MEMORY.md)、[Context/Memory 插件](CONTEXT_MEMORY_PLUGIN.md)、[Harness 架构](HARNESS_ARCHITECTURE.md)
@@ -492,11 +492,13 @@ host 负责最终编译；插件只提供数据。
 
 实现：`plugins/Natter.Plugin.PromptLibrary/`（`prompt.provider` + `prompt explain`）；`tests/Natter.Plugin.PromptLibrary.Tests/`（含 NPS 真实装载集成用例 `PromptLibraryNpsIntegrationTests`）。
 
-### P3：插件 fragment
+### P3：插件 fragment —— ✅ 已实现
 
 - `prompt.fragment` contribution；
 - 排序/权限/冲突；
 - 动态来源。
+
+实现：`src/Natter.Application/Chat/Context/PromptFragmentSource.cs`（`IPromptFragmentSource` / `HostPromptFragmentSource`）、`ContextComponentCatalog` fragment provider 注册、`NpsPluginRuntime` + `PluginContributionTypes` 接线；测试 `tests/Natter.Framework.Tests/PromptFragmentTests.cs`。
 
 ### P4：WebConsole 管理
 
@@ -512,7 +514,7 @@ host 负责最终编译；插件只提供数据。
 
 ---
 
-## 15. 验收（P1+P2 已达成）
+## 15. 验收（P1+P2+P3 已达成）
 
 - [x] 一条提示词可关闭且不删除原文；
 - [x] 重新启用可恢复；
@@ -552,7 +554,7 @@ host 负责最终编译；插件只提供数据。
 2. **关闭改变 hash**：plan hash 包含 preset id/version、有序 fragment 的源文本 hash、disabled ids、变量名。`EnabledByDefault=false` 的片段也会以 `reason=default` 进入 disabled 列表，因此默认开关同样反映在 hash 里。
 3. **host mandatory 不可关闭**：composer 自己注入 `host.safety.untrusted-data`（`Mandatory=true`、`CanDisable=false`、`HostBuiltin`），调用方不能提供同 id 片段，也不能把它放进 disabled 列表；尝试关闭只产生 `prompt.mandatory_ignored` warning，片段仍然出现在最后。
 4. **profile 级覆盖**：`prompt.disabledFragments` 可关闭 `CanDisable=true` 的片段；`CanDisable=false` 的片段被关闭是编译错误 `prompt.fragment_not_disableable`。
-5. **来源混合**：同一 preset 可引用 inline / file / plugin 片段；插件片段 `Mandatory=true`、声明 `HostBuiltin`、或占用 host safety id 都会被拒绝（`prompt.fragment_mandatory_forbidden` / `prompt.fragment_source_forbidden` / `prompt.fragment_reserved`）。文件片段只读、UTF-8、64 KiB 上限、禁止绝对路径/`..`/盘符/符号链接。
+5. **来源混合**：同一 preset 可引用 inline / file / plugin 片段。宿主内部直接传给 composer 的非法 plugin 片段会编译失败（`prompt.fragment_mandatory_forbidden` / `prompt.fragment_source_forbidden` / `prompt.fragment_reserved`）；来自第三方 provider 的同类片段在聚合器处降级为 warning + 丢弃，prompt 继续（见 §18）。文件片段只读、UTF-8、64 KiB 上限、禁止绝对路径/`..`/盘符/符号链接。
 6. **排序**：`Order` 升序 → fragment id ordinal；mandatory 组永远最后；preset 重复引用同一 fragment 或 fragment id 重复都会编译失败。
 7. **preset 选择**：profile `prompt.preset` → 请求 preset → locale 精确匹配 → locale 语言前缀 → `*` → id 为 `default` 的 preset → 首个声明 preset → 内置 fallback（用全部非 mandatory 片段合成，version=`fallback`）。
 8. **继承/覆盖**：`Extends` 链按 base→child 合并，child 以 `fragmentId` 覆盖 base 的 section（child 未写 `order` 时保留 base order）；变量 base→child 覆盖；循环/缺失 base 都是编译错误。
@@ -614,9 +616,149 @@ natter prompt explain --json
 
 ### 17.6 剩余风险与后续
 
-- `IPromptFragmentProvider` 只有契约，host 尚未聚合第三方 `prompt.fragment`（P3）；`PromptFragmentMerge` 已提供权限/上限规则。
+- `IPromptFragmentProvider` 的 host 聚合已在 P3 完成（见 §18）；`PromptFragmentMerge` 继续保留给 host 内部严格合并。
 - `PromptPlan.Hash` 不含变量值（按设计 §10）：变量值变化不会自动使 context cache 失效；若需要内容身份，应另加 `contentHash`。
 - `prompt explain` 使用合成 profile（id=`prompt-explain`、platform=`host`），不是某条真实会话的最终 prompt；真实 `profile.id/user.name` 变量值不会显示（本身也不应显示）。
 - 插件文件读取是 NPS 权限声明（`filesystem.read`），不是进程级沙箱；只允许插件目录内相对路径。
 - 没有 profile 热重载：修改 `profiles.json` 仍需重启（沿用 P4 结论）。
 - P4（WebConsole 管理）、P5（full-control）未实现；full 模式仍必须保留 host mandatory safety。
+
+---
+
+## 18. P3 实现记录（2026-11-22）
+
+### 18.1 架构与代码位置
+
+| 层 | 位置 | 职责 |
+| --- | --- | --- |
+| composer（纯函数） | `PromptCompilerContracts.cs` / `PromptComposer.cs` | `PromptComposeRequest.PluginFragments` 与 `PluginFragmentWarnings` 只是数据；composer 不注入 provider、不做 I/O，仍负责严格校验、排序、预算与 mandatory host safety |
+| 聚合器 | `src/Natter.Application/Chat/Context/PromptFragmentSource.cs` | `IPromptFragmentSource` / `HostPromptFragmentSource`：调用所有 provider、独立超时、异常隔离、清洗、去重、数量/长度上限、warning |
+| 目录 | `ContextComponentCatalog.cs` | `RegisterFragmentProvider` / `UnregisterFragmentProvider` / `FragmentProviders`（`owner#id`，与 prompt/context/memory 一致） |
+| NPS | `PluginContributionTypes.cs`、`PluginContracts.cs`、`NpsContributionRegistry.cs`、`NpsPluginRuntime.cs` | 新贡献类型 `prompt.fragment`；`IContributionRegistry.AddPromptFragmentProvider<TProvider>`；运行时按 `owner#id` 注册/注销；未声明该贡献的插件行为不变 |
+| 接入 | `HostStaticPromptProvider`、`PromptLibraryProvider`、`ChatCompositionModule` | `host#static` 与 Prompt Library 两条 compose 路径都会先聚合插件片段；没有 provider 时直接返回空结果，不额外分配、不报错 |
+| 诊断 | `PromptPlan` / `PromptBundle` / `ContextDiagnostics` | `PluginFragmentCount`、`PluginFragmentProviderCount`（只有数量，无正文） |
+
+DI 说明：`host#static` provider 依赖 fragment source，而 source 依赖 catalog；catalog 通过 `DeferredPromptProvider` 延迟解析 host#static，避免构造环。composer 本身仍不接触 DI。
+
+Prompt Library 路径：`PromptLibraryProvider` 增加**可选** `IPromptFragmentSource?` 参数（默认 null）。宿主注册了该服务时正常聚合；宿主未注册/版本较旧/聚合调用异常时降级为“没有插件 fragment”，仍按 library preset 正常编译，不激活失败、不抛错（caller 取消仍透传）。该 provider 不缓存 plan 或 fragment 结果，每次请求重新聚合，避免不同 provider 的贡献互相污染。
+
+### 18.2 容错边界
+
+| 场景 | 处理 |
+| --- | --- |
+| provider 抛异常 | 丢弃该 provider 的全部片段 + warning `prompt.fragment_failed:<reference>`，prompt 继续 |
+| provider 超时（默认 2s，`PromptFragmentSourceOptions.ProviderTimeout` 可配置） | 丢弃 + warning `prompt.fragment_timeout:<reference>`；`WaitAsync` 保证即使 provider 忽略 token，host 也会停止等待 |
+| provider 返回 null | 按失败处理（`prompt.fragment_failed`） |
+| caller 取消 | `OperationCanceledException` 原样透传，不被当作插件失败 |
+| 单个片段格式错误 | 丢弃该片段 + warning，其他片段/provider 不受影响 |
+| 聚合器之后的 composer 校验失败 | 属于 host 内部契约错误，仍抛 `PromptCompilationException`（严格在 composer） |
+
+日志只包含 `reference` / `id` / `code` / `elapsedMs` / 数量；片段正文与变量值不入日志（测试用哨兵字符串断言）。
+
+### 18.3 插件能做什么 / 不能做什么
+
+可以做：
+
+- 声明 `prompt.fragment` contribution；
+- 实现 `IPromptFragmentProvider` 并 `AddPromptFragmentProvider<TProvider>(id)`；
+- 返回任意多个（受上限）带 `Order` 的片段，参与最终 prompt 排序与预算。
+
+不能做：
+
+- `Mandatory=true`（拒绝，warning `prompt.fragment_mandatory_rejected`）；
+- 使用 `PromptFragmentSource.HostBuiltin`（拒绝，`prompt.fragment_source_rejected`）；
+- 占用 host 内置 id（`host.profile.system`、`host.safety.untrusted-data` → 丢弃，`prompt.fragment_conflict`）；
+- 与另一个插件重复 id（按 `owner#id` 排序先到先得，后者 `prompt.fragment_duplicate`）；
+- 绕过 host 上限（单片段 8000 字符、全局 64 个、总长 32000 字符）；
+- 移除或关闭 host mandatory safety（composer 永远最后追加，`CanDisable` 在聚合器被强制为 true，hook 不适用）；
+- 通过 `prompt.fragment` 获取额外权限：该贡献**不需要也不引入**新的 permission。
+
+片段 id 规则：`^[a-z0-9][a-z0-9._-]{0,63}$`；非法 id 丢弃 + `prompt.fragment_id_rejected`。`Order` 归一化到 `[0, 1000000]`。
+
+### 18.4 限额与 warning 码
+
+| 项 | 默认/规则 |
+| --- | --- |
+| 单 provider 超时 | 2000 ms（`PromptCompilerDefaults.PluginFragmentTimeoutMilliseconds`） |
+| 单片段长度 | 8000 字符（超过丢弃，`prompt.fragment_too_long`） |
+| 片段总数 | 64（`PromptCompilerDefaults.PluginMaxFragments`，超过丢弃，`prompt.fragment_limit`） |
+| 插件片段总长 | 32000 字符（超过丢弃，`prompt.fragment_budget`） |
+| 空文本 | 丢弃，`prompt.fragment_text_rejected` |
+| null 片段 | 丢弃，`prompt.fragment_invalid` |
+
+warning 形如 `code:<reference>` 或 `code:<id>`，最终进入 `PromptPlan.Warnings` 并去重。
+
+### 18.5 最小插件示例
+
+`plugin.json`：
+
+```json
+{
+  "schemaVersion": 1,
+  "id": "my.plugin",
+  "name": "My Plugin",
+  "version": "0.1.0",
+  "kind": "feature",
+  "hostApi": ">=0.1.0 <1.0.0",
+  "entry": { "assembly": "lib/My.Plugin.dll", "type": "My.Plugin.MyPlugin" },
+  "permissions": [],
+  "contributions": [
+    { "type": "prompt.fragment", "id": "extra" }
+  ]
+}
+```
+
+实现与注册：
+
+```csharp
+public sealed class MyFragments : IPromptFragmentProvider
+{
+    public ValueTask<IReadOnlyList<PromptFragment>> GetFragmentsAsync(
+        PromptFragmentContext context,
+        CancellationToken cancellationToken = default)
+        => ValueTask.FromResult<IReadOnlyList<PromptFragment>>(
+        [
+            new PromptFragment(
+                "my.style",                 // 必须匹配 ^[a-z0-9][a-z0-9._-]{0,63}$
+                "回答保持简洁。",
+                PromptFragmentSource.Plugin,
+                Order: 25),                 // 与 host/其他插件片段一起稳定排序
+        ]);
+}
+
+public sealed class MyPlugin : INatterPlugin
+{
+    public ValueTask ConfigureAsync(IPluginContext context, CancellationToken cancellationToken = default)
+    {
+        context.Contributions.AddPromptFragmentProvider<MyFragments>("extra");
+        return ValueTask.CompletedTask;
+    }
+
+    public ValueTask ActivateAsync(IPluginContext context, CancellationToken cancellationToken = default)
+        => ValueTask.CompletedTask;
+
+    public ValueTask DeactivateAsync(IPluginContext context, CancellationToken cancellationToken = default)
+        => ValueTask.CompletedTask;
+}
+```
+
+- manifest 的 `contributions` 必须与 `AddPromptFragmentProvider` 的 id 一致，否则激活失败 `missing-contribution`；
+- 不需要在 manifest 增加 `permissions`；
+- 插件 stop/失败时 host 会注销 `owner#id`，下一轮 prompt 立即不再包含其片段。
+
+### 18.6 测试证据（2026-11-22）
+
+- 框架全量：**557/557**；本任务 `PromptFragmentTests` **16/16**；
+- Prompt Library 插件：**36/36**；
+- WebConsole：**303/303**；
+- 覆盖：无 provider 默认输出逐字节回归、单/多 provider、reference 排序、重复 id 先到先得、host 内置 id 冲突、`Mandatory` 被拒、异常/超时隔离、超长/超数量/总长预算、caller 取消透传、日志无正文/变量哨兵、`PromptPlan`/`ContextDiagnostics` 计数、NPS 真实装载 `prompt.fragment` 并在 stop 后消失、声明未注册 → `missing-contribution`、`prompt.fragment` 已进入 `PluginContributionTypes.All` 且不影响其他贡献类型。
+
+### 18.7 剩余风险
+
+- provider 按 prompt 调用，串行执行；最坏情况 N 个 provider × 2s 超时。provider 应保持轻量，host 未做并发调用或缓存。
+- 超时靠 `WaitAsync` 停止等待，被放弃的 provider 任务可能继续在后台运行（协作式取消）；插件进程内实现需自行尊重 token。
+- 插件片段正文仍是不可信内容，会进入 system prompt；host 只保证 mandatory safety 最后且不可关闭，未对片段做语义过滤（与 file/preset 片段同一信任模型）。
+- 全局 64 个/32000 字符上限是跨 provider 总量，没有单 provider 配额；恶意插件可先占满配额（有 warning，无失败）。
+- `PromptPlan.Hash` 仍不含变量值；插件片段文本变化会改变 hash。
+- `prompt explain` 不调用 fragment provider（没有真实会话上下文），只解释静态 preset/library 配方；插件片段属于运行期贡献。
+- P4（WebConsole 管理）、P5（full-control）未实现。
