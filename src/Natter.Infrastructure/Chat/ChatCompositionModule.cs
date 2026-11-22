@@ -21,21 +21,23 @@ public sealed class ChatCompositionModule : ICompositionModule
 
     /// <summary>
     /// Hardened handler for <see cref="Natter.Application.Chat.HttpFetchTool"/>: no automatic
-    /// redirects and a connect-time address check so a hostname that resolves to a private address
-    /// after the tool-level check (DNS rebinding) is still refused.
+    /// redirects, no egress proxy and a connect-time address check so a hostname that resolves to a
+    /// private address after the tool-level check (DNS rebinding) is still refused.
+    /// <para>
+    /// S1-02: <see cref="SocketsHttpHandler.UseProxy"/> is fixed to <c>false</c>. With a proxy the
+    /// connect callback only sees the proxy endpoint, which silently skipped the SSRF address
+    /// check. The read-only fetch tool therefore never uses HTTP(S)_PROXY: the check always runs
+    /// against the real target instead of being bypassed.
+    /// </para>
     /// </summary>
     public static SocketsHttpHandler CreateHttpFetchHandler()
         => new()
         {
+            UseProxy = false,
             AllowAutoRedirect = false,
             ConnectCallback = async (context, cancellationToken) =>
             {
                 var endpoint = context.DnsEndPoint;
-                var targetHost = context.InitialRequestMessage.RequestUri?.DnsSafeHost;
-                // When an egress proxy is configured the callback receives the proxy endpoint, not
-                // the target; only direct connections are address-checked here.
-                var direct = string.IsNullOrEmpty(targetHost)
-                             || string.Equals(endpoint.Host, targetHost, StringComparison.OrdinalIgnoreCase);
 
                 IPAddress[] addresses;
                 if (IPAddress.TryParse(endpoint.Host, out var literal))
@@ -47,15 +49,12 @@ public sealed class ChatCompositionModule : ICompositionModule
                     addresses = await Dns.GetHostAddressesAsync(endpoint.Host, cancellationToken).ConfigureAwait(false);
                 }
 
-                if (direct)
+                foreach (var address in addresses)
                 {
-                    foreach (var address in addresses)
+                    if (Natter.Application.Chat.HttpFetchTool.IsBlockedAddress(address))
                     {
-                        if (Natter.Application.Chat.HttpFetchTool.IsBlockedAddress(address))
-                        {
-                            throw new HttpRequestException(
-                                $"Refusing to connect to a private, loopback or metadata address for '{endpoint.Host}'.");
-                        }
+                        throw new HttpRequestException(
+                            $"Refusing to connect to a private, loopback or metadata address for '{endpoint.Host}'.");
                     }
                 }
 
