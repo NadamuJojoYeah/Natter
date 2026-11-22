@@ -192,12 +192,14 @@ FSRS-6 初始稳定度 w0–w3（对应评分 Again/Hard/Good/Easy）：
 所以：
 
 ```text
-R ≥ injectThreshold(0.9)     高分，参与主动注入
-R < injectThreshold          不主动注入，但工具可检索
+R ≥ TargetRetention(0.9)     高分，参与主动注入
+R < TargetRetention          不主动注入，但工具可检索
 条目数 > 上限                 按 (score 最低优先) 归档
 ```
 
-`injectThreshold` 取 0.9 —— 因为曲线本身就标定在 R(S,S)=0.9，取这个值等价于「稳定度之内都算记得」。
+阈值复用 `MemoryDecay.TargetRetention = 0.9`（曲线的标定点，`R(S,S)=0.9`），**不新增独立常量**。
+
+> **修订记录**：本节初版写 `injectThreshold` 为一个独立参数，与 §9.1.1「该参数已删除」矛盾。实际语义是「复用曲线的标定点」，不是新的可调参数。已统一为 `TargetRetention`。
 
 **不删除**。与 Zep/Graphiti 的做法一致：事实矛盾时设 `t_invalid` 而非删除，旧边仍可查询。理由：删掉「三年前说过的重要偏好」比库变大更糟。
 
@@ -484,7 +486,7 @@ R(t,S) = (1 + factor·t/S)^(-d)      §5.1 的幂律曲线
 | 参数 | 原值 | 删除理由 |
 | --- | --- | --- |
 | `typeWeight` | 1.3/1.0/0.8/0.5 | 与「每类不同 d」冗余，重复计权 |
-| `injectThreshold` 作时间归档 | 0.25 | 幂律下永不触发，改为容量驱动归档 |
+| `injectThreshold` 作时间归档 | 0.25 | 幂律下永不触发，改为容量驱动归档；阈值语义并入 `TargetRetention`（§5.3） |
 
 ### 9.2 预算
 
