@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
 using Natter.Application.Admin;
 using Natter.Chat;
 
@@ -32,14 +34,61 @@ public sealed class AiTaskWorker(
         () => services.GetService(typeof(IChatResponderRegistry)) as IChatResponderRegistry,
         LazyThreadSafetyMode.ExecutionAndPublication);
     private readonly DefaultTaskWorker _fallback = new(tools, policy);
+    private readonly Lazy<ITaskStore?> _stores = new(
+        () => services.GetService(typeof(ITaskStore)) as ITaskStore,
+        LazyThreadSafetyMode.ExecutionAndPublication);
+    private readonly Lazy<TaskMetrics?> _metrics = new(
+        () => services.GetService(typeof(TaskMetrics)) as TaskMetrics,
+        LazyThreadSafetyMode.ExecutionAndPublication);
+    private readonly Lazy<ILogger<AiTaskWorker>?> _logger = new(
+        () => services.GetService(typeof(ILogger<AiTaskWorker>)) as ILogger<AiTaskWorker>,
+        LazyThreadSafetyMode.ExecutionAndPublication);
 
     public async ValueTask<TaskResult> ExecuteAsync(
         AgentTask task,
         TaskExecutionContext context,
         CancellationToken cancellationToken = default)
     {
+        var store = _stores.Value;
+        var budget = ComputeToolBudget(context);
+        var state = new LoopState();
+        var startedAt = Stopwatch.GetTimestamp();
+
+        await TraceAsync(
+            store,
+            task.TaskId,
+            TaskTraceKinds.Started,
+            TaskTracePayload.Build(("status", "running"), ("budget", budget))).ConfigureAwait(false);
+
+        TaskResult result;
+        try
+        {
+            result = await ExecuteCoreAsync(task, context, state, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            await TraceFinalAsync(store, task.TaskId, "cancelled", "cancelled", startedAt, state).ConfigureAwait(false);
+            throw;
+        }
+        catch (Exception)
+        {
+            await TraceFinalAsync(store, task.TaskId, "failed", "task_failed", startedAt, state).ConfigureAwait(false);
+            throw;
+        }
+
+        var status = result.ErrorCode is null ? "completed" : "failed";
+        await TraceFinalAsync(store, task.TaskId, status, result.ErrorCode, startedAt, state).ConfigureAwait(false);
+        return result;
+    }
+
+    private async ValueTask<TaskResult> ExecuteCoreAsync(
+        AgentTask task,
+        TaskExecutionContext context,
+        LoopState state,
+        CancellationToken cancellationToken)
+    {
         if (ResolveGateway(context.Profile) is { } gateway)
-            return await ExecuteToolLoopAsync(task, context, gateway, cancellationToken).ConfigureAwait(false);
+            return await ExecuteToolLoopAsync(task, context, gateway, state, cancellationToken).ConfigureAwait(false);
 
         try
         {
@@ -94,6 +143,7 @@ public sealed class AiTaskWorker(
         AgentTask task,
         TaskExecutionContext context,
         ITaskModelGateway gateway,
+        LoopState state,
         CancellationToken cancellationToken)
     {
         var negotiation = ToolProtocolNegotiator.Negotiate(
@@ -108,9 +158,7 @@ public sealed class AiTaskWorker(
         }
 
         var protocol = negotiation.Protocol;
-        var hardCap = Math.Max(1, _loopOptions.MaxToolCallsHardCap);
-        var requestedCalls = context.MaxToolCalls <= 0 ? hardCap : context.MaxToolCalls;
-        var maxToolCalls = Math.Clamp(Math.Min(requestedCalls, hardCap), 1, hardCap);
+        var maxToolCalls = ComputeToolBudget(context);
         var maxModelSteps = Math.Max(1, _loopOptions.MaxModelSteps);
         var observationLimit = Math.Max(128, _loopOptions.MaxObservationCharacters);
 
@@ -162,6 +210,15 @@ public sealed class AiTaskWorker(
                 return new TaskResult(null, TaskToolLoopCodes.ModelStepFailed, Describe(ex));
             }
 
+            await TraceAsync(
+                _stores.Value,
+                task.TaskId,
+                TaskTraceKinds.Step,
+                TaskTracePayload.Build(
+                    ("step", stepIndex),
+                    ("protocol", protocol == ToolCallProtocol.Native ? "native" : "text"),
+                    ("toolCall", reply.ToolCall is not null))).ConfigureAwait(false);
+
             if (!reply.Ok)
                 return new TaskResult(null, reply.ErrorCode, reply.ErrorMessage ?? "The AI provider failed.");
 
@@ -208,11 +265,16 @@ public sealed class AiTaskWorker(
             }
             catch (OperationCanceledException)
             {
+                _metrics.Value?.ToolTimedOut();
                 return new TaskResult(
                     null,
                     TaskToolLoopCodes.ToolTimeout,
                     $"Tool '{call.Tool}' timed out inside the task step budget.");
             }
+
+            state.ToolsUsed++;
+            _metrics.Value?.ToolCalled();
+            await TraceToolAsync(task.TaskId, call.Tool, result).ConfigureAwait(false);
 
             if (result.Ok)
             {
@@ -226,6 +288,7 @@ public sealed class AiTaskWorker(
 
             if (string.Equals(result.ErrorCode, ToolErrorCodes.Timeout, StringComparison.Ordinal))
             {
+                _metrics.Value?.ToolTimedOut();
                 return new TaskResult(
                     null,
                     TaskToolLoopCodes.ToolTimeout,
@@ -284,6 +347,65 @@ public sealed class AiTaskWorker(
         return string.IsNullOrWhiteSpace(message)
             ? exception.GetType().Name
             : $"{exception.GetType().Name}: {message}";
+    }
+
+    private int ComputeToolBudget(TaskExecutionContext context)
+    {
+        var hardCap = Math.Max(1, _loopOptions.MaxToolCallsHardCap);
+        var requestedCalls = context.MaxToolCalls <= 0 ? hardCap : context.MaxToolCalls;
+        return Math.Clamp(Math.Min(requestedCalls, hardCap), 1, hardCap);
+    }
+
+    private async ValueTask TraceFinalAsync(
+        ITaskStore? store,
+        string taskId,
+        string status,
+        string? code,
+        long startedAt,
+        LoopState state)
+    {
+        var payload = TaskTracePayload.Build(
+            ("status", status),
+            ("code", code),
+            ("ms", (long)Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds),
+            ("tools", state.ToolsUsed));
+        await TraceAsync(store, taskId, TaskTraceKinds.Final, payload).ConfigureAwait(false);
+    }
+
+    private async ValueTask TraceToolAsync(string taskId, string toolName, ToolCallResult result)
+    {
+        var payload = TaskTracePayload.Build(
+            ("name", toolName),
+            ("ms", result.Audit.DurationMs),
+            ("code", result.Audit.ErrorCode ?? ToolErrorCodes.Succeeded),
+            ("chars", result.Audit.OutputCharacters),
+            ("truncated", result.Audit.Truncated));
+        await TraceAsync(_stores.Value, taskId, TaskTraceKinds.Tool, payload).ConfigureAwait(false);
+    }
+
+    private async ValueTask TraceAsync(ITaskStore? store, string taskId, string kind, string payload)
+    {
+        if (store is null)
+            return;
+
+        try
+        {
+            await store.AppendEventAsync(taskId, kind, payload, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            // Trace is best effort: a broken store must never fail the task, and the warning must
+            // not contain prompt/argument/output content.
+            _logger.Value?.LogWarning(
+                "task trace write failed kind={Kind} error={ErrorType}",
+                kind,
+                ex.GetType().Name);
+        }
+    }
+
+    private sealed class LoopState
+    {
+        public int ToolsUsed { get; set; }
     }
 
     private ITaskModelGateway? ResolveGateway(RuntimeProfile profile)

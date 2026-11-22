@@ -77,6 +77,7 @@ public sealed class TaskDispatcher(
     private async Task ExecuteAsync(AgentTask created, CancellationToken cancellationToken)
     {
         var task = created;
+        var startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
         try
         {
             if (!await store.TryAcquireLeaseAsync(task.TaskId, _owner, LeaseTtl, cancellationToken).ConfigureAwait(false))
@@ -97,12 +98,14 @@ public sealed class TaskDispatcher(
             {
                 task = await store.TransitionAsync(task.TaskId, AgentTaskStatus.Completed, task.Version,
                     resultText: result.Text, cancellationToken: cancellationToken).ConfigureAwait(false);
+                metrics?.Duration(System.Diagnostics.Stopwatch.GetElapsedTime(startedAt));
                 metrics?.Completed();
             }
             else
             {
                 task = await store.TransitionAsync(task.TaskId, AgentTaskStatus.Failed, task.Version,
                     errorCode: result.ErrorCode, errorMessage: result.ErrorMessage, cancellationToken: cancellationToken).ConfigureAwait(false);
+                metrics?.Duration(System.Diagnostics.Stopwatch.GetElapsedTime(startedAt));
                 metrics?.Failed();
             }
         }
@@ -114,6 +117,7 @@ public sealed class TaskDispatcher(
                 if (current is not null && current.Status is not (AgentTaskStatus.Completed or AgentTaskStatus.Failed or AgentTaskStatus.Cancelled or AgentTaskStatus.Expired))
                     await store.TransitionAsync(task.TaskId, AgentTaskStatus.Cancelled, current.Version,
                         errorCode: "cancelled", errorMessage: "Task cancelled.", cancellationToken: CancellationToken.None).ConfigureAwait(false);
+                    metrics?.Duration(System.Diagnostics.Stopwatch.GetElapsedTime(startedAt));
                     metrics?.Cancelled();
             }
             catch
@@ -129,7 +133,8 @@ public sealed class TaskDispatcher(
                 if (current is not null && current.Status is not (AgentTaskStatus.Completed or AgentTaskStatus.Failed or AgentTaskStatus.Cancelled or AgentTaskStatus.Expired))
                     await store.TransitionAsync(task.TaskId, AgentTaskStatus.Failed, current.Version,
                         errorCode: "task_failed", errorMessage: "Task failed.", cancellationToken: CancellationToken.None).ConfigureAwait(false);
-                    metrics?.Failed();
+                    metrics?.Duration(System.Diagnostics.Stopwatch.GetElapsedTime(startedAt));
+                metrics?.Failed();
             }
             catch
             {

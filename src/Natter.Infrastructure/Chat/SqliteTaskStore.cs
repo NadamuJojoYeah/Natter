@@ -150,6 +150,20 @@ public sealed class SqliteTaskStore : ITaskStore
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
+    public async ValueTask AppendEventAsync(
+        string taskId,
+        string kind,
+        string? payloadJson,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(taskId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(kind);
+        TaskTracePayload.EnsureSafe(payloadJson);
+
+        await using var connection = await _database.OpenAsync(cancellationToken).ConfigureAwait(false);
+        await AddEventAsync(connection, taskId, kind, payloadJson, cancellationToken).ConfigureAwait(false);
+    }
+
     public async ValueTask<IReadOnlyList<TaskEvent>> GetEventsAsync(string taskId, CancellationToken cancellationToken = default)
     {
         await using var connection = await _database.OpenAsync(cancellationToken).ConfigureAwait(false);
@@ -163,13 +177,21 @@ public sealed class SqliteTaskStore : ITaskStore
         return events;
     }
 
-    private static async ValueTask AddEventAsync(SqliteConnection connection, string taskId, string kind, object payload, CancellationToken cancellationToken)
+    private static ValueTask AddEventAsync(SqliteConnection connection, string taskId, string kind, object payload, CancellationToken cancellationToken)
+        => AddEventAsync(connection, taskId, kind, JsonSerializer.Serialize(payload), cancellationToken);
+
+    private static async ValueTask AddEventAsync(
+        SqliteConnection connection,
+        string taskId,
+        string kind,
+        string? payloadJson,
+        CancellationToken cancellationToken)
     {
         await using var command = connection.CreateCommand();
         command.CommandText = "INSERT INTO task_events (task_id, seq, kind, payload_json, created_at) VALUES ($id, (SELECT COALESCE(MAX(seq),0)+1 FROM task_events WHERE task_id=$id), $kind, $payload, $now);";
         command.Parameters.AddWithValue("$id", taskId);
         command.Parameters.AddWithValue("$kind", kind);
-        command.Parameters.AddWithValue("$payload", JsonSerializer.Serialize(payload));
+        command.Parameters.AddWithValue("$payload", (object?)payloadJson ?? DBNull.Value);
         command.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture));
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }

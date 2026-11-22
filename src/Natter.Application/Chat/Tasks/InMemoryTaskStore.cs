@@ -124,6 +124,23 @@ public sealed class InMemoryTaskStore : ITaskStore
         return ValueTask.CompletedTask;
     }
 
+    public ValueTask AppendEventAsync(
+        string taskId,
+        string kind,
+        string? payloadJson,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(taskId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(kind);
+        TaskTracePayload.EnsureSafe(payloadJson);
+
+        lock (_gate)
+        {
+            AddEventJson(taskId, kind, payloadJson);
+            return ValueTask.CompletedTask;
+        }
+    }
+
     public ValueTask<IReadOnlyList<TaskEvent>> GetEventsAsync(string taskId, CancellationToken cancellationToken = default)
     {
         lock (_gate)
@@ -132,12 +149,15 @@ public sealed class InMemoryTaskStore : ITaskStore
     }
 
     private void AddEvent(string taskId, string kind, object payload)
+        => AddEventJson(taskId, kind, JsonSerializer.Serialize(payload));
+
+    private void AddEventJson(string taskId, string kind, string? payloadJson)
     {
         if (!_events.TryGetValue(taskId, out var events))
         {
             events = [];
             _events[taskId] = events;
         }
-        events.Add(new TaskEvent(taskId, ++_sequence, kind, JsonSerializer.Serialize(payload), DateTimeOffset.UtcNow));
+        events.Add(new TaskEvent(taskId, ++_sequence, kind, payloadJson, DateTimeOffset.UtcNow));
     }
 }

@@ -70,4 +70,11 @@ public interface ITaskStore
     ValueTask SaveResultAsync(string taskId, string resultText, CancellationToken cancellationToken = default);
 
     ValueTask<IReadOnlyList<TaskEvent>> GetEventsAsync(string taskId, CancellationToken cancellationToken = default);
+
+    /// <summary>Appends one trace event (P5.3). seq is allocated by the store monotonically.</summary>
+    ValueTask AppendEventAsync(
+        string taskId,
+        string kind,
+        string? payloadJson,
+        CancellationToken cancellationToken = default);
 }
