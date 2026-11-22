@@ -20,6 +20,9 @@ public sealed class CliCoreCompositionModule : ICompositionModule
         services.AddSingleton<ConsoleAccessor>();
         services.AddSingleton<IConsoleAccessor>(provider => provider.GetRequiredService<ConsoleAccessor>());
         services.AddSingleton<CliCommandRegistry>();
+        // S1-11: host startup is data driven — built-in rules here, plugins may add their own.
+        services.AddSingleton<ICliHostRequirementProvider, DefaultCliHostRequirements>();
+        services.AddSingleton<CliHostRequirementCatalog>();
         services.AddSingleton<CliRunner>();
         services.AddSingleton<IAdminCommandRunner>(provider => new CliAdminCommandRunner(
             provider,

@@ -11,6 +11,13 @@ public sealed class NatterCliOptions
 
     public bool TraceEvents { get; set; }
 
+    /// <summary>
+    /// Global escape hatch: never start a host, even for commands that normally need runtime state.
+    /// Commands that depend on live state print a degradation note instead of silently returning
+    /// empty data.
+    /// </summary>
+    public bool NoHost { get; set; }
+
     public string? ConfigDirectory { get; set; }
 
     public string? StateDirectory { get; set; }
@@ -54,6 +61,10 @@ public sealed class NatterCliOptions
 
                 case "--trace-events":
                     options.TraceEvents = true;
+                    break;
+
+                case "--no-host":
+                    options.NoHost = true;
                     break;
 
                 case "--config-dir":

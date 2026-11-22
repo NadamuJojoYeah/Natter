@@ -5,7 +5,7 @@ namespace Natter.Cli.Core;
 /// <summary>Exclusive per-state-dir serve lock; one bot token must not run twice against one state.</summary>
 internal static class StateDirectoryLock
 {
-    public static FileStream? TryAcquire(NatterCliOptions options, IConsole console)
+    public static FileStream? TryAcquire(NatterCliOptions options, IConsole console, bool quiet = false)
     {
         if (string.IsNullOrWhiteSpace(options.StateDirectory))
             return null;
@@ -26,9 +26,12 @@ internal static class StateDirectoryLock
         }
         catch (IOException)
         {
-            console.Error.WriteLine(
-                $"Another Natter serve instance is using state directory '{directory}'. "
-                + "Use one instance per bot token/state directory.");
+            if (!quiet)
+            {
+                console.Error.WriteLine(
+                    $"Another Natter serve instance is using state directory '{directory}'. "
+                    + "Use one instance per bot token/state directory.");
+            }
             return null;
         }
     }
