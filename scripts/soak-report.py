@@ -75,6 +75,9 @@ class Sample:
     at: dt.datetime
     raw: dict
     source: str = "unknown"
+    # An unreachable / parse-failed sample is still a point in time: the host was expected to
+    # answer and did not. Dropping it would hide an outage window (S1-10).
+    is_error: bool = False
 
 
 @dataclass
@@ -114,6 +117,9 @@ def load(paths: list[Path]) -> SoakAudit:
                 continue
             if row.get("error"):
                 audit.errors.append(row)
+                audit.samples.append(
+                    Sample(at=at, raw=row, source=row.get("source", "unknown"), is_error=True)
+                )
                 continue
             audit.samples.append(Sample(at=at, raw=row, source=row.get("source", "unknown")))
     audit.samples.sort(key=lambda s: s.at)
@@ -127,9 +133,18 @@ def upstream_view(sample: Sample, prefix: str) -> dict | None:
     return None
 
 
-def summarise(audit: SoakAudit, interval: int, max_gap: int) -> dict:
+def summarise(
+    audit: SoakAudit,
+    interval: int,
+    max_gap: int,
+    max_error_percent: float = 5.0,
+    allow_status: tuple[str, ...] = ("healthy",),
+) -> dict:
     samples = audit.samples
-    if not samples:
+    timeline = samples  # every timestamp, healthy or not
+    healthy = [s for s in samples if not s.is_error]
+
+    if not timeline:
         return {
             "files": audit.files,
             "samples": 0,
@@ -139,13 +154,34 @@ def summarise(audit: SoakAudit, interval: int, max_gap: int) -> dict:
             "reasons": ["no usable /health samples in the input"],
         }
 
-    first, last = samples[0].at, samples[-1].at
+    first, last = timeline[0].at, timeline[-1].at
     window = (last - first).total_seconds()
-    expected = int(window // interval) + 1 if interval > 0 else len(samples)
-    coverage = round(100.0 * len(samples) / expected, 1) if expected else 100.0
+
+    # Coverage denominator: the sampler declares its contract in the header
+    # (durationSeconds / intervalSeconds). Using it means "the host died for 23h and only 2 samples
+    # survived" cannot look like 100% coverage (S1-10). Observation span is only a fallback and the
+    # report says which basis was used.
+    declared_expected = 0
+    declared_intervals: list[int] = []
+    for header in audit.headers:
+        duration = header.get("durationSeconds")
+        header_interval = header.get("intervalSeconds", interval)
+        if isinstance(duration, (int, float)) and duration > 0 and isinstance(header_interval, (int, float)) and header_interval > 0:
+            declared_expected += int(duration // header_interval) + 1
+            declared_intervals.append(int(header_interval))
+    if declared_expected > 0:
+        expected = declared_expected
+        coverage_basis = "declared-header"
+    else:
+        expected = int(window // interval) + 1 if interval > 0 else len(timeline)
+        coverage_basis = "observed-span"
+    coverage = round(100.0 * len(healthy) / expected, 1) if expected else 100.0
+
+    error_samples = [s for s in timeline if s.is_error]
+    error_percent = round(100.0 * len(error_samples) / len(timeline), 2) if timeline else 0.0
 
     gaps: list[dict] = []
-    for prev, cur in zip(samples, samples[1:]):
+    for prev, cur in zip(timeline, timeline[1:]):
         delta = (cur.at - prev.at).total_seconds()
         if delta > interval * 1.5:
             gaps.append(
@@ -155,8 +191,30 @@ def summarise(audit: SoakAudit, interval: int, max_gap: int) -> dict:
                     "seconds": int(delta),
                     "missingSamples": max(0, int(round(delta / interval)) - 1),
                     "exceedsTolerance": delta > max_gap,
+                    "bordersErrorSample": prev.is_error or cur.is_error,
                 }
             )
+
+    # Consecutive error samples are an outage window, not "coverage". Each sample stands for one
+    # interval of expected runtime, so a run of N errors hides at least N*interval seconds.
+    unavailable_windows: list[dict] = []
+    run: list[Sample] = []
+    for sample in timeline + [None]:
+        if sample is not None and sample.is_error:
+            run.append(sample)
+            continue
+        if run:
+            end_at = run[-1].at
+            unavailable_windows.append(
+                {
+                    "from": run[0].at.isoformat(),
+                    "to": end_at.isoformat(),
+                    "errorSamples": len(run),
+                    "seconds": int((end_at - run[0].at).total_seconds() + interval),
+                }
+            )
+            run = []
+    unavailable_seconds = sum(window["seconds"] for window in unavailable_windows)
 
     restarts: list[dict] = []
     uptime_regressions = 0
@@ -292,9 +350,35 @@ def summarise(audit: SoakAudit, interval: int, max_gap: int) -> dict:
 
     conversations = [s.raw.get("conversations") for s in samples if isinstance(s.raw.get("conversations"), int)]
 
+    notes_only: list[str] = []
     reasons: list[str] = []
     if coverage < 95.0:
-        reasons.append(f"coverage {coverage}% < 95%")
+        reasons.append(
+            f"coverage {coverage}% < 95% (basis: {coverage_basis}; "
+            f"{len(healthy)} healthy of {expected} expected samples)"
+        )
+    if error_samples:
+        reasons.append(
+            f"{len(error_samples)}/{len(timeline)} samples were unreachable/unparsable "
+            f"({error_percent}%, allowed {max_error_percent}%)"
+        ) if error_percent > max_error_percent else notes_only.append(
+            f"{len(error_samples)}/{len(timeline)} samples were unreachable/unparsable "
+            f"({error_percent}%) — under the {max_error_percent}% limit"
+        )
+    if unavailable_windows:
+        reasons.append(
+            f"{len(unavailable_windows)} outage window(s) from consecutive error samples, "
+            f"{round(unavailable_seconds / 3600.0, 2)}h total"
+        )
+    disallowed = {
+        status: count for status, count in status_counts.items() if status not in allow_status
+    }
+    if disallowed:
+        reasons.append(
+            "status not allowed in "
+            + ", ".join(f"{status}×{count}" for status, count in sorted(disallowed.items()))
+            + f" (allowed: {', '.join(allow_status)})"
+        )
     over = [g for g in gaps if g["exceedsTolerance"]]
     if over:
         reasons.append(
@@ -326,7 +410,14 @@ def summarise(audit: SoakAudit, interval: int, max_gap: int) -> dict:
         "soakHeaders": audit.headers,
         "soakStops": audit.stops,
         "samples": len(samples),
-        "errorSamples": len(audit.errors),
+        "healthySamples": len(healthy),
+        "errorSamples": len(error_samples),
+        "errorPercent": error_percent,
+        "maxErrorPercent": max_error_percent,
+        "allowedStatus": list(allow_status),
+        "disallowedStatusCounts": disallowed,
+        "unavailableWindows": unavailable_windows,
+        "unavailableSeconds": unavailable_seconds,
         "unparsableLines": audit.unparsable_lines,
         "firstSample": first.isoformat(),
         "lastSample": last.isoformat(),
@@ -334,6 +425,7 @@ def summarise(audit: SoakAudit, interval: int, max_gap: int) -> dict:
         "windowHours": round(window / 3600.0, 2),
         "intervalSeconds": interval,
         "expectedSamples": expected,
+        "coverageBasis": coverage_basis,
         "coveragePercent": coverage,
         "gaps": gaps,
         "restarts": restarts,
@@ -345,6 +437,7 @@ def summarise(audit: SoakAudit, interval: int, max_gap: int) -> dict:
         "tier1ProviderUnavailableSamples": len(tier1_unavailable),
         "result": result,
         "reasons": reasons,
+        "notes": notes_only,
     }
 
 
@@ -362,7 +455,21 @@ def print_human(summary: dict) -> None:
     print(f"samples         : {summary['samples']}  (errors={summary['errorSamples']}, unparsable={summary['unparsableLines']})")
     print(f"window          : {summary['firstSample']} -> {summary['lastSample']}  ({summary['windowHours']}h)")
     print(f"interval        : {summary['intervalSeconds']}s   expected {summary['expectedSamples']} samples")
-    print(f"coverage        : {summary['coveragePercent']}%")
+    print(f"coverage        : {summary['coveragePercent']}%"
+          f" (basis: {summary.get('coverageBasis', 'unknown')};"
+          f" {summary.get('healthySamples', summary['samples'])} healthy of"
+          f" {summary['expectedSamples']} expected)")
+    error_count = summary.get("errorSamples", 0)
+    if error_count:
+        print(f"error samples   : {error_count} ({summary.get('errorPercent', 0)}%,"
+              f" allowed {summary.get('maxErrorPercent', 5)}%)")
+    windows = summary.get("unavailableWindows", [])
+    if windows:
+        total_h = round(sum(w["seconds"] for w in windows) / 3600.0, 2)
+        print(f"outage windows  : {len(windows)} from consecutive error samples, {total_h}h total")
+        for window in windows[:5]:
+            print(f"  {window['from']} -> {window['to']}  {window['seconds']}s"
+                  f"  ({window['errorSamples']} error samples)")
     print(f"status counts   : {summary['statusCounts']}")
     print(f"restarts        : {len(summary['restarts'])}   uptime regressions: {summary['uptimeRegressions']}")
     if summary["restarts"]:
@@ -438,6 +545,11 @@ def print_cumulative(summary: dict) -> None:
           f" silent-new={attribution_block.get('silentNewPayload', 0)}"
           f" silent-legacy={attribution_block.get('silentLegacyPayload', 0)}"
           f" rate={attribution_block.get('ratePercent', 100)}%")
+    print(f"error samples   : {summary.get('errorSamples', 0)}"
+          f" ({summary.get('errorPercent', 0)}%, allowed {summary.get('maxErrorPercent', 5)}%)"
+          f" — never counted as uptime")
+    print(f"allowed status  : {', '.join(summary.get('allowedStatus', ['healthy']))}"
+          f"   observed: {summary.get('statusCounts', {})}")
     print(f"sendFailures    : max {summary.get('sendFailuresMax', 0)}")
     print(f"host crashes    : {summary.get('hostCrashes', 0)}  (core dumps are outside the sample data;"
           f" verify with `coredumpctl list natter`)")
@@ -500,11 +612,19 @@ def summarise_cumulative(
     min_segment_hours: float,
     max_unexplained_percent: float,
     max_rss_drift_percent: float,
+    max_error_percent: float = 5.0,
+    allow_status: tuple[str, ...] = ("healthy",),
 ) -> dict:
     """Effective-runtime report: segments, gap attribution, RSS drift, verdict."""
-    samples = audit.samples
+    timeline = audit.samples
     tolerance = interval * 1.5
-    if not samples:
+    # Effective runtime may only be built from samples where the host actually answered. An error
+    # sample is a hole in time, not a unit of uptime (S1-10, requirement 5).
+    samples = [s for s in timeline if not s.is_error]
+    error_samples = [s for s in timeline if s.is_error]
+    error_percent = round(100.0 * len(error_samples) / len(timeline), 2) if timeline else 0.0
+
+    if not timeline:
         return {
             "mode": "cumulative",
             "result": "FAIL",
@@ -515,6 +635,22 @@ def summarise_cumulative(
             "unexplainedPercent": 0.0,
             "worstRssDriftPercent": None,
             "verdictReasons": ["no usable /health samples in the input"],
+        }
+    if not samples:
+        return {
+            "mode": "cumulative",
+            "result": "FAIL",
+            "effectiveSeconds": 0,
+            "effectiveHours": 0.0,
+            "segments": [],
+            "gapAttribution": {"unreachable": len(error_samples)},
+            "unexplainedPercent": 100.0,
+            "worstRssDriftPercent": None,
+            "errorSamples": len(error_samples),
+            "errorPercent": error_percent,
+            "verdictReasons": [
+                f"no healthy samples at all ({len(error_samples)} error samples) — nothing to accrue"
+            ],
         }
 
     # --- segments: a new segment starts whenever startedAt changes -------------------------
@@ -557,30 +693,62 @@ def summarise_cumulative(
             }
         )
 
-    # --- gaps between consecutive samples, regardless of segment boundaries ---------------
+    # --- gaps are computed on the timeline, error samples included ------------------------
     gaps: list[dict] = []
-    attribution_counts = {"host-down": 0, "host-restart": 0, "suspend-or-stall": 0, "unknown": 0}
+    attribution_counts = {
+        "host-down": 0,
+        "host-restart": 0,
+        "suspend-or-stall": 0,
+        "unreachable": 0,
+        "unknown": 0,
+    }
     unexplained_seconds = 0.0
-    for previous, current in zip(samples, samples[1:]):
-        delta = (current.at - previous.at).total_seconds()
-        if delta <= tolerance:
-            continue
-        attribution, detail = _classify_gap(previous, current, tolerance)
-        excess = delta - tolerance
+
+    def add_gap(previous: Sample | None, current: Sample | None, seconds: float, excess: float,
+                attribution: str, detail: dict, kind: str) -> None:
+        nonlocal unexplained_seconds
         attribution_counts[attribution] = attribution_counts.get(attribution, 0) + 1
         if attribution == "unknown":
             unexplained_seconds += excess
         gaps.append(
             {
-                "from": previous.at.isoformat(),
-                "to": current.at.isoformat(),
-                "seconds": int(delta),
+                "kind": kind,
+                "from": previous.at.isoformat() if previous is not None else None,
+                "to": current.at.isoformat() if current is not None else None,
+                "seconds": int(seconds),
                 "toleranceSeconds": int(tolerance),
                 "excessSeconds": int(excess),
                 "attribution": attribution,
                 "detail": detail,
             }
         )
+
+    for previous, current in zip(timeline, timeline[1:]):
+        delta = (current.at - previous.at).total_seconds()
+        if delta <= tolerance:
+            continue
+        if previous.is_error or current.is_error:
+            # We know the sampler could not reach the host; that is already an explanation.
+            add_gap(previous, current, delta, delta - tolerance, "unreachable",
+                    {"note": "one end of the gap is an unreachable sample"}, "sample-gap")
+            continue
+        attribution, detail = _classify_gap(previous, current, tolerance)
+        add_gap(previous, current, delta, delta - tolerance, attribution, detail, "sample-gap")
+
+    # A run of consecutive error samples is an outage window even without a time gap between
+    # samples: those samples did not measure any uptime.
+    window_run: list[Sample] = []
+    for sample in timeline + [None]:
+        if sample is not None and sample.is_error:
+            window_run.append(sample)
+            continue
+        if window_run:
+            span = (window_run[-1].at - window_run[0].at).total_seconds() + interval
+            add_gap(window_run[0], window_run[-1], span, span, "unreachable",
+                    {"errorSamples": len(window_run),
+                     "note": "consecutive unreachable samples; counted as outage, not uptime"},
+                    "unavailable-window")
+            window_run = []
 
     window_seconds = (samples[-1].at - samples[0].at).total_seconds()
     unexplained_percent = round(unexplained_seconds / window_seconds * 100.0, 2) if window_seconds > 0 else 0.0
@@ -593,7 +761,10 @@ def summarise_cumulative(
     worst_drift = max(drifts) if drifts else None
 
     # Reuse the wallclock summary for sendFailures / disconnect attribution / provider health.
-    base = summarise(audit, interval, max(int(tolerance), 900))
+    base = summarise(
+        audit, interval, max(int(tolerance), 900),
+        max_error_percent=max_error_percent, allow_status=allow_status,
+    )
     send_failures_max = max(
         (data.get("sendFailuresMax", 0) for data in base.get("upstreams", {}).values()), default=0
     )
@@ -640,6 +811,35 @@ def summarise_cumulative(
     if silent_new > 0:
         verdict_reasons.append(
             f"{silent_new} disconnect(s) without reason on the new payload (OBS-019 regression)"
+        )
+    if error_percent > max_error_percent:
+        verdict_reasons.append(
+            f"{len(error_samples)}/{len(timeline)} samples were unreachable/unparsable "
+            f"({error_percent}%, allowed {max_error_percent}%) — they cannot count as uptime"
+        )
+    elif error_samples:
+        notes.append(
+            f"{len(error_samples)}/{len(timeline)} samples were unreachable/unparsable "
+            f"({error_percent}%), under the {max_error_percent}% limit; excluded from effective runtime"
+        )
+    unreachable_windows = attribution_counts.get("unreachable", 0)
+    if unreachable_windows:
+        notes.append(
+            f"{unreachable_windows} unreachable outage window(s) counted as gaps "
+            f"(never as uptime); see gapAttribution"
+        )
+    status_counts_cum: dict[str, int] = {}
+    for sample in samples:
+        key = str(sample.raw.get("status", "unknown"))
+        status_counts_cum[key] = status_counts_cum.get(key, 0) + 1
+    disallowed_cum = {
+        status: count for status, count in status_counts_cum.items() if status not in allow_status
+    }
+    if disallowed_cum:
+        verdict_reasons.append(
+            "status not allowed in "
+            + ", ".join(f"{status}×{count}" for status, count in sorted(disallowed_cum.items()))
+            + f" (allowed: {', '.join(allow_status)})"
         )
     if worst_drift is None:
         notes.append("RSS drift: insufficient-data (need two samples with rssBytes in one segment)")
@@ -690,6 +890,11 @@ def summarise_cumulative(
             "ratePercent": attribution_rate,
         },
         "hostCrashes": 0,
+        "errorSamples": len(error_samples),
+        "errorPercent": error_percent,
+        "maxErrorPercent": max_error_percent,
+        "allowedStatus": list(allow_status),
+        "statusCounts": status_counts_cum,
         "verdictReasons": verdict_reasons,
         "notes": notes,
     }
@@ -705,11 +910,13 @@ def _fixture_rows(
 ) -> list[dict]:
     """Build one synthetic soak run: `payload` is "new" (reason fields) or "legacy" (no fields)."""
     start = dt.datetime(2026, 1, 1, tzinfo=dt.timezone.utc)
+    # Declare a run that matches the fixture length, so coverage is 100% and these fixtures test
+    # only what they are meant to test (disconnect attribution), not coverage.
     rows: list[dict] = [
         {
             "soakStart": start.isoformat(),
             "intervalSeconds": 300,
-            "durationSeconds": 86400,
+            "durationSeconds": max(samples - 1, 1) * 300,
             "port": 5099,
         }
     ]
@@ -741,6 +948,59 @@ def _fixture_rows(
                 "conversations": 0,
             }
         )
+    return rows
+
+
+def _timeline_fixture(
+    healthy: int,
+    errors: int = 0,
+    *,
+    interval: int = 300,
+    status: str = "healthy",
+    degraded_at: tuple[int, ...] = (),
+    error_positions: tuple[int, ...] = (),
+    header_duration: int | None = None,
+) -> list[dict]:
+    """Build a run with a mix of healthy and unreachable samples.
+
+    `error_positions` interleaves error rows at those absolute sample indexes; otherwise the error
+    rows come after the healthy ones (a host that died and stayed dead).
+    """
+    start = dt.datetime(2026, 3, 1, tzinfo=dt.timezone.utc)
+    total = healthy + errors
+    duration = header_duration if header_duration is not None else max(total - 1, 1) * interval
+    rows: list[dict] = [
+        {"soakStart": start.isoformat(), "intervalSeconds": interval,
+         "durationSeconds": duration, "port": 5099}
+    ]
+    error_set = set(error_positions) if error_positions else set(range(healthy, total))
+    for index in range(total):
+        at = start + dt.timedelta(seconds=interval * index)
+        if index in error_set:
+            rows.append({
+                "sampledAt": at.isoformat(),
+                "sampledWallClock": at.isoformat(),
+                "source": "loopback",
+                "error": "unreachable",
+                "httpCode": "000",
+            })
+            continue
+        row_status = "degraded" if index in degraded_at else status
+        rows.append({
+            "status": row_status,
+            "uptimeSeconds": interval * index,
+            "startedAt": start.isoformat(),
+            "sampledAt": at.isoformat(),
+            "upstreams": [{
+                "source": "discord:discord:1", "connected": True,
+                "reconnectCount": 0, "lastDisconnectAt": None, "lastError": None,
+                "sendFailures": 0,
+            }],
+            "providers": [{"id": "natter.feature.ai.deepseek#deepseek",
+                           "available": True, "supportTier": 1}],
+            "plugins": {"activated": 4, "failed": 0, "failures": []},
+            "conversations": 0,
+        })
     return rows
 
 
@@ -815,9 +1075,11 @@ def self_test() -> int:
     import tempfile
 
     failures = 0
+    assertions = 0
 
     def check(name: str, ok: bool, detail: str = "") -> None:
-        nonlocal failures
+        nonlocal failures, assertions
+        assertions += 1
         if ok:
             print(f"  ok   {name}")
         else:
@@ -833,8 +1095,10 @@ def self_test() -> int:
         finally:
             path.unlink(missing_ok=True)
 
-    def audit(rows: list[dict], interval: int = 300) -> dict:
-        return summarise(run_audit(rows), interval, 900)
+    def audit(rows: list[dict], interval: int = 300, **overrides) -> dict:
+        options = {"max_error_percent": 5.0, "allow_status": ("healthy",)}
+        options.update(overrides)
+        return summarise(run_audit(rows), interval, 900, **options)
 
     def audit_cumulative(rows: list[dict], interval: int = 3600, **overrides) -> dict:
         options = {
@@ -842,6 +1106,8 @@ def self_test() -> int:
             "min_segment_hours": 6.0,
             "max_unexplained_percent": 2.0,
             "max_rss_drift_percent": 20.0,
+            "max_error_percent": 5.0,
+            "allow_status": ("healthy",),
         }
         options.update(overrides)
         return summarise_cumulative(run_audit(rows), interval, **options)
@@ -972,10 +1238,67 @@ def self_test() -> int:
           summary["gapAttribution"]["host-restart"] == 1 and summary["gapAttribution"]["unknown"] == 0,
           summary["gapAttribution"])
 
+    # ---- S1-10 regressions ---------------------------------------------------------------
+    # 11. Dead host: 2 good samples then 20 unreachable ones, header declares a 24h run.
+    #     Before the fix this looked like 100% coverage because errors were dropped from the
+    #     timeline and the denominator used the observed span.
+    dead = _timeline_fixture(healthy=2, errors=20, header_duration=86400)
+    summary = audit(dead)
+    check("s1-10 dead-host: coverage uses the declared header",
+          summary["coverageBasis"] == "declared-header" and summary["expectedSamples"] == 289,
+          (summary["coverageBasis"], summary["expectedSamples"]))
+    check("s1-10 dead-host: error samples counted, not dropped",
+          summary["errorSamples"] == 20 and summary["samples"] == 22, summary["errorSamples"])
+    check("s1-10 dead-host: run fails instead of a fake PASS",
+          summary["result"] == "FAIL"
+          and any("unreachable/unparsable" in reason for reason in summary["reasons"]),
+          summary["reasons"])
+    check("s1-10 dead-host: outage window is reported as a gap",
+          len(summary["unavailableWindows"]) == 1
+          and any("outage window" in reason for reason in summary["reasons"]),
+          summary["unavailableWindows"])
+
+    # 12. A non-allowed status must fail even when every sample is present and healthy-looking.
+    degraded = _timeline_fixture(healthy=10, degraded_at=(3, 5, 7))
+    summary = audit(degraded)
+    check("s1-10 status: non-allowed status fails the run",
+          summary["result"] == "FAIL"
+          and any("status not allowed" in reason for reason in summary["reasons"]),
+          summary["reasons"])
+    check("s1-10 status: same data passes once the status is explicitly allowed",
+          audit(degraded, allow_status=("healthy", "degraded"))["result"] == "PASS",
+          audit(degraded, allow_status=("healthy", "degraded"))["reasons"])
+
+    # 13. Error share above the limit fails even when the timeline has plenty of samples.
+    flaky = _timeline_fixture(healthy=40, errors=3, error_positions=(5, 17, 29))
+    summary = audit(flaky)
+    check("s1-10 error share: above the limit is reported",
+          summary["errorPercent"] > 5.0
+          and any("unreachable/unparsable" in reason for reason in summary["reasons"]),
+          (summary["errorPercent"], summary["reasons"]))
+    check("s1-10 error share: below a raised limit it becomes a note, not a failure",
+          any("under the" in note for note in audit(flaky, max_error_percent=50)["notes"])
+          or audit(flaky, max_error_percent=50)["result"] == "PASS",
+          audit(flaky, max_error_percent=50).get("notes"))
+
+    # 14. Cumulative mode must not convert error samples into uptime.
+    dead_cumulative = _timeline_fixture(healthy=2, errors=20, header_duration=86400)
+    summary = audit_cumulative(dead_cumulative, interval=300, target_hours=0.01,
+                               min_segment_hours=0.0)
+    check("s1-10 cumulative: error samples are not uptime",
+          summary["effectiveHours"] < 0.2, summary["effectiveHours"])
+    check("s1-10 cumulative: unreachable gaps are attributed, not unknown",
+          summary["gapAttribution"].get("unreachable", 0) >= 1
+          and summary["gapAttribution"].get("unknown", 0) == 0, summary["gapAttribution"])
+    check("s1-10 cumulative: error share fails the run",
+          summary["result"] == "FAIL"
+          and any("unreachable/unparsable" in reason for reason in summary["verdictReasons"]),
+          summary["verdictReasons"])
+
     if failures:
         print(f"self-test FAILED ({failures} case(s))", file=sys.stderr)
         return 1
-    print("self-test passed (10 scenarios: 5 wallclock + 5 cumulative)")
+    print(f"self-test passed ({assertions} assertions; wallclock + cumulative + S1-10 fixtures)")
     return 0
 
 
@@ -1002,6 +1325,13 @@ def main(argv: list[str]) -> int:
                         help="cumulative: allowed share of unexplained gap time (default 2)")
     parser.add_argument("--max-rss-drift-percent", type=float, default=20.0,
                         help="cumulative: allowed worst-segment RSS growth (default 20)")
+    parser.add_argument("--max-error-percent", type=float, default=5.0,
+                        help="allowed share of unreachable/unparsable samples (default 5); "
+                             "error samples never count as coverage or uptime")
+    parser.add_argument("--allow-status", default="healthy",
+                        help="comma-separated health.status values that do not fail the run "
+                             "(default 'healthy'; Tier 1-only deployments may pass "
+                             "'healthy,degraded' and must say why in the record)")
     args = parser.parse_args(argv)
 
     if args.self_test:
@@ -1015,10 +1345,16 @@ def main(argv: list[str]) -> int:
         return 2
 
     audit = load(args.files)
+    allow_status = tuple(part.strip() for part in args.allow_status.split(",") if part.strip())
+    if not allow_status:
+        allow_status = ("healthy",)
 
     if args.mode == "cumulative":
         # The wallclock coverage/durationale rules do not apply: gaps are expected and attributed.
-        wallclock = summarise(audit, args.interval, args.max_gap)
+        wallclock = summarise(
+            audit, args.interval, args.max_gap,
+            max_error_percent=args.max_error_percent, allow_status=allow_status,
+        )
         cumulative = summarise_cumulative(
             audit,
             args.interval,
@@ -1026,6 +1362,8 @@ def main(argv: list[str]) -> int:
             args.min_segment_hours,
             args.max_unexplained_percent,
             args.max_rss_drift_percent,
+            max_error_percent=args.max_error_percent,
+            allow_status=allow_status,
         )
         summary = {
             **wallclock,
@@ -1043,7 +1381,10 @@ def main(argv: list[str]) -> int:
             print_cumulative(summary)
         return 0 if summary["result"] == "PASS" else 1
 
-    summary = summarise(audit, args.interval, args.max_gap)
+    summary = summarise(
+        audit, args.interval, args.max_gap,
+        max_error_percent=args.max_error_percent, allow_status=allow_status,
+    )
     summary["mode"] = "wallclock"
     # Coverage threshold is a policy knob; fold it into the verdict.
     if summary.get("samples", 0) and summary["coveragePercent"] < args.min_coverage:

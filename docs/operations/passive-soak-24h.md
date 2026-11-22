@@ -87,11 +87,14 @@ python3 scripts/soak-report.py /var/log/natter/soak-*.jsonl --interval 120
 
 | 字段 | 含义 |
 | --- | --- |
-| `coveragePercent` | 实际样本 / 期望样本（按 interval 推算） |
-| `gaps` | 相邻样本间隔 > 1.5×interval 的窗口，标记是否超过容差 |
+| `coveragePercent` | **健康样本** / 期望样本。分母优先取头部声明的 `durationSeconds / intervalSeconds`（`coverageBasis=declared-header`），没有头部才回退观测跨度（`coverageBasis=observed-span`，报告里会标注） |
+| `healthySamples` / `errorSamples` / `errorPercent` | 可解析样本、不可达/解析失败样本、error 占比（超过 `--max-error-percent`（默认 5）即判失败） |
+| `unavailableWindows[]` | 连续 error 样本构成的**不可用窗口**（起止、样本数、秒数）。error 样本进入时间线并计为故障窗，不再被丢弃 |
+| `gaps` | 相邻样本间隔 > 1.5×interval 的窗口，标记是否超过 `--max-gap`；`bordersErrorSample` 标出与 error 样本相邻的缺口 |
 | `restarts` | `startedAt` 变化次数（实例重启） |
+| `statusCounts` / `disallowedStatusCounts` | 状态分布；不在 `--allow-status`（默认 `healthy`）里的状态会计入结论 |
 | `upstreams.*.reconnects` | 累计重连次数（能正确处理重启后计数归零） |
-| `upstreams.*.samplesWithDisconnectButNoReason` | **OBS-019 命中数**：有断连时间无断连原因 |
+| `upstreams.*.silentDisconnects` | **OBS-019 命中数**：有断连时间无断连原因（新旧载荷分列） |
 | `sendFailuresMax` | 发送失败峰值 |
 | `result` | PASS / FAIL + 原因列表 |
 
@@ -153,12 +156,9 @@ python3 scripts/soak-report.py /var/log/natter/soak-*.jsonl \
 
 ### 3.1.5 示例输出（真实历史数据，缺 `bootId` 的老样本）
 
-> 下面这份数据是 2026-11-17 用**当时的 300s 采样周期**采到的，所以命令与输出里都是 `--interval 300`。
-> 新部署默认 120s，对历史文件审计时必须显式传该文件真实的采样间隔。
-
-
 ```text
-$ python3 scripts/soak-report.py artifacts/ops/tier1-run1/var/log/natter/soak-wake-2026-11-17.jsonl --interval 300 --mode cumulative
+$ python3 scripts/soak-report.py artifacts/ops/tier1-run1/var/log/natter/soak-wake-2026-11-17.jsonl \
+    --interval 300 --mode cumulative
 mode            : cumulative (effective runtime; gaps attributed, not fatal by themselves)
 effective       : 2.25h / target 24.0h   [SHORT]  (8100s)
 window          : 29 samples, 13.99h wall clock, interval 300s, tolerance 450s
@@ -168,21 +168,25 @@ gaps            : 2   host-down=0 host-restart=0 suspend-or-stall=2 unknown=0
    2026-11-18T03:06:50Z -> 2026-11-18T03:52:58Z  2767s   suspend-or-stall  (bootId missing; startedAt unchanged, ...)
 unexplained     : 0.0% (allowed 2.0%), 0s of excess gap time
 worst RSS drift : insufficient-data (allowed 20%)
-disconnects     : attributed=0 silent-new=0 silent-legacy=3 rate=0.0%
+error samples   : 0 (0.0%, allowed 5.0%) — never counted as uptime
+allowed status  : healthy   observed: {'healthy': 29}
 sendFailures    : max 0
 host crashes    : 0  (core dumps are outside the sample data; verify with `coredumpctl list natter`)
+  segment 0: 2026-11-17T14:13:29Z -> 2026-11-17T14:18:29Z  effective=0.08h  samples=2  rssDrift=n/a
+  segment 1: 2026-11-17T14:23:29Z -> 2026-11-17T14:38:29Z  effective=0.25h  samples=4  rssDrift=n/a
+  segment 2: 2026-11-17T14:43:29Z -> 2026-11-18T04:12:58Z  effective=1.92h  samples=23  rssDrift=n/a
 result          : FAIL
   - effective runtime 2.25h < target 24.0h
   - longest continuous segment 1.92h < required minimum 6.0h
-  note: 3 legacy disconnect(s) have no reason field (pre-OBS-019 payload) — counted for information, not as a failure
-  note: 2 restart(s) happened between samples (no gap to attribute); a host crash would look like this, so check `coredumpctl list natter` for core dumps
+  note: RSS drift: some segments had <2 rssBytes samples and are excluded from the worst-case
 ```
 
 读法：
 
 - 这份老数据没有 `bootId`/`rssBytes` → 缺口退回 `startedAt` 判定（`suspend-or-stall`，并标注 `bootId missing`），RSS 分项标 `insufficient-data`，**不抛异常**；
 - 时长自然不够（2.25h），所以 FAIL——新口径不会把老数据"洗白"；
-- `--json` 输出含 `mode / effectiveSeconds / effectiveHours / segments[] / gapAttribution / unexplainedPercent / worstRssDriftPercent / verdictReasons[]`，可直接进验收报告。
+- `error samples` / `allowed status` 两行是 S1-10 修复后新增的判定输入，老数据里分别是 `0` 与 `healthy`；
+- `--json` 输出含 `mode / effectiveSeconds / effectiveHours / segments[] / gapAttribution / unexplainedPercent / worstRssDriftPercent / verdictReasons[]`，另含 `errorSamples / errorPercent / unavailableWindows / statusCounts`，可直接进验收报告。
 
 ### 3.1.6 缺口归因规则（只看样本自身，不依赖 journal）
 
@@ -211,14 +215,70 @@ python3 scripts/soak-report.py /var/log/natter/soak-*.jsonl --interval 120   # �
 
 | 项 | 通过标准 |
 | --- | --- |
-| 采样覆盖 | ≥ 95%，且无单点缺口 > 360s |
-| 状态 | 全程 `healthy`（Tier 1-only 部署允许 `degraded`，但必须在记录中说明原因） |
+| 采样覆盖 | ≥ 95%，**分母按头部声明**（`durationSeconds/intervalSeconds`）；且无单点缺口 > `--max-gap`（默认 360s） |
+| error 样本 | `errorPercent ≤ --max-error-percent`（默认 5%）；不可达/解析失败样本**不计入覆盖**，连续 error 段记为不可用窗口 |
+| 状态 | 必须都在 `--allow-status`（默认 `healthy`）；Tier 1-only 部署若确有 `degraded`，需显式传 `--allow-status healthy,degraded` 并在记录中写明原因 |
 | 实例重启 | 0 次（计划内重启需在窗口外，或重开计时） |
 | `sendFailures` | 全程 0 |
-| Discord 断连 | 允许自动重连，但每次都要有归因（`lastError` 或日志行）；`silentDisconnects` 单独统计 |
+| Discord 断连 | 允许自动重连，但每次都要有归因（`lastDisconnectError/Code` 或日志行）；`silentDisconnects` 单独统计 |
 | Tier 1 provider | `available=true` 全程 |
 
 > `--interval` 必须与实际采样间隔一致，否则覆盖率会被算错。默认 120s，与 `natter-soak.timer` 的 `OnUnitActiveSec=2min` 一致。
+
+---
+
+### 3.3 error 样本与 status 的判定（两种模式共有）
+
+> 这一节对应审查报告 **S1-10**：旧实现有两条"假 PASS"路径 —— `error` 样本被 `continue` 跳过、覆盖率分母用"观测跨度"。
+
+| 规则 | 修复前（假 PASS 来源） | 现在 |
+| --- | --- | --- |
+| `error` 样本 | 直接丢弃，不进时间线 | 进入时间线；连续 error 段生成 `unavailableWindows[]`，计入原因，且**永不计为 uptime** |
+| 覆盖率分母 | 观测跨度 `last-first`，主机死 23h 只剩 2 个样本也能算 100% | 头部声明的 `durationSeconds/intervalSeconds`；无头部才回退观测跨度并标 `coverageBasis=observed-span` |
+| `errorSamples` | 只打印，不参与判定 | 计入 `errorPercent`，超 `--max-error-percent` 直接判失败 |
+| `status != healthy` | 只统计，不影响结论 | 不在 `--allow-status` 内即计入原因；`degraded` 需显式声明才放行 |
+| cumulative 模式 | 同上（error 被丢弃） | 分段只用健康样本（error 不贡献有效时长）；error 段在 `gapAttribution` 里记为 `unreachable`，不是 `unknown` |
+
+参数：
+
+```bash
+--max-error-percent 5          # 允许的 error 样本占比
+--allow-status healthy         # 允许的 status 列表，逗号分隔
+```
+
+命令示例：
+
+```bash
+# 严格（默认）
+python3 scripts/soak-report.py /var/log/natter/soak-*.jsonl --interval 120
+
+# Tier 1-only 部署：明确允许 degraded，并写明原因
+python3 scripts/soak-report.py /var/log/natter/soak-*.jsonl --interval 120 \
+  --allow-status healthy,degraded
+
+# 累计口径同样适用
+python3 scripts/soak-report.py /var/log/natter/soak-*.jsonl --interval 120 --mode cumulative
+```
+
+自检（含 S1-10 三条固定夹具）：
+
+```bash
+python3 scripts/soak-report.py --self-test
+# ok s1-10 dead-host: coverage uses the declared header
+# ok s1-10 dead-host: error samples counted, not dropped
+# ok s1-10 dead-host: run fails instead of a fake PASS
+# ok s1-10 dead-host: outage window is reported as a gap
+# ok s1-10 status: non-allowed status fails the run / passes once allowed
+# ok s1-10 error share: above the limit is reported / below a raised limit becomes a note
+# ok s1-10 cumulative: error samples are not uptime / unreachable gaps attributed / share fails
+# self-test passed (35 assertions; wallclock + cumulative + S1-10 fixtures)
+```
+
+真实历史数据的前后对比（同一份 `soak-once`）：
+
+| | 修复前 | 修复后 |
+| --- | --- | --- |
+| `soak-once`（1 个样本，头部声明 24h） | `expected=1` → coverage **100%** → **PASS（假绿）** | `expected=289`（声明口径）→ coverage **0.3%** → **FAIL** |
 
 ---
 
