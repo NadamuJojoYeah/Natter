@@ -2,7 +2,7 @@
 
 > **状态**：已决策（2026-11-22）· Prompt 层已迁移（2026-11-22）
 > **定位**：定义 Natter 对下游插件「负责什么、不负责什么」，并据此修订 Prompt Compiler 的 mandatory 语义。
-> **关联**：[Prompt Compiler](PROMPT_COMPILER.md)、[插件模型](PLUGIN_MODEL.md)、[Harness 架构](HARNESS_ARCHITECTURE.md)
+> **关联**：[Prompt Compiler](PROMPT_COMPILER.md)、[插件规范（NPS v1）](PLUGIN_SPEC.md)、[Harness 架构](HARNESS_ARCHITECTURE.md)
 
 ---
 
@@ -115,7 +115,7 @@ harness 应该提供**默认实现**，而不是**不可变约束**。
 
 ---
 
-## 6. Prompt Compiler 的迁移：mandatory → default-removable
+## 6. Prompt Compiler 的迁移：mandatory → default-removable（已完成）
 
 ### 6.1 迁移前（P1 历史实现，已移除）
 
@@ -130,8 +130,9 @@ PromptBundle.SafetyAppended 用于避免重复追加
 ```
 
 这套语义与 §0 的定位冲突：host 在为一段自己无法评估充分性的内容背书。
+（以上为历史记录；当前 `src/` 中已不存在 `Mandatory`/`CanDisable`/`SafetyAppended` 字段与 `prompt.mandatory_ignored` 诊断。）
 
-### 6.2 目标
+### 6.2 目标（已达成）
 
 ```text
 safety 是普通 fragment
@@ -188,19 +189,21 @@ planHash
 
 ---
 
-## 7. 迁移影响面
+## 7. 迁移影响面（已完成，2026-11-22 · `f8f17b2` / `8673e89`）
 
-| 面 | 影响 |
+> 下表是**已落地的事实**，不是待办清单。核对方式：`grep -rn "mandatory" src/` 只应命中注释或历史说明，不应命中任何契约字段。
+
+| 面 | 已落地的变化 |
 | --- | --- |
-| `PromptSafety.cs` | 移除 mandatory 片段定义、`Fit` 截断保底 |
-| `PromptCompilerContracts.cs` | 移除 `Mandatory` / `CanDisable`；`PromptBundle` 移除 `SafetyAppended` |
-| `PromptComposer.cs` | 移除 mandatory 注入、排序特权、预算预留、`prompt.mandatory_ignored` |
-| `DefaultContextImplementations.cs` | assembler 不再追加安全后缀；`host#static` preset 声明 safety 片段为普通片段 |
-| `PromptFragmentSource.cs`（P3 聚合器） | 不再以 `Mandatory` 作为拒绝条件（字段消失） |
-| 测试 | 「mandatory 不可关闭」类用例改写为「默认开、可关、关了仍能编译」 |
-| 文档 | `PROMPT_COMPILER.md` 的 §0 第 8 条、§4.2、§9、§17 相关表述修订 |
+| `PromptSafety.cs` | 已移除 mandatory 片段定义与 `Fit` 截断保底（现文件只剩变量替换、hash、fragment 合并等工具） |
+| `PromptCompilerContracts.cs` | 已移除 `Mandatory` / `CanDisable`；`PromptBundle` 已移除 `SafetyAppended` |
+| `PromptComposer.cs` | 已移除 mandatory 注入、排序特权、预算预留与 `prompt.mandatory_ignored` 诊断（该 warning 码在 `src/` 中已不存在） |
+| `DefaultContextImplementations.cs` | assembler 不再追加安全后缀；`host#static` preset 把 safety 声明为普通片段 |
+| `PromptFragmentSource.cs`（P3 聚合器） | 不再以 `Mandatory` 作为拒绝条件（字段已消失） |
+| 测试 | 「mandatory 不可关闭」类用例已改写为「默认开、可关、关了仍能编译」 |
+| 文档 | `PROMPT_COMPILER.md` 的 §0 第 8 条、§4.2、§9、§17 相关表述已修订 |
 
-### 7.1 需要重写的测试语义
+### 7.1 已重写的测试语义
 
 ```text
 旧：mandatory 片段无法被 disabled 列表移除

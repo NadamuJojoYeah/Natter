@@ -74,6 +74,8 @@ Natter 只交付**框架能力**：端口契约、组合根、插件加载、DI 
 
 ## 工程结构
 
+> **权威清单以 `Natter.slnx` 为准**：`dotnet sln Natter.slnx list`。本表按「层 / 用途」解释每个工程做什么，**不记录工程总数**（增删工程时同步本表即可，数字不再写死）。
+
 | 项目 | 层 | 内容 |
 | --- | --- | --- |
 | `src/Natter.Abstractions` | 内核 | DDD 基元、端口、事件/插件/组合契约 |
@@ -88,17 +90,28 @@ Natter 只交付**框架能力**：端口契约、组合根、插件加载、DI 
 | `src/Natter.Feature.Ai.DeepSeek` | AI responder | M.E.AI `IChatClient`、DeepSeek HTTP adapter、历史/并发/幂等与 `ai status` |
 | `src/Natter.Feature.Ai` | 共享 AI 边界 | `AiChatResponder`、`IAiContextAssembler`、`IAiConversationStore`、会话 gate |
 | `src/Natter.Chat.DingTalk` | 钉钉 transport | Stream WebSocket（gateway/ticket/ack/重连）+ callback parser + sessionWebhook 回复 |
-| `samples/Natter.Sample.Plugin.DingTalk` | 钉钉 NPS 插件 | `natter.transport.dingtalk` manifest/config/status |
 | `src/Natter.Feature.Ai.Spark` | 星火 provider | OpenAI-compatible `IChatClient` + shared responder |
-| `samples/Natter.Sample.Plugin.Memory` | memory.store 示例 | 最小 NPS memory 插件 + profile 选择 |
 | `src/Natter.Cli.Abstractions` | CLI 契约 | `IConsole`、命令/选项描述符、处理器 |
 | `src/Natter.Cli.Core` | CLI 内核 | 解析、注册表、内建命令、JSON/表格输出 |
 | `src/Natter.Cli` | 宿主 | Console 入口，发布为 `natter` / `natter.exe` |
 | `src/Natter.Hosting.Android` | 宿主 | `net10.0-android` Activity 宿主，嵌入示例插件 |
 | `samples/Natter.Sample.Plugin.Greetings` | 插件 | 覆盖 `IGreetingPort`、贡献 `greet` 命令、订阅事件 |
 | `samples/Natter.Sample.Plugin.Metrics` | 插件 | 独立消费 Rx 流、贡献 `metrics` 命令 |
-| `tests/Natter.Framework.Tests` | 测试 | xUnit 框架测试 |
-| `tests/Natter.Live.Tests` | 测试 | 可选 live 集成测试：真实 DeepSeek API、Discord 网关/REST、端到端与独立 CLI 部署 |
+| `samples/Natter.Sample.Plugin.Memory` | memory.store 示例 | 最小 NPS memory 插件 + profile 选择 |
+| `samples/Natter.Sample.Plugin.Discord` | Discord NPS 插件 | `natter.transport.discord` manifest/config/status，真实网关的 live 入口 |
+| `samples/Natter.Sample.Plugin.DingTalk` | 钉钉 NPS 插件 | `natter.transport.dingtalk` manifest/config/status |
+| `plugins/Natter.Plugin.PromptLibrary` | Prompt 插件 | prompt provider 插件：manifest 声明 `prompt.provider` + `cli.command`，运行时注册 `PromptLibraryProvider`；权限含只读文件与 `chat.read` |
+| `plugins/Natter.Plugin.WebConsole` | 管理面插件 | 只读诊断、配置编辑、受限命令台；独立 token、审计与诊断包导出 |
+| `plugins/Natter.Plugin.ConversationConsole` | 管理面插件 | 会话只读回放（`IConversationQuery`），审计不记消息正文 |
+| `plugins/Natter.Plugin.StateVitals` | 内容插件 | State & Vitals：断言态/vital/effects/trigger + pack 定义与 `states` CLI |
+| `plugins/Natter.Plugin.AiEmbedding.OpenAi` | AI 端口插件 | OpenAI 兼容 `/v1/embeddings` 的 `embedding.provider` 实现（测试用 fake handler） |
+| `tests/Natter.Framework.Tests` | 测试 | xUnit 框架测试（含插件契约、组合根、Admin 宿主契约等） |
+| `tests/Natter.Live.Tests` | 测试 | 可选 live 集成测试：真实 DeepSeek/Spark/Discord/钉钉、端到端与独立 CLI 部署（见 [联调方案](docs/LIVE_TEST_PLAN.md)） |
+| `tests/Natter.Plugin.PromptLibrary.Tests` | 测试 | Prompt Library 插件单测 |
+| `tests/Natter.Plugin.WebConsole.Tests` | 测试 | WebConsole 插件单测 + Phase 2/3 验收 + UI 渲染 harness |
+| `tests/Natter.Plugin.ConversationConsole.Tests` | 测试 | 会话控制台插件单测（认证、只读、审计、静态资源） |
+| `tests/Natter.Plugin.StateVitals.Tests` | 测试 | State & Vitals 插件单测（内核、pack 校验、CLI） |
+| `tests/Natter.Plugin.AiEmbedding.OpenAi.Tests` | 测试 | embedding 插件单测（请求体形状、认证、错误映射，不联网） |
 
 ## 快速开始
 
@@ -146,8 +159,8 @@ Domain events observed by the metrics plugin: 3
 natter <command> [arguments] [options]
 ```
 
-| 命令 | 说明 |
-| --- | --- |
+| 命令 | 说明 | 示例 |
+| --- | --- | --- |
 | `version [--json]` | 框架、运行时、RID、OS 信息 |
 | `doctor [--json]` | 组合结果：插件、端口适配器、事件总线、命令数 |
 | `ports [--port <过滤>] [--json]` | 端口 → 适配器绑定（含插件覆盖） |
@@ -170,7 +183,7 @@ natter <command> [arguments] [options]
 | `serve [--duration <s>] [--json]` | 长驻 host；加载 profile/upstream，等待取消或到时退出 |
 | `health [--json] [--offline]` | upstream/profile/provider/plugin/会话健康快照；`--offline` 不启动 gateway |
 | `remember <text> [--scope]` | 显式、用户确认的长期记忆 | `remember "likes tea" --scope user --source ...` |
-| `forget <id|text>` | 删除显式记忆并失效 summary | `forget "likes tea"` |
+| `forget <id\|text>` | 删除显式记忆并失效 summary | `forget "likes tea"` |
 | `memory list [--limit]` | 查看当前 source/conversation/actor 可见记忆 | `memory list --json` |
 | `memory export [--output]` | 导出当前 scope memory（文件 0600） | `memory export --output memory.json` |
 | `memory import --file` | 导入并校验 scope/schema | `memory import --file memory.json` |

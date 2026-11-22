@@ -81,6 +81,16 @@
 | 2026-11-18 | [P5 验收报告](2026-11-18-p5-acceptance-report.md) | /task 主链路、组件、工具契约、health、安全矩阵 | **Go（scope：/task）**：264/264；真实 `/task` 通过；`/status`/`/cancel` 待补 |
 | 2026-11-18 | [WebConsole 测试报告](2026-11-18-webconsole-test-report.md) | 认证/CSRF/静态/CSP/snapshot/配置校验/命令策略 | **Phase 1 Go**；Phase 2/3 仍 501；3 Medium 已关闭 |
 | 2026-11-21 | [P5 + WebConsole 修复复测](2026-11-18-p5-webconsole-retest.md) | schema、router wiring、真实 `/task`、WebConsole 3 Medium | **P5 Go（/task）**；**WebConsole Phase 1 Go**；Phase 2/3 仍 501 |
+| 2026-11-21 | [P5 遗留缺口回归](2026-11-21-p5-followup-regression.md) | `/status` `/tasks` `/cancel`、lease 续租/过期、重启幂等与结果只发一次、工具安全矩阵、Tier 2 降级、metrics | **Go（自动化部分）**；真实 Discord 命令面与人机回归待人工 |
+| 2026-11-21 | [WebConsole Phase 2/3 独立验收](2026-11-21-webconsole-phase23-acceptance.md) | `/api/config/*` 保存/备份/回滚、ETag 与并发写、符号链接、`/api/commands` 受限执行、审计与脱敏、Phase 1 回归 | **Go**：真实落盘与受限执行通过，Phase 2/3 全路径无 501，Phase 1 无回归 |
+| 2026-11-22 | [最终 6 项 S1 独立验收](2026-11-22-final-s1-acceptance.md) | S1-01…S1-10 修复合集的独立复核 + 网关看门狗只读核验 | **通过**：新增验收连跑全绿，Framework 全量无回归（数字见记录） |
+| 2026-11-22 | [P5.3 task UX 验收](2026-11-22-p5-task-ux-acceptance.md) | `ITaskStore.AppendEventAsync`、`TaskTracePayload` 白名单、`/status` `/tasks` `/cancel`、`TaskMetrics` 新字段 | **通过**；另记录 1 个**既有**重放缺陷（非 P5.3 引入），建议单独立项 |
+| 2026-11-22 | [审查修复独立验收](2026-11-22-review-acceptance.md) | S1-01/02/04/08/09/10 + task-29 的独立复核（含隔离端到端现场） | **通过**：Framework 全量无回归（数字见记录） |
+| 2026-11-22 | [S2 第一批独立验收](2026-11-22-s2-batch1-acceptance.md) | 插件包与 store、任务运行时、Satori + AI、钉钉 + Discord、CLI + 运维、签名规范（全部反向/边界断言） | **通过**；注意 Release 必须先重建再 `--no-build` 执行 |
+| 2026-11-22 | [S2 第二批独立验收](2026-11-22-s2-batch2-acceptance.md) | task-45/46/47/48 的 23 项反向验证（并发预留、判重窗口、分片续传、权限治理、安装后完整性等） | **通过**；3 处断言按产品实际语义调整，2 处覆盖缺口见记录 §0.3 |
+| 2026-11-22 | [S2 测试与文档质量](2026-11-22-s2-test-quality-acceptance.md) | F1 harness ETag 对拍、F2 预算断言、F3 串行化、F5 超时/blame-hang、F6 覆盖、F7 三文件合并、F8/F9 文档口径 | **已修**（F4 归 WebConsole）；明细见记录 |
+
+> **索引以文件为准**：本表是导读，不是清单的唯一来源。核对命令：`ls docs/testing/*.md`（归档记录在 `docs/testing/archive/`）。新增记录时同步本表一行。
 
 ## 5. 相关文档
 

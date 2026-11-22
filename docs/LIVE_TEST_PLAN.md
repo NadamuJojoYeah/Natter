@@ -51,6 +51,11 @@
 | L3c 真实入站 E2E | `RealInboundMentionLiveTests` | Gateway 入站 + orchestrator + DeepSeek + REST | 真实 `MESSAGE_CREATE`（REST 发送，`allowed_mentions` 含 bot）→ mapper → mention 门控 → 真实 AI 回复；专门覆盖 BUG-003 类盲区 | 1 |
 | L4 部署 | `DeploymentCliLiveTests` | 独立 CLI 进程 + 文件插件 + 环境 secret | 插件布局加载、`upstreams`/`discord status`/`ai status`、缺 secret 诊断 | 5 |
 | L5 人工闸门 | `ManualGateLiveTests` | 真人 + 全链路 | 人类消息触发 AI 回复（`NATTER_LIVE_MANUAL=1`） | 1（默认 skip） |
+| L6 钉钉 Stream | `DingTalkStreamLiveTests` | 真实钉钉 gateway | Stream 建连/挂载/正常断开、错误 client secret → 401 且不泄漏 | 2 |
+| L7 星火 MaaS | `SparkLiveTests` | 真实讯飞 Spark API | `/models`、thinking 开关与 reasoning 隔离、无效 key、未知模型、不可达端点、3 并发 | 7 |
+| L8 记忆召回 | `MemoryRecallLiveTests`、`MemoryRecallLifecycleLiveTests` | Gateway + DeepSeek + REST | 显式记忆被真实回复召回、`forget` 后不再召回、重启后记忆仍可召回 | 3 |
+
+> **数量口径**：本表「数量」按**测试方法数**计。当前共 **40 个方法**（来源：`tests/Natter.Live.Tests/` 下 `[LiveFact]`/`[DeepSeekLiveFact]`/`[DiscordLiveFact]`/`[SparkLiveFact]`/`[DingTalkLiveFact]`/`[ManualLiveFact]`/`[LiveE2EFact]` 特性逐条计数，2026-11-22 核对）。该套件**没有 `Theory`**，因此「方法数 = 展开后的用例数」；若将来加入 `Theory`，需在记录里分别写明两个数。数字会随用例增删变化，**以源码计数为准**（`grep -rE '\[[A-Za-z0-9]*Live[A-Za-z0-9]*(Fact|Theory)' tests/Natter.Live.Tests | wc -l`），不要长期引用本表数字。
 
 设计要点：
 
@@ -106,8 +111,12 @@ scripts/live-test.sh discord    # 网关 + REST + upstream
 scripts/live-test.sh ingress    # 真实入站映射
 scripts/live-test.sh e2e        # 端到端（真实 AI + 真实发送）
 scripts/live-test.sh deploy     # 独立 CLI 进程
+scripts/live-test.sh spark      # 星火 MaaS 真实 API
+scripts/live-test.sh dingtalk   # 钉钉 Stream 真实握手
 scripts/live-test.sh manual     # 人工闸门，需人在频道 @bot
 ```
+
+> **记忆召回用例（L8）没有独立分层入口**：`scripts/live-test.sh` 目前只定义 `deepseek/discord/ingress/e2e/deploy/spark/dingtalk/manual` 与 `all`。要单独跑 L8，用 `scripts/live-test.sh all` 或直接 `dotnet test tests/Natter.Live.Tests --filter "FullyQualifiedName~MemoryRecall"`。若希望它有独立入口，需要改脚本（不在本文档范围内）。
 
 未设置 `NATTER_LIVE=1` 时，全部 live 用例以 `Skipped` 出现在报告中，离线 `dotnet test` 不受影响。CI 不配置凭据即可保持绿色。
 

@@ -18,6 +18,8 @@
 | **不值得修** | **10** | 技术成立，但收益极低或与既有设计冲突 |
 | 合计 | 45 | |
 
+> **更新（2026-11-22 · 批次 A 执行后）**：S3-37/38/39/40/41/43/44/45 共 8 项已落地文档修复（见 §8），§1 表中这 8 行判定已改为「已修（批次 A · 工作区未提交）」。当前分布：已修 9 / 仍成立 22 / 记录过期 4（S3-07/20/28/32，属报告时点判断问题）/ 不值得修 10。
+
 一句话：**45 项里没有一个是“必须马上修”的核心链路缺陷**。真正值得投入的是「文档对齐」（7 项，零运行时风险）和「回复分片/时间戳」（4 项，唯一影响用户体验的代码项）。CLI/脚本/部署的 17 项适合打包成一次运维向整修，与业务代码零冲突。
 
 ---
@@ -73,7 +75,7 @@
 | S3-26 | `stage-tier1-plugins.sh` 硬编码 TFM | 仍成立 | `scripts/stage-tier1-plugins.sh:161`：`bin_dir="$ROOT/$(dirname "$project")/bin/$CONFIGURATION/net10.0"`。TFM 升级（net11.0）或 RID 特定输出时静默找不到产物。修复：从 `$(dotnet msbuild -getProperty:TargetFramework …)` 读，或用 `bin/$CONFIGURATION/net*` glob 并断言唯一命中。lead 已确认此条。 |
 | S3-27 | `webconsole-e2e.sh` 60s 预算与端口占用 | 仍成立（低） | `scripts/webconsole-e2e.sh:95`：`serve --duration 60` 写死，整套矩阵（构建 + 20+ 断言 + rollback）必须挤进 60s；`:14-15` 端口有 env 覆盖（`WEBCONSOLE_E2E_PORT`/`WEBCONSOLE_E2E_HEALTH_PORT`），但仍无占用预检 → 残留进程只表现为 “console did not start”。 |
 | S3-28 | 脚本权限位不齐 | 记录过期 | HEAD 的 `git ls-files -s scripts/`：18 个 `100755`，唯一 `100644` 是 `scripts/publish.ps1`（PowerShell 不需要执行位，正确）。报告写“不齐”时的问题已不存在。 |
-| S3-29 | `shellcheck` 白名单只覆盖新脚本 | 仍成立 | `.github/workflows/deploy-verify.yml:60-71` 的 `files=(…)` 只列 **8 个**（`deploy/docker/verify-image.sh`、`deploy/systemd/{install,verify}.sh`、`scripts/{stage-tier1-plugins,soak-sample,ops-health-alert,discord-egress-probe,rotate-secret}.sh`）。仓库共 19 个 `.sh`，`webconsole-e2e.sh`、`natter-backup.sh`、`live-*.sh`、`p2-*.sh` 等 11 个从未被 shellcheck。修复：`files=($(git ls-files '*.sh' | grep -v '^build/'))`。 |
+| S3-29 | `shellcheck` 白名单只覆盖新脚本 | 仍成立 | `.github/workflows/deploy-verify.yml:60-71` 的 `files=(…)` 只列 **8 个**（`deploy/docker/verify-image.sh`、`deploy/systemd/{install,verify}.sh`、`scripts/{stage-tier1-plugins,soak-sample,ops-health-alert,discord-egress-probe,rotate-secret}.sh`）。仓库共 19 个 `.sh`，`webconsole-e2e.sh`、`natter-backup.sh`、`live-*.sh`、`p2-*.sh` 等 11 个从未被 shellcheck。修复：`files=($(git ls-files '*.sh' \| grep -v '^build/'))`。 |
 | S3-30 | `deploy-verify` 未固定 action SHA | 仍成立（供应链·低） | `.github/workflows/deploy-verify.yml:49,128`：`uses: actions/checkout@v5`；`:187`：`uses: actions/upload-artifact@v5`。tag 可被上游重指，未固定 `@<40位SHA>`。 |
 
 ### 1.5 部署（6）
@@ -91,15 +93,15 @@
 
 | ID | 项 | 判定 | 证据 / 理由 |
 | --- | --- | --- | --- |
-| S3-37 | 2 个失效相对链接 | 仍成立（文档） | `docs/HARNESS_RESPONSIBILITY.md:5` → `[插件模型](PLUGIN_MODEL.md)`，`docs/PLUGIN_MODEL.md` 不存在；`docs/P2_RUNTIME_PROFILE.md:9` → `[P2 验收处置](testing/2026-11-15-p2-acceptance-response.md)`，该文件不存在（现有的是 `2026-11-15-p4-acceptance-response.md`）。 |
-| S3-38 | README 命令表未转义 `\|` | 仍成立（文档） | `README.md:173`：`` | `forget <id|text>` | 删除显式记忆并失效 summary | … | `` —— 单元格内的 `\|` 被当成列分隔符，该行渲染多出一列。修复：`<id\|text>`（反斜杠转义）。 |
-| S3-39 | README 工程表缺插件/测试工程 | 仍成立（文档） | `README.md:94-101` 只列到 `tests/Natter.Live.Tests`。`Natter.slnx` 有 **30** 个工程，README 缺：`plugins/Natter.Plugin.{PromptLibrary,WebConsole,ConversationConsole}`（3）、`tests/Natter.Plugin.{PromptLibrary,WebConsole,ConversationConsole}.Tests`（3）、`samples/Natter.Sample.Plugin.{Memory,Discord,DingTalk}`（3）。原报告说“缺 2+2”，实际缺口更大。 |
-| S3-40 | `docs/testing/README.md` 索引缺记录 | 仍成立（文档） | 该索引未收录 **7** 份现存记录：`2026-11-21-p5-followup-regression.md`、`2026-11-21-webconsole-phase23-acceptance.md`、`2026-11-22-final-s1-acceptance.md`、`2026-11-22-p5-task-ux-acceptance.md`、`2026-11-22-review-acceptance.md`、`2026-11-22-s2-batch1-acceptance.md`、`2026-11-22-s2-test-quality-acceptance.md`。 |
-| S3-41 | `DEVELOPMENT.md` 的 `ReferenceOutputAssembly` 机制不存在 | 记录过期 | `docs/DEVELOPMENT.md:705` 声称测试工程用 `ProjectReference … ReferenceOutputAssembly="false"` + MSBuild `Copy`；实际 `tests/Natter.Framework.Tests/Natter.Framework.Tests.csproj:26-56` 是**普通 ProjectReference + `CopyTestPlugins` 目标**，全仓无 `ReferenceOutputAssembly`。文档描述与实现不符 → 改文档。 |
+| S3-37 | 2 个失效相对链接 | **已修（批次 A · 工作区未提交，见 §8）** | 原链接（已改，路径用代码格式记录以免检查器误报）：`docs/HARNESS_RESPONSIBILITY.md:5` 指向 `PLUGIN_MODEL.md`（不存在）→ 已改为 `PLUGIN_SPEC.md`；`docs/P2_RUNTIME_PROFILE.md:9` 指向 `testing/2026-11-15-p2-acceptance-response.md`（不存在，该记录已归档到 `testing/archive/`）→ 已改为 `testing/archive/2026-11-15-p2-acceptance-response.md`。**清单建议的 `testing/2026-11-15-p4-acceptance-response.md` 是 P4 记录，主题不符，未采用。** |
+| S3-38 | README 命令表未转义 `\|` | **已修（批次 A · 工作区未提交，见 §8）** | 原文为 `` \| `forget <id\|text>` \| 删除显式记忆并失效 summary \| … \| `` —— 单元格内的裸 `\|` 被当成列分隔符，该行渲染多出一列。修复：`<id\|text>`（反斜杠转义）；同表另补了缺失的「示例」表头列。 |
+| S3-39 | README 工程表缺插件/测试工程 | **已修（批次 A · 工作区未提交，见 §8）** | `README.md:94-101` 只列到 `tests/Natter.Live.Tests`。**【批次 A 复核修正】** 上文「30 个工程 / 缺 samples Memory·Discord·DingTalk」不准确：当时 `Natter.slnx` 实为 **34** 个工程；Memory 与 DingTalk 本来就在表里，samples 只缺 Discord。实际缺口 **11** 个 = plugins 5（PromptLibrary、WebConsole、ConversationConsole、StateVitals、AiEmbedding.OpenAi）+ tests 5 + samples 1（Discord）。 |
+| S3-40 | `docs/testing/README.md` 索引缺记录 | **已修（批次 A · 工作区未提交，见 §8）** | 该索引未收录 **7** 份现存记录：`2026-11-21-p5-followup-regression.md`、`2026-11-21-webconsole-phase23-acceptance.md`、`2026-11-22-final-s1-acceptance.md`、`2026-11-22-p5-task-ux-acceptance.md`、`2026-11-22-review-acceptance.md`、`2026-11-22-s2-batch1-acceptance.md`、`2026-11-22-s2-test-quality-acceptance.md`。**【批次 A 复核修正】** 实际缺 **8** 份：上述 7 份 + 期间新交付的 `2026-11-22-s2-batch2-acceptance.md`。 |
+| S3-41 | `DEVELOPMENT.md` 的 `ReferenceOutputAssembly` 机制不存在 | **已修（批次 A · 工作区未提交，见 §8）** | `docs/DEVELOPMENT.md:705` 声称测试工程用 `ProjectReference … ReferenceOutputAssembly="false"` + MSBuild `Copy`；实际 `tests/Natter.Framework.Tests/Natter.Framework.Tests.csproj:26-56` 是**普通 ProjectReference + `CopyTestPlugins` 目标**。**【批次 A 复核修正】** 上文「全仓无 `ReferenceOutputAssembly`」不准确：该属性确实存在，但只在 `src/Natter.Cli/Natter.Cli.csproj:23,25`（CLI 引用示例插件，仅为构建顺序）。结论（文档描述与测试工程实现不符）不变。 |
 | S3-42 | `scripts/test.sh` 只跑一个套件 | 仍成立（低） | `scripts/test.sh:8` 只跑 `tests/Natter.Framework.Tests`。CI 已遍历全部 4 个套件（S1-09 修复），但本地/手工入口仍只覆盖 1/4，容易本地全绿而插件套件红。 |
-| S3-43 | `LIVE_TEST_PLAN` 漏用例 | 仍成立（文档） | 实测 live 测试 **31** 个（`[LiveFact]`/`[DeepSeekLiveFact]`/`[DiscordLiveFact]`/…），`docs/LIVE_TEST_PLAN.md` §5 只列约 24 个 → 漏 **7** 个（原报告说 12 个，缺口已缩小）。 |
-| S3-44 | `HARNESS_RESPONSIBILITY` 的 mandatory 迁移未落地 | 记录过期（文档项） | 代码已迁移：`src/Natter.Application/Chat/Context/PromptSafety.cs` 与 `PromptCompilerContracts.cs` 已无 `mandatory`/`Mandatory`（`f8f17b2`，2026-11-22 13:20，**早于报告**）。文档 `docs/HARNESS_RESPONSIBILITY.md:4,118,127` 仍是“待迁移”口吻（含 `prompt.mandatory_ignored` warning 的旧行为描述）。lead 已知项，确认：**代码对、文档错**。 |
-| S3-45 | OBS-4 已修复但记录未更新 | 记录过期（文档项） | 代码已拒绝 allowlist 内的私网：`src/Natter.Application/Chat/Tools/HttpFetchTool.cs:32,122,139,169`（`IsBlockedAddress` → `address_not_allowed`），由 `d9f47ba`（2026-11-21 18:01，早于报告）引入，并有测试覆盖。`docs/testing/2026-11-21-p5-followup-regression.md:22,72` 仍写“allowlist 内私网仍可访问（OBS-4）”。lead 已知项，确认：**代码对、文档错**。 |
+| S3-43 | `LIVE_TEST_PLAN` 漏用例 | **已修（批次 A · 工作区未提交，见 §8）** | 实测 live 测试 **31** 个（`[LiveFact]`/`[DeepSeekLiveFact]`/`[DiscordLiveFact]`/…），`docs/LIVE_TEST_PLAN.md` §5 只列约 24 个 → 漏 **7** 个（原报告说 12 个，缺口已缩小）。**【批次 A 复核修正】** 31 偏少：漏算了 `[LiveE2EFact]`（6）。按方法数实为 **40** 个，§2 表已补 L6 钉钉 2 / L7 星火 7 / L8 记忆 3，并写明「方法数 = 展开数（无 Theory）」口径。 |
+| S3-44 | `HARNESS_RESPONSIBILITY` 的 mandatory 迁移未落地 | **已修（批次 A · 工作区未提交，见 §8）** | 代码已迁移：`src/Natter.Application/Chat/Context/PromptSafety.cs` 与 `PromptCompilerContracts.cs` 已无 `mandatory`/`Mandatory`（`f8f17b2`，2026-11-22 13:20，**早于报告**）。**【批次 A 复核修正】** 上文「文档 :4,118,127 仍是待迁移口吻」**不成立**：`8673e89`「docs: 记录 mandatory 迁移完成」（13:20）早于复核基线 `eadcd77`（18:43），文档当时已是 `状态：Prompt 层已迁移`、§6.1 标注「迁移前（已移除）」。唯一残留是 §7「迁移影响面」用计划式动词 → 已改为已完成事实。 |
+| S3-45 | OBS-4 已修复但记录未更新 | **已修（批次 A · 工作区未提交，见 §8）** | 代码已拒绝 allowlist 内的私网：`src/Natter.Application/Chat/Tools/HttpFetchTool.cs:32,122,139,169`（`IsBlockedAddress` → `address_not_allowed`），由 `d9f47ba`（2026-11-21 18:01，早于报告）引入，并有测试覆盖。`docs/testing/2026-11-21-p5-followup-regression.md:22,72` 仍写“allowlist 内私网仍可访问（OBS-4）”。lead 已知项，确认：**代码对、文档错**。 |
 
 ---
 
@@ -208,3 +210,33 @@
   sed -n '169,171p' scripts/soak-sample.sh
   sed -n '52,57p' src/Natter.Cli.Core/Logging/CliLoggerProvider.cs
   ```
+
+---
+
+## 8. 批次 A（文档对齐 8 项）执行结果 · 2026-11-22
+
+8 项全部落地，**零代码改动、零构建影响**。工作区未提交（按任务约束未 commit/push），因此下面用「文件:行」而不是 commit sha 定位；后续提交后可把 §1 的「已修（批次 A）」替换为 sha。
+
+| ID | 改动位置（改后） | 核实到的事实 |
+| --- | --- | --- |
+| S3-37 | `docs/HARNESS_RESPONSIBILITY.md:5`（`PLUGIN_MODEL.md` → `PLUGIN_SPEC.md`）；`docs/P2_RUNTIME_PROFILE.md:9`（→ `testing/archive/2026-11-15-p2-acceptance-response.md`） | 两处目标均 `test -f` 通过。**清单建议的替代目标 `testing/2026-11-15-p4-acceptance-response.md` 主题不符**（那是 P4 记录）；真正对口的 P2 处置记录已归档在 `testing/archive/` |
+| S3-38 | `README.md:186`：`forget <id\|text>` | 同表表头从 `\| 命令 \| 说明 \|` 补成 `\| 命令 \| 说明 \| 示例 \|`——原表 9 行有 3 个单元格、表头只有 2 列（清单外漂移） |
+| S3-39 | `README.md` §工程结构（整表重写 + 顶部「以 `Natter.slnx` 为准」说明） | 按 `Natter.slnx` 全量重核：当时 34 个工程，README 实缺 **11** 个。清单说「缺 samples Memory/Discord/DingTalk」**不准确**——Memory 与 DingTalk 本来就在表里，samples 只缺 Discord。改用脚本核对 34/34 全覆盖，且**不写死工程总数** |
+| S3-40 | `docs/testing/README.md` 记录索引（+8 行 + 防漂移说明） | 实测缺 **8** 份：清单的 7 份 + qa 同期交付的 `2026-11-22-s2-batch2-acceptance.md`。补后索引覆盖 `docs/testing/*.md` 全部记录（42 条链接，含归档） |
+| S3-41 | `docs/DEVELOPMENT.md` §6.4（改为三种实际布局的对照表） | 实际机制：框架测试 = 普通 `ProjectReference` + `CopyTestPlugins`（只 stage Greetings 的 dll + `plugin.json`）；插件测试 = `ProjectReference` +（按需）`<None Include … Link=…>` 摆到输出目录，**Link 目录名各工程不统一**；`ReferenceOutputAssembly="false"` **只存在于** `src/Natter.Cli/Natter.Cli.csproj:23,25` |
+| S3-43 | `docs/LIVE_TEST_PLAN.md` §2（补 L6/L7/L8 + 口径说明）、§4（补 `spark`/`dingtalk` 入口与 L8 说明） | 实测 **40 个 live 测试方法**（清单 31 偏少：漏 `[LiveE2EFact]` 6、`[DingTalkLiveFact]` 2、`[SparkLiveFact]` 7 等）。口径写明「按方法数计；该套件无 `Theory`，故方法数 = 展开数」，并给源码计数命令。表内数字会漂移 → 正文已声明「以源码计数为准」 |
+| S3-44 | `docs/HARNESS_RESPONSIBILITY.md` §6/§6.1/§6.2/§7/§7.1（改为已完成事实） | **复核结论与清单不同**：文档在复核基线 `eadcd77` 时就已是新事实——`8673e89`「docs: 记录 mandatory 迁移完成」（13:20）是 `eadcd77`（18:43）的**祖先**。本次只把 §7「迁移影响面」由计划式改为已落地，并注明 `grep -rn mandatory src/` 只剩 1 条注释 |
+| S3-45 | `docs/testing/2026-11-21-p5-followup-regression.md:22,72,180,206` | 过期表述实际 **4 处**（清单只列 2 处）。修复提交 `d9f47ba`；用例已改名并反转断言：`P5FollowupTests.Http_fetch_private_metadata_host_is_rejected_even_when_allowlisted`（`P5FollowupTests.cs:517`）、`ToolContractTests.Http_fetch_rejects_private_and_metadata_literals_without_a_request` |
+
+### 8.1 清单之外发现的文档漂移
+
+1. `docs/P2_RUNTIME_PROFILE.md:9`「当前结论：No-Go；4 个 High 待修」与归档记录矛盾（归档为 **Closed · Go**，4 High 复测通过）→ 已随 S3-37 同一行修正。
+2. `README.md` CLI 命令表表头缺「示例」列（9 行有 3 个单元格）→ 已补列。
+3. `docs/LIVE_TEST_PLAN.md` §4 缺 `spark`/`dingtalk` 分层入口，而 `scripts/live-test.sh:47-48` 已支持 → 已补文档。
+4. **L8 记忆召回 3 个 live 用例没有任何脚本分层入口**（`scripts/live-test.sh` 无 memory 目标），只能 `all` 或手写 `--filter`。修法要改 `scripts/`，不在批次 A 范围 → 建议并入批次 C。
+5. `docs/testing/README.md` 索引中 `2026-11-18-p5-webconsole-retest.md` 的日期列写 `2026-11-21`，与其余「按文件名日期」的口径不一致；未改，仅记录。
+6. `docs/DEVELOPMENT.md` §6.4 还漏了「插件测试直接读 `plugin.json`/`wwwroot`」这一实际机制（清单只提 `ReferenceOutputAssembly` 一条）→ 已改成三种布局对照，并注明各工程 `Link` 目录名不统一（`plugin-package/`、`plugin-assets/`、扁平），以各自 csproj 为准。
+
+### 8.2 更新后的判定分布
+
+批次 A 落地后：**已修 9**（S3-18 + 批次 A 的 8 项）、**仍成立 22**、**记录过期 4**（S3-07/20/28/32，属「报告写作时点已修/判断有误」，非文档待改）、**不值得修 10**，合计 45。下一步建议按 §5 批次 B（回复质量与安全）推进，其中 `ChatTextChunker` 需单独提交 + 全量回归。

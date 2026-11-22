@@ -702,7 +702,17 @@ Assert.Single(received);
 
 ### 6.4 插件测试
 
-测试项目通过 `ProjectReference ... ReferenceOutputAssembly="false"` + MSBuild `Copy` 目标把插件复制到 `$(OutDir)plugins/`（参考 [测试 csproj](../tests/Natter.Framework.Tests/Natter.Framework.Tests.csproj)），然后用真实目录构建宿主：
+插件相关测试有三种**实际在用**的布局，按用途选，不要混：
+
+| 场景 | 工程 | 机制 |
+| --- | --- | --- |
+| 框架级：验证 NPS 从目录加载 | `tests/Natter.Framework.Tests` | 普通 `ProjectReference`（编译期拿到插件类型）+ `CopyTestPlugins` 目标，把 **Greetings 示例插件**的 dll 与 `plugin.json` 复制到 `$(OutDir)plugins/greetings` |
+| 插件自身单测 | `tests/Natter.Plugin.*.Tests` | 普通 `ProjectReference` 指向插件工程；需要读 manifest/schema/静态资源的工程再用 `<None Include="../../plugins/<id>/…" Link="…" CopyToOutputDirectory="PreserveNewest" />` 摆到输出目录。**Link 目录名各工程不同**（`plugin-package/`、`plugin-assets/`、或扁平 `plugin.json`），不需要读这些资源的工程（如 embedding 测试）只留 `ProjectReference` —— 以各自 csproj 为准，不要照抄 |
+| CLI 端到端（示例插件随宿主分发） | `src/Natter.Cli` | `ProjectReference ... ReferenceOutputAssembly="false"`（只为构建顺序，不引用程序集）+ `CopySamplePlugins` 目标把 dll/pdb/`plugin.json` 复制到 `$(OutDir)plugins/{greetings,metrics}`，`CopySamplePluginsToPublish` 再覆盖 publish 输出 |
+
+> `ReferenceOutputAssembly="false"` 只出现在 `src/Natter.Cli/Natter.Cli.csproj`；测试工程用的是普通引用 + `Copy`/`None` 项。仓库里没有「测试工程用 `ReferenceOutputAssembly=false`」的写法。
+
+测试里用真实目录构建宿主（框架级布局）：
 
 ```csharp
 var builder = NatterApplicationBuilder.Create()
