@@ -274,13 +274,14 @@ public sealed class PromptLibraryLoaderTests
     }
 
     [Fact]
-    public void Plugin_fragments_cannot_be_mandatory()
+    public void Fragment_enabled_by_default_false_loads_as_an_ordinary_disabled_fragment()
     {
         var result = PromptLibraryLoader.Load(
-            Options(fragments: [new PromptFragmentDefinition { Id = "x", Text = "x", Mandatory = true }]),
+            Options(fragments: [new PromptFragmentDefinition { Id = "x", Text = "x", EnabledByDefault = false }]),
             AppContext.BaseDirectory);
 
-        Assert.Equal(PromptLibraryCodes.FragmentMandatory, result.Code);
+        Assert.True(result.Success, result.Code + ": " + result.Message);
+        Assert.False(result.Library!.Fragments[0].EnabledByDefault);
     }
 
     [Fact]

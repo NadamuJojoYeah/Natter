@@ -61,7 +61,7 @@ public sealed class PromptLibraryProviderTests
             Variables: new Dictionary<string, string>());
 
     [Fact]
-    public async Task Sample_library_compiles_file_and_inline_fragments_with_mandatory_safety_last()
+    public async Task Sample_library_compiles_file_and_inline_fragments_without_injected_safety()
     {
         var runtime = SampleRuntime(out _);
         var provider = new PromptLibraryProvider(runtime);
@@ -73,14 +73,13 @@ public sealed class PromptLibraryProviderTests
         Assert.Equal("tier1-default", plan.PresetId);
         Assert.Equal("2026-11-21", plan.PresetVersion);
         Assert.Equal(
-            new[] { "persona", "channel-rules", "profile-note", HostPromptSafety.MandatoryFragmentId },
+            new[] { "persona", "channel-rules", "profile-note" },
             plan.Fragments.Select(fragment => fragment.Id).ToArray());
         Assert.Contains("你是 Natter，一名简洁、直接的助手。", bundle.SystemPrompt);
         Assert.Contains("不重复其他人已经给出的结论。", bundle.SystemPrompt);
         Assert.Contains("当前平台：discord；会话类型：Direct。", bundle.SystemPrompt);
         Assert.DoesNotContain("旧版风格片段", bundle.SystemPrompt);
-        Assert.EndsWith(HostPromptSafety.MandatoryText, bundle.SystemPrompt, StringComparison.Ordinal);
-        Assert.True(bundle.SafetyAppended);
+        Assert.DoesNotContain("untrusted data", bundle.SystemPrompt, StringComparison.Ordinal);
         Assert.Equal(plan.Hash, bundle.PlanHash);
         Assert.StartsWith("sha256:", plan.Hash, StringComparison.Ordinal);
 
@@ -136,7 +135,6 @@ public sealed class PromptLibraryProviderTests
         var bundle = await provider.GetAsync(Request());
 
         Assert.Null(bundle.Plan);
-        Assert.False(bundle.SafetyAppended);
         Assert.StartsWith("prompt-library-fallback:", bundle.Version, StringComparison.Ordinal);
         Assert.Equal(PromptLibraryProvider.FallbackSystemPrompt, bundle.SystemPrompt);
     }

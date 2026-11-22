@@ -89,7 +89,7 @@ public sealed class PromptLibraryPluginTests
         var promptProvider = provider.GetRequiredService<PromptLibraryProvider>();
         var bundle = await promptProvider.GetAsync(Request());
         Assert.Contains("你是 Natter", bundle.SystemPrompt);
-        Assert.EndsWith(HostPromptSafety.MandatoryText, bundle.SystemPrompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("untrusted data", bundle.SystemPrompt, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -150,19 +150,19 @@ public sealed class PromptLibraryPluginTests
     }
 
     [Fact]
-    public async Task Configure_rejects_plugin_mandatory_fragment()
+    public async Task Configure_rejects_a_fragment_that_defines_both_text_and_file()
     {
         var (context, _, _, _) = CreateContext("""
         {
           "fragments": [
-            { "id": "x", "text": "x", "mandatory": true }
+            { "id": "x", "text": "x", "file": "prompts/x.md" }
           ]
         }
         """);
 
         var exception = await Assert.ThrowsAsync<PromptLibraryStartupException>(
             async () => await new PromptLibraryPlugin().ConfigureAsync(context));
-        Assert.Equal(PromptLibraryCodes.FragmentMandatory, exception.Code);
+        Assert.Equal(PromptLibraryCodes.FragmentInvalid, exception.Code);
     }
 
     [Fact]

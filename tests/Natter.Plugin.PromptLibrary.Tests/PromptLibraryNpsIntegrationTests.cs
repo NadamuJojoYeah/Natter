@@ -13,7 +13,7 @@ namespace Natter.Plugin.PromptLibrary.Tests;
 /// <summary>
 /// End-to-end P2 check: the Prompt Library plugin is staged as a real NPS package (<c>lib/</c>
 /// layout), loaded through the plugin ALC, registers <c>natter.prompt.library#default</c> and the
-/// <c>prompt explain</c> command, and compiles with the host mandatory safety fragment last.
+/// <c>prompt explain</c> command, and compiles the library preset as configured.
 /// </summary>
 public sealed class PromptLibraryNpsIntegrationTests
 {
@@ -66,7 +66,7 @@ public sealed class PromptLibraryNpsIntegrationTests
 
             Assert.Equal("tier1-default", bundle.Plan!.PresetId);
             Assert.Contains("你是 Natter", bundle.SystemPrompt);
-            Assert.EndsWith(HostPromptSafety.MandatoryText, bundle.SystemPrompt, StringComparison.Ordinal);
+            Assert.DoesNotContain("untrusted data", bundle.SystemPrompt, StringComparison.Ordinal);
 
             var registry = host.Services.GetRequiredService<CliCommandRegistry>();
             Assert.True(registry.TryGet("prompt explain", out var command));
