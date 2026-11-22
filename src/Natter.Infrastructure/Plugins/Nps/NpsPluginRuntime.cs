@@ -195,7 +195,15 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
         foreach (var candidate in _candidates)
         {
             await candidate.Lifetime.DisposeAsync().ConfigureAwait(false);
-            candidate.DisposeLoadContext();
+            if (candidate.Provider is { } provider)
+            {
+                await provider.DisposeAsync().ConfigureAwait(false);
+                candidate.Provider = null;
+                candidate.Services.Provider = null;
+            }
+
+            _portRouter?.UnregisterPlugin(candidate.Id);
+            candidate.Unload();
         }
 
         _portRouter = null;
@@ -836,6 +844,10 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
             active.Responders.Clear();
             active.Subscriptions.Clear();
             active.ContextComponents.Clear();
+
+            // S2-C12: port adapters registered by this plugin (and their cached singletons) must be
+            // withdrawn, otherwise the host keeps routing to a half-activated plugin.
+            _portRouter?.UnregisterPlugin(candidate.Id);
         }
 
         try
@@ -857,7 +869,11 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
             candidate.Services.Provider = null;
         }
 
-        candidate.DisposeLoadContext();
+        // Release the router caches too: they hold plugin types and singleton instances, which would
+        // keep the collectible ALC alive (S2-C3).
+        _portRouter?.UnregisterPlugin(candidate.Id);
+
+        candidate.Unload();
         _startedOrder.Remove(candidate);
     }
 
@@ -917,7 +933,9 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
             candidate.Services.Provider = null;
         }
 
-        candidate.DisposeLoadContext();
+        _portRouter?.UnregisterPlugin(candidate.Id);
+
+        candidate.Unload();
         candidate.SetState(PluginState.Stopped);
         candidate.SetContributionStatus("inactive");
         _catalog.UpdateDescriptor(candidate.Id, _ => candidate.Descriptor);

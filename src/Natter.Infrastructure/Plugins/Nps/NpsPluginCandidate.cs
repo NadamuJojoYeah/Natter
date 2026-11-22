@@ -24,7 +24,7 @@ internal sealed class NpsPluginCandidate
     /// <summary>True only when the package's signature/hash manifest was verified at startup.</summary>
     public bool SignatureVerified { get; set; }
 
-    public PluginManifestReadResult? ReadResult { get; init; }
+    public PluginManifestReadResult? ReadResult { get; set; }
 
     public PluginLoadContext? LoadContext { get; set; }
 
@@ -230,5 +230,32 @@ internal sealed class NpsPluginCandidate
         {
             LoadContext = null;
         }
+    }
+
+    /// <summary>
+    /// Full unload (S2-C3): unloading the ALC alone keeps the collectible assembly alive because the
+    /// candidate still references its types, instance, provider and contribution registry. Every
+    /// strong reference is dropped here so the load context can actually be collected; callers that
+    /// need proof can hold a <see cref="WeakReference"/> to the previous load context.
+    /// </summary>
+    public void Unload()
+    {
+        DisposeLoadContext();
+
+        Plugin = null;
+        EntryType = null;
+        Context = null;
+        Config = null;
+        ConfigLoad = null;
+        Secrets = null;
+        Dependencies = null;
+        Permissions = null;
+        Contributions = null;
+        Log = null!;
+        Provider = null;
+        Services.Unload();
+        ReadResult = null;
+        IsLegacyEntry = false;
+        PluginDisposed = false;
     }
 }

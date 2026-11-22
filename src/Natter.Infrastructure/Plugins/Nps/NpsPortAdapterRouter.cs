@@ -68,6 +68,26 @@ internal sealed class NpsPortAdapterRouter
         }
     }
 
+    /// <summary>
+    /// Removes every adapter registration and cached singleton of one plugin (S2-C12) so a rolled
+    /// back or uninstalled plugin can no longer be routed to.
+    /// </summary>
+    public int UnregisterPlugin(string pluginId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(pluginId);
+
+        lock (_gate)
+        {
+            var removed = _registrations.RemoveAll(registration =>
+                string.Equals(registration.PluginId, pluginId, StringComparison.Ordinal));
+
+            foreach (var key in _pluginSingletons.Keys.Where(key => string.Equals(key.PluginId, pluginId, StringComparison.Ordinal)).ToArray())
+                _pluginSingletons.Remove(key);
+
+            return removed;
+        }
+    }
+
     public object? Resolve(Type serviceType, IServiceProvider hostProvider)
     {
         NpsPortRegistration? active;
