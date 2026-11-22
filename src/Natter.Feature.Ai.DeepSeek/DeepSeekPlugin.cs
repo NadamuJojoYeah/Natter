@@ -75,7 +75,18 @@ public sealed class DeepSeekPlugin : INatterPlugin
             apiKey,
             provider.GetRequiredService<DeepSeekMetrics>()));
         services.AddSingleton<IAiContextAssembler>(provider => new RecentWindowContextAssembler(responderOptions));
-        services.AddSingleton<AiChatResponder>();
+        // P5.2c: DeepSeek Chat Completions supports native tool calling, so the responder is
+        // constructed with NativeAndText; the text <tool_call> protocol stays as the fallback.
+        services.AddSingleton<AiChatResponder>(provider => new AiChatResponder(
+            provider.GetRequiredService<IChatClient>(),
+            responderOptions,
+            provider.GetRequiredService<IAiConversationStore>(),
+            provider.GetRequiredService<AiConversationGate>(),
+            provider.GetRequiredService<Natter.Chat.ChatCommandFactory>(),
+            provider.GetRequiredService<IPluginLog>(),
+            provider.GetRequiredService<IAiContextAssembler>(),
+            provider.GetService<Natter.Application.Chat.IContextPipeline>(),
+            Natter.Application.Chat.ToolProtocolCapabilities.NativeAndText));
         services.AddTransient<DeepSeekStatusCommandHandler>();
 
         context.Contributions.AddChatResponder<AiChatResponder>("deepseek", priority: 10);

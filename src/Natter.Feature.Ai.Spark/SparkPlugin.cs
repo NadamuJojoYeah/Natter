@@ -69,7 +69,18 @@ public sealed class SparkPlugin : INatterPlugin
             apiKey,
             provider.GetRequiredService<SparkMetrics>()));
         services.AddSingleton<IAiContextAssembler>(provider => new RecentWindowContextAssembler(responderOptions));
-        services.AddSingleton<AiChatResponder>();
+        // P5.2c: Spark's tool-calling support is not verified, so the provider explicitly stays on
+        // the text protocol (TextOnly); the worker falls back to <tool_call> or answers directly.
+        services.AddSingleton<AiChatResponder>(provider => new AiChatResponder(
+            provider.GetRequiredService<IChatClient>(),
+            responderOptions,
+            provider.GetRequiredService<IAiConversationStore>(),
+            provider.GetRequiredService<AiConversationGate>(),
+            provider.GetRequiredService<Natter.Chat.ChatCommandFactory>(),
+            provider.GetRequiredService<IPluginLog>(),
+            provider.GetRequiredService<IAiContextAssembler>(),
+            provider.GetService<Natter.Application.Chat.IContextPipeline>(),
+            Natter.Application.Chat.ToolProtocolCapabilities.TextOnly));
         services.AddTransient<SparkStatusCommandHandler>();
 
         context.Contributions.AddChatResponder<AiChatResponder>("spark", priority: 20);
