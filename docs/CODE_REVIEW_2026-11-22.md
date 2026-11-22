@@ -6,7 +6,55 @@
 > **方式**：只读静态审查 + 本地构建/测试实测；**未修改任何源码、配置、测试或脚本**
 > **产物**：本报告 + 六份分领域详细报告（[附录 A](#附录-a分领域详细报告)）
 
+> **修复进度（2026-11-22 更新）**：12 项 S1 已全部修复并验收。详见
+> [最终 S1 验收报告](testing/2026-11-22-final-s1-acceptance.md) 与
+> [审查修复验收](testing/2026-11-22-review-acceptance.md)。S2/S3 未动。
+
 ---
+
+## 修复状态（2026-11-22）
+
+| 项 | 状态 | 主要提交 |
+| --- | --- | --- |
+| S1-01 卸载路径穿越 | ✅ 已修 | `4c3c425` |
+| S1-02 代理路径 SSRF | ✅ 已修 | `670b3b6` |
+| S1-03 Satori 出站注入 | ✅ 已修 | `359f0d0` |
+| S1-04 validate diff 泄漏 | ✅ 已修 | `ebf54de`、`5736d7a` |
+| S1-05 会话 lease 覆盖 | ✅ 已修 | `cb537e3` |
+| S1-06 编排器 fire-and-forget | ✅ 已修 | `cb537e3` |
+| S1-07 结果误发 Task failed | ✅ 已修 | `cb537e3` |
+| S1-08 Android INTERNET | ✅ 已修 | `67c02e6` |
+| S1-09 CI 漏构建漏测试 | ✅ 已修 | `82f6866` |
+| S1-10 soak 假 PASS | ✅ 已修 | `82f6866` |
+| S1-11 CLI 抢 bot 会话 | ✅ 已修 | `7a6f054`、`2bf08f8` |
+| S1-12 插件信任未传播 | ✅ 已修 | `27357e1`、`06629d7` |
+
+### 审查外的额外修复
+
+| 项 | 原因 | 提交 |
+| --- | --- | --- |
+| Discord 网关静默失联 3h19m | 生产事故，见 [事故记录](operations/2026-11-22-discord-gateway-stall.md) | `c81c4c4`、`1eb283a` |
+| Prompt mandatory 语义迁移 | harness 责任边界调整，见 [责任边界](HARNESS_RESPONSIBILITY.md) | `f8f17b2` … `8673e89` |
+| 发布 staging 复核 | 旧产物会让修复在实机失效 | `aee1b0b` |
+| 发布检查增加 staging 断言 | OBS-REVIEW-STAGING | `aee1b0b` |
+
+### 当前验证基线
+
+```text
+dotnet build Natter.slnx -c Release   0 error（仅既有 Android XA0033）
+Framework                             727/727
+Prompt Library                        36/36
+WebConsole                            314/314
+```
+
+### 未处理
+
+- **S2 74 项、S3 45 项**：尚未排期。
+- **真实平台验证**：Discord 网关重建、6 插件宿主启动、Satori 元素类型，均只经 fake 验证。
+- **部署产物**：`/opt/natter` 仍是旧构建，需重新 staging 才能让上述修复生效。
+
+---
+
 
 ## 0. 结论摘要
 
