@@ -359,6 +359,47 @@ public sealed class S2Batch1AcceptanceTests
         Assert.NotEqual(4, CliExitCodes.Success);
     }
 
+    // ------------------------------------------- C7b signature failure path
+
+    [Fact]
+    public async Task Invalid_signature_is_rejected_instead_of_silently_trusted()
+    {
+        // S2-F6: the signature failure path had no test. A package with a valid manifest, real PE
+        // entry and correct package.sha256 but a garbage package.sig must be rejected when trusted
+        // keys are configured - never loaded as "unsigned".
+        using var temp = new TempDirectory();
+        var package = temp.Combine("bad-signature.npa");
+        var manifest = Encoding.UTF8.GetBytes(MinimalManifest("natter.s2.badsig"));
+        var dll = File.ReadAllBytes(Path.Combine(
+            RepoRoot(), "samples", "Natter.Sample.Plugin.Greetings", "bin", "Debug", "net10.0",
+            "Natter.Sample.Plugin.Greetings.dll"));
+        var manifestHash = Convert.ToHexString(SHA256.HashData(manifest)).ToLowerInvariant();
+        var dllHash = Convert.ToHexString(SHA256.HashData(dll)).ToLowerInvariant();
+        var hashFile = Encoding.ASCII.GetBytes($"{manifestHash}  plugin.json\n{dllHash}  lib/probe.dll\n");
+        var signature = new byte[64];
+        Random.Shared.NextBytes(signature);
+
+        CreateZip(
+            package,
+            [("plugin.json", manifest), ("lib/probe.dll", dll), ("package.sha256", hashFile), ("package.sig", signature)]);
+
+        var publicKey = Convert.ToBase64String(ECDsa.Create(ECCurve.NamedCurves.nistP256).ExportSubjectPublicKeyInfo());
+        var options = new PluginStoreOptions
+        {
+            RootDirectory = temp.Combine("plugins"),
+            Platform = "android",
+            AllowUnsigned = false,
+            TrustedPublicKeys = [publicKey],
+        };
+        var validator = new PluginPackageValidator(options);
+
+        var result = await validator.ValidateAsync(package, temp.Combine("extract"));
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Issues, issue => issue.Code == "signature-invalid");
+        Assert.DoesNotContain(result.Warnings, warning => warning.Code == "signature-legacy-format");
+    }
+
     // ------------------------------------------------------- C7 legacy signing
 
     [Fact]
@@ -408,6 +449,18 @@ public sealed class S2Batch1AcceptanceTests
 
         Assert.Null(release);
         Assert.Equal(0, gate.ActiveOperationCount);
+    }
+
+    // -------------------------------------------------- F9 README drift guard
+
+    [Fact]
+    public void Readme_does_not_hardcode_a_stale_test_count()
+    {
+        var readme = File.ReadAllText(Path.Combine(RepoRoot(), "README.md"));
+
+        Assert.DoesNotContain("264 个框架级测试", readme, StringComparison.Ordinal);
+        Assert.DoesNotContain("264 framework", readme, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("以 CI 实时输出为准", readme, StringComparison.Ordinal);
     }
 
     // ------------------------------------------------------------ fixtures
