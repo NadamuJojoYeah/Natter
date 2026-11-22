@@ -5,10 +5,10 @@
 # Discord gateway session (see OPERATIONS_RUNBOOK §5.3). One JSON object per line.
 #
 # Usage:
-#   ./scripts/soak-sample.sh                          # 300s interval, 24h, default output
+#   ./scripts/soak-sample.sh                          # 120s interval, 24h, default output
 #   ./scripts/soak-sample.sh -i 60 -d 3600            # 1h watch, 60s interval
-#   ./scripts/soak-sample.sh -o /var/log/natter/soak-2026-11-21.jsonl -i 300 -d 86400
-#   ./scripts/soak-sample.sh -i 300 -d 86400 --offline-fallback   # no host running: CLI fallback
+#   ./scripts/soak-sample.sh -o /var/log/natter/soak-2026-11-21.jsonl -i 120 -d 86400
+#   ./scripts/soak-sample.sh -i 120 -d 86400 --offline-fallback   # no host running: CLI fallback
 #
 # Output lines:
 #   {"sampledAt":"...Z","sampledWallClock":"...+08:00","source":"loopback","status":"healthy",...}
@@ -25,7 +25,7 @@
 set -euo pipefail
 
 PORT="${NATTER_HEALTH_PORT:-5099}"
-INTERVAL=300
+INTERVAL=120
 DURATION=86400
 OUT="${SOAK_OUT:-}"
 OFFLINE_FALLBACK=0

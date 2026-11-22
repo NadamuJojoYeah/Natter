@@ -23,7 +23,7 @@ Modes:
 
 Usage:
   python3 scripts/soak-report.py artifacts/ops/.../soak-2026-11-17.jsonl
-  python3 scripts/soak-report.py soak/*.jsonl --interval 300 --min-coverage 95
+  python3 scripts/soak-report.py soak/*.jsonl --interval 120 --min-coverage 95
   python3 scripts/soak-report.py soak.jsonl --json > soak-report.json
   python3 scripts/soak-report.py soak-*.jsonl --mode cumulative --target-hours 24
   python3 scripts/soak-report.py --self-test          # synthetic fixtures, no input files
@@ -982,8 +982,8 @@ def self_test() -> int:
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="Audit a Natter passive soak jsonl.")
     parser.add_argument("files", nargs="*", type=Path, help="soak jsonl file(s)")
-    parser.add_argument("--interval", type=int, default=300, help="expected sampling interval in seconds (default 300)")
-    parser.add_argument("--max-gap", type=int, default=900, help="largest tolerated gap in seconds (default 900)")
+    parser.add_argument("--interval", type=int, default=120, help="expected sampling interval in seconds (default 120)")
+    parser.add_argument("--max-gap", type=int, default=360, help="largest tolerated gap in seconds (default 360)")
     parser.add_argument("--min-coverage", type=float, default=95.0, help="minimum coverage percent (default 95)")
     parser.add_argument("--json", action="store_true", help="emit the report as JSON")
     parser.add_argument("--self-test", action="store_true", help="run synthetic fixtures and exit")

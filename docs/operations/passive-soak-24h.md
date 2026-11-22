@@ -27,22 +27,22 @@
 sudo systemctl list-timers natter-soak.timer
 sudo systemctl status natter-soak.timer
 
-# 输出：/var/log/natter/soak-YYYY-MM-DD.jsonl，每 5 分钟一行
+# 输出：/var/log/natter/soak-YYYY-MM-DD.jsonl，每 2 分钟一行
 sudo -u natter tail -f /var/log/natter/soak-$(date +%F).jsonl
 ```
 
 - 依赖 `jq`（合并采样时间戳）；
-- 服务重启/机器重启都不会丢采样：`OnBootSec=2min`、`OnUnitActiveSec=5min`；
+- 服务重启/机器重启都不会丢采样：`OnBootSec=2min`、`OnUnitActiveSec=2min`；
 - `Persistent=false`：停机期间不补采，缺口如实出现在审计里。
 
 ### 2.2 长驻进程（临时部署 / 无 systemd）
 
 ```bash
-# 300s 一次，跑满 24h，写到指定文件
-./scripts/soak-sample.sh -i 300 -d 86400 -o /var/log/natter/soak-$(date +%F).jsonl
+# 120s 一次，跑满 24h，写到指定文件
+./scripts/soak-sample.sh -i 120 -d 86400 -o /var/log/natter/soak-$(date +%F).jsonl
 
 # 或让脚本按天切文件
-./scripts/soak-sample.sh -i 300 -d 86400 --out-dir /var/log/natter
+./scripts/soak-sample.sh -i 120 -d 86400 --out-dir /var/log/natter
 ```
 
 ### 2.3 采样行里新增的两个 best-effort 字段
@@ -80,7 +80,7 @@ python3 scripts/soak-report.py /tmp/soak-smoke.jsonl --interval 15 --max-gap 45
 ## 3. 审计（24h 后必须跑）
 
 ```bash
-python3 scripts/soak-report.py /var/log/natter/soak-*.jsonl --interval 300
+python3 scripts/soak-report.py /var/log/natter/soak-*.jsonl --interval 120
 ```
 
 输出包含：
@@ -139,7 +139,7 @@ python3 scripts/soak-report.py /var/log/natter/soak-*.jsonl --interval 300
 # 现行验收（多天多个文件一起算）
 python3 scripts/soak-report.py /var/log/natter/soak-*.jsonl \
   --mode cumulative --target-hours 24 --min-segment-hours 6 \
-  --interval 300
+  --interval 120
 ```
 
 可选参数（默认值即验收线）：
@@ -152,6 +152,10 @@ python3 scripts/soak-report.py /var/log/natter/soak-*.jsonl \
 | `--max-rss-drift-percent` | 20 | 最差段 RSS 增长上限 |
 
 ### 3.1.5 示例输出（真实历史数据，缺 `bootId` 的老样本）
+
+> 下面这份数据是 2026-11-17 用**当时的 300s 采样周期**采到的，所以命令与输出里都是 `--interval 300`。
+> 新部署默认 120s，对历史文件审计时必须显式传该文件真实的采样间隔。
+
 
 ```text
 $ python3 scripts/soak-report.py artifacts/ops/tier1-run1/var/log/natter/soak-wake-2026-11-17.jsonl --interval 300 --mode cumulative
@@ -198,7 +202,7 @@ result          : FAIL
 
 ```bash
 # 稳定供电环境的严格口径
-python3 scripts/soak-report.py /var/log/natter/soak-*.jsonl --interval 300   # 默认 wallclock
+python3 scripts/soak-report.py /var/log/natter/soak-*.jsonl --interval 120   # 默认 wallclock
 ```
 
 ---
@@ -207,14 +211,14 @@ python3 scripts/soak-report.py /var/log/natter/soak-*.jsonl --interval 300   # �
 
 | 项 | 通过标准 |
 | --- | --- |
-| 采样覆盖 | ≥ 95%，且无单点缺口 > 900s |
+| 采样覆盖 | ≥ 95%，且无单点缺口 > 360s |
 | 状态 | 全程 `healthy`（Tier 1-only 部署允许 `degraded`，但必须在记录中说明原因） |
 | 实例重启 | 0 次（计划内重启需在窗口外，或重开计时） |
 | `sendFailures` | 全程 0 |
 | Discord 断连 | 允许自动重连，但每次都要有归因（`lastError` 或日志行）；`silentDisconnects` 单独统计 |
 | Tier 1 provider | `available=true` 全程 |
 
-> `--interval` 必须与实际采样间隔一致，否则覆盖率会被算错。默认 300s，与 `natter-soak.timer` 一致。
+> `--interval` 必须与实际采样间隔一致，否则覆盖率会被算错。默认 120s，与 `natter-soak.timer` 的 `OnUnitActiveSec=2min` 一致。
 
 ---
 
@@ -283,7 +287,7 @@ systemctl list-timers natter-soak.timer --no-pager
 sudo systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target
 
 # 4) 24h 后审计
-python3 /opt/natter/scripts/soak-report.py /var/log/natter/soak-*.jsonl --interval 300 | tee /tmp/soak-report.txt
+python3 /opt/natter/scripts/soak-report.py /var/log/natter/soak-*.jsonl --interval 120 | tee /tmp/soak-report.txt
 ```
 
 > 若机器必须睡眠，先在窗口内把 sleep 目标 mask 掉，或直接接受缺口并在记录里声明（不要伪造覆盖率）。
