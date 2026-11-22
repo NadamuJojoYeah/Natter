@@ -357,6 +357,42 @@ natter --state-dir /var/lib/natter health --offline --json  # 静态健康视图
 
 ---
 
+### 5.5 CLI 退出码与错误码（S2 加固后）
+
+自动化不要只看"命令有没有输出"，要看退出码：
+
+| 退出码 | 含义 | 典型来源 |
+| --- | --- | --- |
+| `0` | 成功；`health` 表示 `healthy`（或 `offline`/`unknown` 这类静态视图） | 大多数命令 |
+| `1` | 命令执行失败（异常、未预期错误） | 任意命令 |
+| `2` | 用法错误：未知命令、**未知选项**、**全局选项缺值** | `natter version --typo`、`natter --config-dir` |
+| `3` | `HL-CLI-HOST-BUSY`：需要运行态的命令被另一个实例的锁拒绝 | 主实例在跑时执行 `upstreams`/`health` |
+| `4` | `health` 判定为 `degraded`（插件失败 / upstream 未连接 / Tier1 provider 不可用） | CI 健康闸门 |
+| `5` | `HL-CLI-STATE-DIR-UNUSABLE`：state 目录不可用（权限、只读根、路径非法） | 容器只读根、错误挂载 |
+
+行为约定（本轮加固）：
+
+- **`health` 在 `degraded` 时返回 4**（不再是 0），CI 可以直接用它做闸门：
+  ```bash
+  natter --config-dir /etc/natter/config --state-dir /var/lib/natter health --json; code=$?
+  # 0 healthy / 4 degraded / 1 失败 / 2 用法
+  ```
+  `serve` 是长驻进程，退出码不表达健康（用 `health` 或 loopback `/health` 判断）。
+- **`health --offline` 明确表达"插件未激活"**：`status=offline` + `pluginActivation=not-activated`，文本输出会写一行 `mode: offline (host not started, plugins not activated)`，不会把静态视图伪装成"断线"。
+- **未知选项报错**（`Unknown option '--x' for command 'y'`，exit 2）；以前会被静默接受并吞掉下一个位置参数。
+- **全局选项缺值报错**（`option '--config-dir' requires a value`，exit 2）；以前 `--config-dir --state-dir /x` 会静默吞掉 `--state-dir`。
+- **`--no-plugins` 只影响插件加载**：config/state/profile 解析与单实例锁照常工作。
+- **`/health` 与 `--json` 的所有错误字段统一脱敏**（`lastError`、`lastSendError`、`lastDisconnectError` 都过同一套 secret 正则），soak 证据里不会再出现原文明文。
+- **`--json` 输出统一单一序列化策略**（camelCase、紧凑）；`/health`、`health --json`、`memory export` 字段命名一致。
+- **`/health` 有并发上限**（4 个并发处理槽，超时回 503），本机客户端打不满线程池。
+
+供应链与脚本：
+
+- `Directory.Build.props` **默认开启 NuGet 审计**（`NuGetAudit=true`，`AuditMode=all`，`AuditLevel=moderate`）；需要豁免的工程要在自己 csproj 里显式关闭并写原因。
+- `scripts/p2-collect.sh` 采集 Discord 时通过 `curl -K -` 从 stdin 传 header，**token 不再出现在 argv**（`ps`/`/proc/*/cmdline` 看不到）。
+
+---
+
 ## 6. 日志
 
 ### systemd
