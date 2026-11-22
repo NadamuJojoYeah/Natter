@@ -292,15 +292,23 @@ internal sealed class WebConsoleHarness : IDisposable
         FakeAdminConfigStore? adminConfig = null,
         FakeAdminCommandRunner? adminCommand = null,
         FakeAdminLogReader? logReader = null,
-        Natter.Application.Admin.IAdminRedactor? redactor = null)
+        Natter.Application.Admin.IAdminRedactor? redactor = null,
+        string? wwwrootSource = null)
     {
         options ??= new WebConsoleOptions { Port = 5090 };
         var directory = Path.Combine(Path.GetTempPath(), "natter-webconsole-tests", Guid.NewGuid().ToString("N"));
         var wwwroot = Path.Combine(directory, "wwwroot");
         System.IO.Directory.CreateDirectory(wwwroot);
-        File.WriteAllText(Path.Combine(wwwroot, "index.html"), "<!doctype html><html><body><script src=\"/app.js\"></script></body></html>");
-        File.WriteAllText(Path.Combine(wwwroot, "app.js"), "\"use strict\";");
-        File.WriteAllText(Path.Combine(wwwroot, "app.css"), "body { color: #fff; }");
+        if (string.IsNullOrWhiteSpace(wwwrootSource))
+        {
+            File.WriteAllText(Path.Combine(wwwroot, "index.html"), "<!doctype html><html><body><script src=\"/app.js\"></script></body></html>");
+            File.WriteAllText(Path.Combine(wwwroot, "app.js"), "\"use strict\";");
+            File.WriteAllText(Path.Combine(wwwroot, "app.css"), "body { color: #fff; }");
+        }
+        else
+        {
+            CopyDirectory(wwwrootSource!, wwwroot);
+        }
 
         var defaultConfig = config ?? JsonSerializer.SerializeToElement(new
         {
@@ -319,6 +327,19 @@ internal sealed class WebConsoleHarness : IDisposable
             adminCommand,
             logReader,
             redactor);
+    }
+
+    /// <summary>Copies the real <c>wwwroot</c> (modules included) into the harness plugin directory.</summary>
+    private static void CopyDirectory(string source, string target)
+    {
+        System.IO.Directory.CreateDirectory(target);
+        foreach (var file in System.IO.Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
+        {
+            var relative = Path.GetRelativePath(source, file);
+            var destination = Path.Combine(target, relative);
+            System.IO.Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+            File.Copy(file, destination, overwrite: true);
+        }
     }
 
     public WebConsoleHttpRequest Request(

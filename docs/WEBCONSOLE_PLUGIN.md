@@ -370,6 +370,50 @@ natter-admin.example.com {
 - 审计只记录摘要，不记录 token、secret、prompt/memory 正文或完整命令输出；
 - 审计目录 0700、文件 0600（Unix，best-effort）；默认写在 `$NATTER_STATE_DIR/webconsole/audit`，只读挂载下不会改插件目录（见 §4.4）；
 - 只读挂载且没有 state 根时，激活直接失败并给 `webconsole.audit-unwritable`，而不是静默丢审计；
+### 3.x 前端形态（零构建 + 原生 ES modules）
+
+`wwwroot` 不做任何打包，由 `HttpListener` 直接服务：
+
+```text
+wwwroot/
+├── index.html          唯一页面；<script type="module" src="/app.js">，无 inline script
+├── app.js              入口：会话、路由、轮询、事件接线
+├── api.js              fetch 封装与错误码归一（同源，connect-src 'self'）
+├── util.js             转义 / 时间与字节格式化 / 截断标记 / 三态块
+├── state.js            集中状态（会话、角色、readOnly），view 只读不写
+└── views/{overview,trace,logs,config,commands,diag}.js   纯函数渲染（数据 → HTML 字符串）
+```
+
+- 所有 `.js` 由静态资源白名单按实际文件枚举并以 `text/javascript` 返回；路由由相对路径推导，越出 `wwwroot` 的路径不可达；
+- CSP 保持 `default-src 'none'; script-src 'self'; style-src 'self'; …`——没有 `unsafe-eval`、没有外源；
+- `wwwroot/**/*.js` 的 import 必须是相对说明符，测试里对每个文件做正则断言（无 CDN、无外部模块）。
+
+#### Trace 时间轴（数据只来自 `/status`）
+
+`/status` 的文本输出（`task_xxx Status vN` / `elapsed=… step=… tools=u/b` / `trace:` 列表）在浏览器侧解析成模型后渲染为竖向时间轴：`started → step（含协议 kind）→ tool（name/status/duration 条）→ final`，错误行标红并提供可点击复制的错误码；顶部汇总 taskId/status/version/elapsed/tools used-of-budget。**不新增后端字段**，也不新增 API；命令控制台执行 `*status*` 类命令时会自动把 stdout 送进时间轴，也可以手动粘贴 `/status` 输出渲染。
+
+#### 折叠代替截断
+
+| 位置 | 行为 |
+| --- | --- |
+| `/status` 结果 | 200 字摘要 + 「展开全文」（`<details>`），标记 `原文 N 字符 · 显示 200 字符` |
+| trace 条目 | 默认 10 条 + 「加载更多」 |
+| config diff | 最多 60 行，标记 `原文 N 行 · 显示 60 行 · 已截断 K 行` |
+| 命令输出 | 标记 `原文 outputBytes 字节 · 显示 …`，宿主截断时额外提示 |
+
+#### 三态与四类空态
+
+每个异步区域统一 `loading`（骨架）/ `error`（错误码 + 重试）/ `empty`，空态再细分：无数据、无权限（需要 admin）、功能未启用（readOnly / allowConfigWrite=false）、宿主不可用（501）。「功能未启用」优先于「无权限」，因为它是全局状态而不是本会话缺角色。
+
+#### 诊断包（`GET /api/diagnostics`）
+
+`natter-diag-<UTC>.zip`：`manifest.json` + `health.json` + `upstreams.json` + `providers.json` + `plugins.json` + `config.redacted/<doc>.json` + `logs.jsonl` + `audit.jsonl`。
+
+- 每个文件都过同一套 `WebConsoleRedactionPolicy`（宿主 `IAdminRedactor` 可用时优先）；
+- `manifest.json` 记录每个条目的 `items/shownItems/truncation`、总量、上限（8 MiB）与是否截断；
+- **打包后自检**：用当前控制台令牌作为明文哨兵扫描每个条目，外加 `sk-*`/`Bearer`/PEM 形状；命中则拒绝导出（`webconsole.diag-sentinel-failed`），不会返回半成品包；
+- 日志 2000 条 / 1 MiB、审计 500 条、单文档 256 KiB 上限，超出按 manifest 声明截断。
+
 - 反向代理下**只有** `trustedProxies` 中的直连对端才被信任；`X-Forwarded-For` 从右往左取第一个不可信跳（最左值永不可信，最多 16 跳，非法值回落到真实对端）；`X-Forwarded-Proto: https` 同样只在可信代理时生效并给 cookie 加 `Secure`；
 - 登录限速：单客户端 5 次 / 5 分钟；全局兜底 50 次 / 15 分钟。全局命中后**可恢复**——一次成功登录释放最旧的 5 条全局记录；`Reset(client)` 清除该客户端的两个窗口，`ResetAll()` 清空全局兜底（运维恢复）；
 - 未认证请求的审计（`origin.rejected`、`auth.login denied/blocked`）按「动作 + 客户端」聚合：每窗口最多 5 条，其余只计数并在下一窗口写一条 `*.suppressed` 汇总，避免任意网页刷掉取证历史；
@@ -399,6 +443,8 @@ natter-admin.example.com {
 | 请求 408 | `request.timeout` | 客户端 body 发送过慢或命令超出预算；可调 `requestTimeoutSeconds` |
 | 请求 503 | `server.busy` | 并发槽位占满（慢速攻击或突发）；查 `maxConcurrentRequests` 与网络侧速率 |
 | 客户端 IP 显示为代理地址 | — | `trustedProxies` 未包含该代理；补齐后从 XFF 右侧解析 |
+| 页面白屏、控制台报 MIME | — | 检查 `wwwroot/**/*.js` 是否被 staging 复制；`GET /views/trace.js` 应返回 `text/javascript` |
+| 导出诊断包 500 | `webconsole.diag-sentinel-failed` | 脱敏漏网被拦下（设计如此）；先修脱敏规则再导出 |
 | 日志 400 | `logs.invalid_query` | 按 §7.3 修正参数（level 词表、limit 上限、时间格式） |
 | 命令 504 | `command.timeout` | 调小 `commandTimeoutSeconds` 或换命令；部分输出仍会返回 |
 

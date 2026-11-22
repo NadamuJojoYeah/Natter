@@ -99,9 +99,11 @@ public sealed class WebConsoleTokenAuthenticator
 {
     private readonly byte[] _expectedDigest;
     private readonly string? _problem;
+    private readonly string? _raw;
 
     public WebConsoleTokenAuthenticator(string? token)
     {
+        _raw = token;
         if (string.IsNullOrWhiteSpace(token))
         {
             _problem = "webconsole.token-missing";
@@ -123,6 +125,12 @@ public sealed class WebConsoleTokenAuthenticator
     public bool IsUsable { get; }
 
     public string? Problem => _problem;
+
+    /// <summary>
+    /// The configured token itself. Only used by the diagnostics bundle to prove it never leaks
+    /// (sentinel scan, UI-DIRECTION §3.4); never serialized or logged.
+    /// </summary>
+    public string? Reveal() => _raw;
 
     public bool Verify(string? candidate)
     {

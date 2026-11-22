@@ -37,6 +37,7 @@ public sealed class WebConsoleRequestHandler
     private readonly WebConsoleAuditGate _preAuthAudit;
     private readonly WebConsoleStaticAssets _assets;
     private readonly TimeProvider _clock;
+    private readonly IReadOnlyCollection<string> _redactionSentinels;
     private readonly IPluginLog _log;
 
     public WebConsoleRequestHandler(
@@ -63,6 +64,9 @@ public sealed class WebConsoleRequestHandler
         _admin = admin ?? throw new ArgumentNullException(nameof(admin));
         _audit = audit ?? throw new ArgumentNullException(nameof(audit));
         _preAuthAudit = new WebConsoleAuditGate(clock);
+        _redactionSentinels = [.. new[] { tokens?.Reveal(), viewerTokens?.Reveal() }
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Select(value => value!)];
         _assets = assets ?? throw new ArgumentNullException(nameof(assets));
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
         _log = log ?? throw new ArgumentNullException(nameof(log));
@@ -206,6 +210,12 @@ public sealed class WebConsoleRequestHandler
             {
                 RequireMethod(request, "GET");
                 return await HandleLogExportAsync(request, startedAt, cancellationToken).ConfigureAwait(false);
+            }
+
+            case "diagnostics":
+            {
+                RequireMethod(request, "GET");
+                return await DiagnosticsAsync(request, startedAt, cancellationToken).ConfigureAwait(false);
             }
 
             case "audit":
@@ -484,6 +494,61 @@ public sealed class WebConsoleRequestHandler
             hostLogs = snapshot.Logs with { Data = page.Entries },
             audit,
         });
+    }
+
+    /// <summary>
+    /// One-shot diagnostics bundle (UI-DIRECTION §3.4): every payload is redacted with the console
+    /// policy, the manifest records entry counts and truncation, and the packed archive is scanned for
+    /// live secrets before it can leave the process.
+    /// </summary>
+    private async ValueTask<WebConsoleHttpResponse> DiagnosticsAsync(
+        WebConsoleHttpRequest request,
+        DateTimeOffset startedAt,
+        CancellationToken cancellationToken)
+    {
+        var snapshot = await _diagnostics
+            .CreateSnapshotAsync(WebConsoleDiagnosticsBundle.MaxAuditEntries, cancellationToken)
+            .ConfigureAwait(false);
+
+        var documents = new Dictionary<string, string?>(StringComparer.Ordinal);
+        if (_admin.Surface.HasConfigStore)
+        {
+            foreach (var document in await _admin.ListDocumentsAsync(cancellationToken).ConfigureAwait(false))
+            {
+                if (documents.Count >= WebConsoleDiagnosticsBundle.MaxConfigDocuments)
+                    break;
+
+                var read = await _admin.ReadAsync(document.Id, cancellationToken).ConfigureAwait(false);
+                documents[document.Id] = read.Ok ? read.Value?.Content : null;
+            }
+        }
+
+        var bundle = WebConsoleDiagnosticsBundle.Build(
+            snapshot,
+            documents,
+            _admin.Redaction,
+            _clock.GetUtcNow(),
+            collectedBy: SessionUser(request),
+            sentinels: _redactionSentinels);
+
+        Audit(
+            request,
+            "diag.export",
+            "ok",
+            startedAt,
+            $"{bundle.FileName} bytes={bundle.Zip.Length} files={bundle.Manifest.Files.Count} truncated={bundle.Manifest.Truncated}");
+
+        return new WebConsoleHttpResponse(
+            200,
+            "application/zip",
+            bundle.Zip,
+            new Dictionary<string, string>
+            {
+                ["Content-Disposition"] = $"attachment; filename=\"{bundle.FileName}\"",
+                ["Cache-Control"] = "no-store",
+                ["X-WebConsole-Diag-Files"] = bundle.Manifest.Files.Count.ToString(CultureInfo.InvariantCulture),
+                ["X-WebConsole-Diag-Truncated"] = bundle.Manifest.Truncated ? "true" : "false",
+            });
     }
 
     private async ValueTask<WebConsoleHttpResponse> HandleLogExportAsync(
@@ -1108,6 +1173,12 @@ public sealed class WebConsoleRequestHandler
             return;
 
         _audit.Write(action, null, client, target, result, _clock.GetUtcNow() - startedAt);
+    }
+
+    private static string? SessionUser(WebConsoleHttpRequest request)
+    {
+        var role = request.Headers.TryGetValue("X-WebConsole-Role", out var explicitRole) ? explicitRole : null;
+        return string.IsNullOrWhiteSpace(role) ? null : role;
     }
 
     private void Audit(

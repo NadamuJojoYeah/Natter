@@ -107,9 +107,41 @@ public sealed class WebConsoleStaticAssets
         }
 
         var assets = KnownAssets
+            .Select(asset => (asset.Route, asset.ContentType, Path.Combine(root, asset.File)))
+            .ToList();
+
+        // Native ES modules are served straight from wwwroot (zero build step, UI-DIRECTION §4).
+        // Only files that physically live under root are exposed; the route is derived from the
+        // relative path, so nothing outside the asset directory can be reached.
+        var rootFull = Path.GetFullPath(root) + Path.DirectorySeparatorChar;
+        foreach (var file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
+        {
+            var full = Path.GetFullPath(file);
+            if (!full.StartsWith(rootFull, StringComparison.Ordinal))
+                continue;
+
+            var contentType = Path.GetExtension(full).ToLowerInvariant() switch
+            {
+                ".js" => JavaScriptContentType,
+                ".css" => CssContentType,
+                _ => null,
+            };
+
+            if (contentType is null)
+                continue;
+
+            var relative = Path.GetRelativePath(root, full).Replace(Path.DirectorySeparatorChar, '/');
+            var route = "/" + relative;
+            if (assets.Any(asset => string.Equals(asset.Route, route, StringComparison.Ordinal)))
+                continue;
+
+            assets.Add((route, contentType, full));
+        }
+
+        var loaded = assets
             .Select(asset =>
             {
-                var bytes = File.ReadAllBytes(Path.Combine(root, asset.File));
+                var bytes = File.ReadAllBytes(asset.Item3);
                 var response = new WebConsoleHttpResponse(
                     200,
                     asset.ContentType,
@@ -119,8 +151,8 @@ public sealed class WebConsoleStaticAssets
             })
             .ToArray();
 
-        var result = new WebConsoleStaticAssets(root, assets.Select(asset => asset.Route).ToArray());
-        foreach (var asset in assets)
+        var result = new WebConsoleStaticAssets(root, loaded.Select(asset => asset.Route).ToArray());
+        foreach (var asset in loaded)
             result._assets[asset.Route] = asset.Response;
 
         return result;

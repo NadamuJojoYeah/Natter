@@ -109,10 +109,14 @@ public sealed class WebConsoleServerTests
     {
         var assets = WebConsoleStaticAssets.Load(Path.Combine(AppContext.BaseDirectory, "plugin-assets"));
 
-        Assert.Equal(["/", "/app.js", "/app.css"], assets.Files);
+        // UI-DIRECTION P1: index + entry + the native ES modules under wwwroot.
+        Assert.Contains("/", assets.Files);
+        Assert.Contains("/app.js", assets.Files);
+        Assert.Contains("/app.css", assets.Files);
+        Assert.Contains("/views/trace.js", assets.Files);
         Assert.True(assets.TryGet("/", out var index));
         var html = Encoding.UTF8.GetString(index.Body);
-        Assert.Contains("src=\"/app.js\"", html);
+        Assert.Contains("<script type=\"module\" src=\"/app.js\"></script>", html);
         Assert.DoesNotContain("<script>", html);
         Assert.DoesNotContain("onclick=", html);
     }

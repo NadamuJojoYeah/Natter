@@ -1,4 +1,15 @@
-"use strict";
+// WebConsole entry: session, routing, polling and event wiring only.
+// Views stay pure (data → HTML); all mutable state lives in state.js (UI-DIRECTION §4.2).
+
+import { describeError, download, request } from "./api.js";
+import { applySession, canWrite, patchCommands, patchConfig, patchDiag, patchLogs, patchTrace, state, subscribe, update } from "./state.js";
+import { escapeHtml, stateBlock } from "./util.js";
+import { renderAudit, renderChecks, renderGaps, renderOverview, renderPlugins, renderProfiles, renderUpstreams } from "./views/overview.js";
+import { parseStatusText, renderTimeline } from "./views/trace.js";
+import { renderLogs } from "./views/logs.js";
+import { renderConfigDocuments, renderConfigMessage, renderConfigStatus, renderUndo, renderValidation } from "./views/config.js";
+import { renderCommandAvailability, renderCommandResult } from "./views/commands.js";
+import { renderDiag } from "./views/diag.js";
 
 const ui = {
   login: document.getElementById("login"),
@@ -6,19 +17,33 @@ const ui = {
   loginForm: document.getElementById("login-form"),
   token: document.getElementById("token"),
   loginError: document.getElementById("login-error"),
-  statusLine: document.getElementById("status-line"),
+  roleBadge: document.getElementById("role-badge"),
   subtitle: document.getElementById("subtitle"),
+  statusLine: document.getElementById("status-line"),
+  refresh: document.getElementById("refresh"),
+  logout: document.getElementById("logout"),
   overview: document.getElementById("overview"),
   checks: document.getElementById("checks"),
   upstreams: document.getElementById("upstreams"),
   profiles: document.getElementById("profiles"),
   plugins: document.getElementById("plugins"),
   gaps: document.getElementById("gaps"),
-  config: document.getElementById("config"),
   audit: document.getElementById("audit"),
-  logs: document.getElementById("logs"),
-  refresh: document.getElementById("refresh"),
-  logout: document.getElementById("logout"),
+  traceInput: document.getElementById("trace-input"),
+  traceParse: document.getElementById("trace-parse"),
+  traceClear: document.getElementById("trace-clear"),
+  traceView: document.getElementById("trace-view"),
+  logLevel: document.getElementById("log-level"),
+  logSource: document.getElementById("log-source"),
+  logQ: document.getElementById("log-q"),
+  logLimit: document.getElementById("log-limit"),
+  logQuery: document.getElementById("log-query"),
+  logPrev: document.getElementById("log-prev"),
+  logNext: document.getElementById("log-next"),
+  logExportText: document.getElementById("log-export-text"),
+  logExportJsonl: document.getElementById("log-export-jsonl"),
+  logStatus: document.getElementById("log-status"),
+  logEntries: document.getElementById("log-entries"),
   configDoc: document.getElementById("config-doc"),
   configLoad: document.getElementById("config-load"),
   configValidate: document.getElementById("config-validate"),
@@ -32,117 +57,14 @@ const ui = {
   commandRun: document.getElementById("command-run"),
   commandStatus: document.getElementById("command-status"),
   commandOutput: document.getElementById("command-output"),
-  roleBadge: document.getElementById("role-badge"),
-  logLevel: document.getElementById("log-level"),
-  logSource: document.getElementById("log-source"),
-  logQ: document.getElementById("log-q"),
-  logLimit: document.getElementById("log-limit"),
-  logQuery: document.getElementById("log-query"),
-  logPrev: document.getElementById("log-prev"),
-  logNext: document.getElementById("log-next"),
-  logExportText: document.getElementById("log-export-text"),
-  logExportJsonl: document.getElementById("log-export-jsonl"),
-  logStatus: document.getElementById("log-status"),
-  logEntries: document.getElementById("log-entries"),
+  diagExport: document.getElementById("diag-export"),
+  diagView: document.getElementById("diag-view"),
 };
 
-let csrf = null;
-let configEtag = null;
-let configDocumentId = null;
-let adminStatus = null;
-let currentRole = "viewer";
-let rolePermissions = { read: true, write: false, command: false };
-let logOffset = 0;
-let logHasMore = false;
-let logNextOffset = null;
-const LOG_PAGE_SIZE_DEFAULT = 200;
+const POLL_INTERVAL_MS = 15_000;
+let pollTimer = null;
 
-async function api(path, options = {}) {
-  const method = options.method || "GET";
-  const headers = { Accept: "application/json" };
-
-  if (options.body !== undefined) {
-    headers["Content-Type"] = "application/json";
-  }
-
-  if (csrf && method !== "GET") {
-    headers["X-WebConsole-CSRF"] = csrf;
-  }
-
-  const response = await fetch(path, {
-    method,
-    headers,
-    body: options.body === undefined ? undefined : JSON.stringify(options.body),
-    credentials: "same-origin",
-    cache: "no-store",
-  });
-
-  let payload = null;
-  if (response.status !== 204) {
-    try {
-      payload = await response.json();
-    } catch {
-      payload = null;
-    }
-  }
-
-  if (!response.ok) {
-    const error = new Error(payload?.error?.message || `HTTP ${response.status}`);
-    error.status = response.status;
-    error.code = payload?.error?.code;
-    error.detail = payload?.detail;
-    error.result = payload?.result;
-    throw error;
-  }
-
-  return payload;
-}
-
-function node(tag, text, className) {
-  const element = document.createElement(tag);
-  if (text !== undefined && text !== null && text !== "") {
-    element.textContent = String(text);
-  }
-  if (className) {
-    element.className = className;
-  }
-  return element;
-}
-
-function badge(status) {
-  return node("span", status, `badge ${status}`);
-}
-
-function formatTime(value) {
-  if (!value) {
-    return "—";
-  }
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
-}
-
-function applySession(session) {
-  if (!session || !session.authenticated) {
-    return;
-  }
-
-  currentRole = session.role || "viewer";
-  rolePermissions = session.permissions || { read: true, write: false, command: false };
-  ui.roleBadge.textContent = currentRole;
-  ui.roleBadge.className = `badge ${currentRole === "admin" ? "ok" : "degraded"}`;
-}
-
-function applyWritePermission() {
-  const canWrite = currentRole === "admin" && rolePermissions.write === true;
-  const canCommand = currentRole === "admin" && rolePermissions.command === true;
-
-  if (ui.configSave) {
-    ui.configSave.disabled = ui.configSave.disabled || !canWrite;
-  }
-  if (ui.commandRun && !canCommand) {
-    ui.commandRun.disabled = true;
-  }
-}
+// ------------------------------------------------------------------ session
 
 function showLogin(message) {
   ui.dashboard.hidden = true;
@@ -154,274 +76,117 @@ function showLogin(message) {
 function showDashboard() {
   ui.login.hidden = true;
   ui.dashboard.hidden = false;
+  ui.roleBadge.textContent = state.role;
+  ui.roleBadge.className = `badge ${state.role === "admin" ? "ok" : "degraded"}`;
 }
 
-function unavailableNote(section) {
-  const box = node("p", undefined, "empty");
-  box.textContent = `不可用：${section.reason || section.gapCode || "unknown"}`
-    + (section.gapCode ? ` (${section.gapCode})` : "");
-  return box;
-}
-
-function cell(value) {
-  const td = node("td");
-  if (value instanceof Node) {
-    td.appendChild(value);
-  } else {
-    td.textContent = value === null || value === undefined || value === "" ? "—" : String(value);
+function applyWritePermissions() {
+  const write = canWrite();
+  ui.configSave.disabled = ui.configSave.disabled || !write;
+  if (!write) {
+    ui.commandRun.disabled = true;
   }
-  return td;
 }
 
-function makeTable(headers, rows) {
-  const table = node("table");
-  const head = node("thead");
-  const headRow = node("tr");
-  for (const header of headers) {
-    headRow.appendChild(node("th", header));
-  }
-  head.appendChild(headRow);
-  table.appendChild(head);
+// ------------------------------------------------------------------ snapshot
 
-  const body = node("tbody");
-  for (const row of rows) {
-    const tr = node("tr");
-    for (const value of row) {
-      tr.appendChild(cell(value));
+async function loadSnapshot() {
+  ui.statusLine.textContent = "加载中…";
+  try {
+    const snapshot = await request("/api/snapshot");
+    update({
+      snapshot,
+      snapshotState: "ready",
+      snapshotError: null,
+      readOnly: Boolean(snapshot.self?.readOnly),
+      allowConfigWrite: Boolean(snapshot.self?.allowConfigWrite),
+      allowCommandConsole: Boolean(snapshot.self?.allowCommandConsole),
+    });
+    renderSnapshot(snapshot);
+    return snapshot;
+  } catch (error) {
+    const described = describeError(error);
+    if (described.status === 401) {
+      update({ csrf: null });
+      showLogin("会话已过期，请重新登录。");
+      return null;
     }
-    body.appendChild(tr);
-  }
-  table.appendChild(body);
-  return table;
-}
 
-function renderOverview(snapshot) {
-  const self = snapshot.self;
-  const items = [
-    ["health", badge(self.healthStatus)],
-    ["server", `${self.serverState}${self.serverUrl ? " " + self.serverUrl : ""}`],
-    ["runtime", self.serverRuntime],
-    ["host source", self.hostDataSource],
-    ["uptime", `${self.uptimeSeconds}s`],
-    ["bind", `${self.bind}:${self.port}`],
-    ["token", self.tokenConfigured ? "configured" : "missing"],
-    ["read only", String(self.readOnly)],
-    ["config write", self.allowConfigWrite && !self.readOnly ? "enabled" : "disabled"],
-    ["command console", self.allowCommandConsole && !self.readOnly ? "enabled" : "disabled"],
-    ["session", `${self.sessionMinutes} min`],
-    ["plugin", `${self.pluginId} ${self.version} · hostApi ${self.hostApi}`],
-  ];
-
-  ui.overview.replaceChildren();
-  for (const [label, value] of items) {
-    ui.overview.appendChild(node("dt", label));
-    const dd = node("dd");
-    if (value instanceof Node) {
-      dd.appendChild(value);
-    } else {
-      dd.textContent = value;
-    }
-    ui.overview.appendChild(dd);
+    update({ snapshotState: "error", snapshotError: described });
+    ui.statusLine.className = "status error";
+    ui.statusLine.textContent = `${described.code ?? "error"}：${described.message}`;
+    ui.overview.innerHTML = stateBlock({ kind: "error", code: described.code, message: described.message });
+    return null;
   }
 }
 
-function renderChecks(checks) {
-  ui.checks.replaceChildren();
-  for (const check of checks) {
-    const li = node("li");
-    const left = node("span");
-    left.appendChild(node("strong", check.name));
-    if (check.detail) {
-      left.appendChild(node("span", ` · ${check.detail}`, "muted"));
-    }
-    li.appendChild(left);
-    li.appendChild(badge(check.status));
-    ui.checks.appendChild(li);
-  }
-}
-
-function renderUpstreams(section) {
-  ui.upstreams.replaceChildren();
-
-  if (!section.available) {
-    ui.upstreams.appendChild(unavailableNote(section));
-    return;
-  }
-
-  if (!section.data.length) {
-    ui.upstreams.appendChild(node("p", "没有 upstream。", "empty"));
-    return;
-  }
-
-  ui.upstreams.appendChild(makeTable(
-    ["source", "connected", "lastConnectedAt", "lastDisconnectAt", "reconnects", "sendFailures", "lastError"],
-    section.data.map((upstream) => [
-      upstream.source,
-      badge(upstream.connected ? "ok" : "degraded"),
-      formatTime(upstream.lastConnectedAt),
-      formatTime(upstream.lastDisconnectAt),
-      upstream.reconnectCount,
-      upstream.sendFailures,
-      upstream.lastError,
-    ]),
-  ));
-}
-
-function renderProfiles(section) {
-  ui.profiles.replaceChildren();
-
-  if (!section.available) {
-    ui.profiles.appendChild(unavailableNote(section));
-    return;
-  }
-
-  if (!section.data.length) {
-    ui.profiles.appendChild(node("p", "没有 profile/provider。", "empty"));
-    return;
-  }
-
-  ui.profiles.appendChild(makeTable(
-    ["profile", "provider", "available", "tier"],
-    section.data.map((profile) => [
-      profile.profile,
-      profile.provider,
-      badge(profile.available ? "ok" : "degraded"),
-      profile.supportTier,
-    ]),
-  ));
-}
-
-function renderPlugins(section) {
-  ui.plugins.replaceChildren();
-
-  if (!section.available) {
-    ui.plugins.appendChild(unavailableNote(section));
-    return;
-  }
-
-  const data = section.data;
-  ui.plugins.appendChild(node(
-    "p",
-    `activated=${data.activated} failed=${data.failed} source=${data.source}`,
-    "muted",
-  ));
-
-  if (data.failures.length) {
-    ui.plugins.appendChild(node("h3", "失败插件"));
-    ui.plugins.appendChild(makeTable(
-      ["id", "state", "phase", "code", "message"],
-      data.failures.map((failure) => [
-        failure.id, failure.state, failure.phase, failure.code, failure.message,
-      ]),
-    ));
-  }
-
-  if (data.nodes.length) {
-    ui.plugins.appendChild(node("h3", "插件图"));
-    ui.plugins.appendChild(makeTable(
-      ["id", "version", "kind", "state", "dependsOn", "blockedBy"],
-      data.nodes.map((item) => [
-        item.id,
-        item.version,
-        item.kind,
-        item.state,
-        (item.dependsOn || []).join(", "),
-        (item.blockedBy || []).join(", "),
-      ]),
-    ));
-  }
-
-  if (data.contributions.length || data.permissions.length) {
-    ui.plugins.appendChild(node(
-      "p",
-      `contributions=${data.contributions.length} permissions=${data.permissions.length}`,
-      "muted",
-    ));
-  }
-}
-
-function renderGaps(gaps) {
-  ui.gaps.replaceChildren();
-  for (const gap of gaps) {
-    const li = node("li");
-    li.appendChild(node("div", gap.code, "code"));
-    li.appendChild(node("div", gap.summary));
-    li.appendChild(node("div", `影响面：${gap.area} · 宿主改动：${gap.hostChange}`, "doc"));
-    li.appendChild(node("div", gap.doc, "doc"));
-    ui.gaps.appendChild(li);
-  }
-}
-
-function renderAudit(snapshot) {
-  ui.audit.replaceChildren();
-  const entries = snapshot.audit || [];
-
-  if (!entries.length) {
-    ui.audit.appendChild(node("p", "暂无审计记录。", "empty"));
-    return;
-  }
-
-  ui.audit.appendChild(makeTable(
-    ["time", "action", "user", "ip", "target", "result", "ms"],
-    entries.slice().reverse().map((entry) => [
-      formatTime(entry.timestamp),
-      entry.action,
-      entry.user,
-      entry.ip,
-      entry.target,
-      entry.result,
-      entry.durationMs,
-    ]),
-  ));
-}
-
-function renderConfig(config) {
-  ui.config.textContent = JSON.stringify(config?.values ?? {}, null, 2)
-    + `\n\n// redacted=${(config?.redacted || []).length}`
-    + ` write=${config?.writeEnabled ? "enabled" : "disabled"}`
-    + (config?.writeGapCode ? ` (${config.writeGapCode})` : "");
-}
-
-function render(snapshot) {
+function renderSnapshot(snapshot) {
   const self = snapshot.self;
   ui.subtitle.textContent = `${self.pluginId} ${self.version} · ${self.kind} · hostApi ${self.hostApi}`;
-
   ui.statusLine.className = `status ${self.healthStatus}`;
   ui.statusLine.textContent = `health=${self.healthStatus} · server=${self.serverState}`
     + (self.serverUrl ? ` ${self.serverUrl}` : "")
     + ` · host=${self.hostDataSource}`;
 
-  renderOverview(snapshot);
-  renderChecks(snapshot.checks || []);
-  renderUpstreams(snapshot.upstreams);
-  renderProfiles(snapshot.profiles);
-  renderPlugins(snapshot.plugins);
-  renderGaps(snapshot.gaps || []);
-  renderAudit(snapshot);
-  renderConfig(snapshot.config);
-  fillDocumentSelect(snapshot);
+  ui.overview.innerHTML = renderOverview(snapshot);
+  ui.checks.innerHTML = renderChecks(snapshot.checks || []);
+  ui.upstreams.innerHTML = renderUpstreams(snapshot.upstreams);
+  ui.profiles.innerHTML = renderProfiles(snapshot.profiles);
+  ui.plugins.innerHTML = renderPlugins(snapshot.plugins);
+  ui.gaps.innerHTML = renderGaps(snapshot.gaps || []);
+  ui.audit.innerHTML = renderAudit(snapshot.audit || []);
+
   applyAdminAvailability(snapshot);
-  applyWritePermission();
-  queryLogs({ resetOffset: true }).catch((error) => setLogStatus(`日志加载失败：${error.message}`, true));
-
-  ui.logs.textContent = snapshot.logs?.available
-    ? "宿主日志已启用。"
-    : `宿主日志不可用：${snapshot.logs?.reason || snapshot.logs?.gapCode || "unknown"}（使用审计流水替代）`;
+  applyWritePermissions();
+  fillDocumentSelect(snapshot);
+  queryLogs({ resetOffset: true }).catch(() => {});
 }
 
+function applyAdminAvailability(snapshot) {
+  const admin = snapshot.admin || {};
+  const configAvailable = Boolean(admin.configStoreAvailable);
+  const writeEnabled = Boolean(snapshot.config?.writeEnabled);
 
-function setLogStatus(message, isError) {
-  ui.logStatus.textContent = message;
-  ui.logStatus.className = isError ? "error" : "muted";
+  ui.configLoad.disabled = !configAvailable;
+  ui.configValidate.disabled = !configAvailable;
+  ui.configSave.disabled = !configAvailable || !writeEnabled;
+  ui.configDoc.disabled = !configAvailable;
+
+  ui.configStatus.innerHTML = renderConfigStatus({
+    writeEnabled,
+    gapCode: snapshot.config?.writeGapCode,
+    adminAvailable: configAvailable,
+  });
+
+  ui.commandStatus.innerHTML = renderCommandAvailability(admin);
+  const commandEnabled = Boolean(admin.commandEnabled) && Boolean(admin.commandRunnerAvailable) && state.role === "admin";
+  ui.commandRun.disabled = !commandEnabled;
+  ui.commandName.disabled = !commandEnabled;
+  ui.commandArgs.disabled = !commandEnabled;
 }
+
+function fillDocumentSelect(snapshot) {
+  const documents = snapshot.config?.documents || [];
+  if (!documents.length) {
+    ui.configDoc.innerHTML = renderConfigDocuments(
+      [{ id: "profiles", exists: true }, { id: `plugin:${snapshot.self.pluginId}`, exists: true }],
+      state.config.documentId,
+    );
+  } else {
+    ui.configDoc.innerHTML = renderConfigDocuments(documents, state.config.documentId);
+  }
+
+  patchConfig({ documentId: ui.configDoc.value || "profiles" });
+}
+
+// ------------------------------------------------------------------ logs
 
 function logQueryString(includeOffset) {
   const parts = [];
-  const limit = ui.logLimit.value || String(LOG_PAGE_SIZE_DEFAULT);
-
+  const limit = ui.logLimit.value || "200";
   parts.push(`limit=${encodeURIComponent(limit)}`);
-  if (includeOffset && logOffset > 0) {
-    parts.push(`offset=${encodeURIComponent(String(logOffset))}`);
+  if (includeOffset && state.logs.offset > 0) {
+    parts.push(`offset=${encodeURIComponent(String(state.logs.offset))}`);
   }
   if (ui.logLevel.value) {
     parts.push(`level=${encodeURIComponent(ui.logLevel.value)}`);
@@ -436,97 +201,224 @@ function logQueryString(includeOffset) {
   return parts.join("&");
 }
 
-function renderLogEntries(payload) {
-  ui.logEntries.replaceChildren();
-
-  const section = payload.hostLogs || {};
-  if (!section.available) {
-    ui.logEntries.appendChild(node(
-      "p",
-      `宿主日志不可用：${section.reason || section.gapCode || "unknown"}（审计流水仍可在下方查看）`,
-      "empty",
-    ));
-    return;
+async function queryLogs({ resetOffset = false } = {}) {
+  if (resetOffset) {
+    patchLogs({ offset: 0 });
   }
 
-  const entries = section.data || [];
-  if (!entries.length) {
-    ui.logEntries.appendChild(node("p", "没有匹配的日志行。", "empty"));
-    return;
-  }
+  patchLogs({ state: "loading", error: null });
+  ui.logEntries.innerHTML = renderLogs(null, { state: "loading" });
 
-  ui.logEntries.appendChild(makeTable(
-    ["time", "level", "source", "message"],
-    entries.map((entry) => [
-      formatTime(entry.timestamp),
-      badge(entry.level === "Error" || entry.level === "Critical" ? "error" : entry.level === "Warning" ? "degraded" : "ok"),
-      entry.source,
-      entry.message,
-    ]),
-  ));
-}
-
-async function queryLogs(options = {}) {
-  const reset = options.resetOffset === true;
-  if (reset) {
-    logOffset = 0;
-  }
-
-  setLogStatus("查询中…", false);
   try {
-    const payload = await api(`/api/logs?${logQueryString(true)}`);
-    renderLogEntries(payload);
-    logHasMore = payload.hasMore === true;
-    logNextOffset = payload.nextOffset ?? null;
-
-    const start = payload.total === 0 ? 0 : (payload.offset || 0) + 1;
-    const end = (payload.offset || 0) + (payload.returned || 0);
-    setLogStatus(
-      `匹配 ${payload.total} 条，显示 ${start}–${end}（每页 ${payload.limit}，order=${payload.query?.order || "desc"}）`
-        + (logHasMore ? "，还有更多" : ""),
-      false,
-    );
-
+    const payload = await request(`/api/logs?${logQueryString(true)}`);
+    patchLogs({
+      state: "ready",
+      payload,
+      hasMore: payload.hasMore === true,
+      nextOffset: payload.nextOffset ?? null,
+      error: null,
+    });
+    ui.logEntries.innerHTML = renderLogs(payload);
     ui.logPrev.disabled = (payload.offset || 0) === 0;
-    ui.logNext.disabled = !logHasMore;
+    ui.logNext.disabled = payload.hasMore !== true;
+    ui.logStatus.textContent = `匹配 ${payload.total} 条`;
+    ui.logStatus.className = "muted";
   } catch (error) {
-    setLogStatus(`${error.code || "error"}：${error.message}`, true);
-    ui.logPrev.disabled = true;
-    ui.logNext.disabled = true;
+    const described = describeError(error);
+    patchLogs({ state: "error", error: described });
+    ui.logEntries.innerHTML = renderLogs(null, { state: "error", error: described });
+    ui.logStatus.textContent = `${described.code ?? "error"}：${described.message}`;
+    ui.logStatus.className = "error";
   }
 }
 
 function exportLogs(format) {
   const url = `/api/logs/export?format=${encodeURIComponent(format)}&${logQueryString(false)}`;
-  setLogStatus(`已开始导出：${url}（内容已脱敏，单次最多 5000 行 / 1 MiB）`, false);
-
-  // Same-origin navigation is what triggers the attachment download in a browser; tests run
-  // without a location object, so guard it instead of failing the render.
-  const location = globalThis?.location;
-  if (location && typeof location.assign === "function") {
-    location.assign(url);
-  }
+  download(url);
+  ui.logStatus.textContent = `已开始导出：${url}（已脱敏，单次最多 5000 行 / 1 MiB）`;
+  ui.logStatus.className = "muted";
 }
 
-function nextLogPage() {
-  if (!logHasMore) {
+// ------------------------------------------------------------------ config
+
+async function loadConfigDocument() {
+  const id = state.config.documentId;
+  if (!id) {
     return;
   }
 
-  const limit = Number(ui.logLimit.value || LOG_PAGE_SIZE_DEFAULT);
-  logOffset = logNextOffset ?? logOffset + limit;
-  queryLogs().catch((error) => setLogStatus(`翻页失败：${error.message}`, true));
+  ui.configStatus.innerHTML = stateBlock({ kind: "loading" });
+  try {
+    const document_ = await request(`/api/config/${encodeURIComponent(id)}`);
+    patchConfig({ etag: document_.exists ? document_.eTag : null, state: "ready", error: null });
+    ui.configText.value = document_.content || "";
+    ui.configDiff.innerHTML = "";
+    ui.configStatus.innerHTML = renderConfigMessage(
+      `${document_.exists ? "已加载" : "文档不存在（保存将创建）"} · etag=${document_.eTag}`
+      + ` · source=${document_.source} · ${describeReloadHint(document_)}`,
+      false,
+    );
+    await refreshUndo();
+  } catch (error) {
+    const described = describeError(error);
+    patchConfig({ state: "error", error: described });
+    ui.configStatus.innerHTML = renderConfigMessage(`${described.code ?? "error"}：${described.message}`, true);
+  }
 }
 
-function previousLogPage() {
-  const limit = Number(ui.logLimit.value || LOG_PAGE_SIZE_DEFAULT);
-  logOffset = Math.max(0, logOffset - limit);
-  queryLogs().catch((error) => setLogStatus(`翻页失败：${error.message}`, true));
+function describeReloadHint(response) {
+  if (!response) {
+    return "—";
+  }
+  if (response.restartRequired) {
+    return response.reloadHint === "restart-plugin" ? "保存后需重启宿主以重新加载插件配置" : "保存后需重启宿主以生效";
+  }
+  return response.reloadHint === "reload-profiles" ? "profiles 已热重载" : "无需重启";
 }
 
-function setConfigStatus(message, isError) {
-  ui.configStatus.textContent = message;
-  ui.configStatus.className = isError ? "error" : "muted";
+async function refreshUndo() {
+  const id = state.config.documentId;
+  if (!id) {
+    return;
+  }
+
+  try {
+    const payload = await request(`/api/config/${encodeURIComponent(id)}/undo`);
+    patchConfig({ undo: payload.entries || [] });
+    ui.configUndo.innerHTML = renderUndo(payload.entries || []);
+  } catch {
+    ui.configUndo.innerHTML = renderUndo([]);
+  }
+}
+
+async function validateConfig() {
+  const id = state.config.documentId;
+  if (!id) {
+    return;
+  }
+
+  ui.configStatus.innerHTML = stateBlock({ kind: "loading" });
+  try {
+    const payload = await request(`/api/config/${encodeURIComponent(id)}/validate`, {
+      method: "POST",
+      body: { content: ui.configText.value },
+    });
+    ui.configDiff.innerHTML = renderValidation(payload.validation);
+    ui.configStatus.innerHTML = renderConfigMessage(
+      payload.validation.valid ? "校验通过。" : "校验未通过，见下方问题列表。",
+      !payload.validation.valid,
+    );
+  } catch (error) {
+    const described = describeError(error);
+    ui.configDiff.innerHTML = stateBlock({ kind: "error", code: described.code, message: described.message });
+    ui.configStatus.innerHTML = renderConfigMessage(`${described.code ?? "error"}：${described.message}`, true);
+  }
+}
+
+async function saveConfig() {
+  const id = state.config.documentId;
+  if (!id) {
+    return;
+  }
+
+  ui.configStatus.innerHTML = stateBlock({ kind: "loading" });
+  try {
+    const payload = await request(`/api/config/${encodeURIComponent(id)}`, {
+      method: "POST",
+      body: { content: ui.configText.value, etag: state.config.etag },
+    });
+    patchConfig({ etag: payload.eTag, state: "ready", error: null });
+    const backup = payload.backupPath
+      ? `宿主备份 ${payload.backupPath}（服务器端手动恢复）`
+      : "新建文档，无宿主备份";
+    ui.configStatus.innerHTML = renderConfigMessage(
+      `已保存 · etag=${payload.eTag} · ${backup} · ${describeReloadHint(payload)}`
+      + (payload.undoId ? ` · 可回滚快照 ${payload.undoId}` : ""),
+      false,
+    );
+    ui.configDiff.innerHTML = renderValidation({
+      valid: true,
+      source: "host",
+      eTag: payload.eTag,
+      sizeBytes: 0,
+      containsSecretLiteral: false,
+      issues: [],
+      diff: payload.diff,
+    });
+    await refreshUndo();
+  } catch (error) {
+    const described = describeError(error);
+    if (described.status === 409 && described.code === "config.conflict") {
+      const current = described.detail?.conflictETag;
+      if (current) {
+        patchConfig({ etag: current });
+      }
+      ui.configStatus.innerHTML = renderConfigMessage(
+        `内容已被他人修改（当前 etag=${current || "?"}）。请重新加载后再保存。`,
+        true,
+      );
+      return;
+    }
+
+    ui.configStatus.innerHTML = renderConfigMessage(`${described.code ?? "error"}：${described.message}`, true);
+  }
+}
+
+async function rollbackConfig(undoId) {
+  const id = state.config.documentId;
+  if (!id) {
+    return;
+  }
+
+  ui.configStatus.innerHTML = stateBlock({ kind: "loading" });
+  try {
+    const payload = await request(`/api/config/${encodeURIComponent(id)}/rollback`, {
+      method: "POST",
+      body: { etag: state.config.etag, undoId },
+    });
+    patchConfig({ etag: payload.saved?.eTag ?? state.config.etag });
+    ui.configStatus.innerHTML = renderConfigMessage(`已回滚到快照 ${undoId} · etag=${payload.saved?.eTag || "?"}`, false);
+    await loadConfigDocument();
+  } catch (error) {
+    const described = describeError(error);
+    ui.configStatus.innerHTML = renderConfigMessage(`${described.code ?? "error"}：${described.message}`, true);
+  }
+}
+
+// ------------------------------------------------------------------ commands
+
+async function runCommand() {
+  const command = ui.commandName.value.trim();
+  if (!command) {
+    ui.commandOutput.innerHTML = stateBlock({ kind: "empty", emptyReason: "no-data", message: "请先输入命令（需与 commandAllowlist 精确匹配）。" });
+    return;
+  }
+
+  ui.commandRun.disabled = true;
+  patchCommands({ state: "running", error: null });
+  ui.commandOutput.innerHTML = renderCommandResult(null, { state: "running" });
+
+  try {
+    const payload = await request("/api/commands", {
+      method: "POST",
+      body: { command, args: parseArgs(ui.commandArgs.value) },
+    });
+    patchCommands({ state: "ready", result: payload, error: null });
+    ui.commandOutput.innerHTML = renderCommandResult(payload, { state: "ready" });
+
+    // A status-shaped command output feeds the trace timeline without any extra endpoint.
+    if (/status/i.test(command) && payload.stdout) {
+      applyTraceText(payload.stdout);
+    }
+  } catch (error) {
+    const described = describeError(error);
+    described.result = error?.result ?? null;
+    patchCommands({ state: "error", error: described });
+    ui.commandOutput.innerHTML = renderCommandResult(null, { state: "error", error: described });
+  } finally {
+    ui.commandRun.disabled = false;
+    applyWritePermissions();
+  }
 }
 
 function parseArgs(text) {
@@ -536,297 +428,64 @@ function parseArgs(text) {
     .filter((item) => item.length > 0);
 }
 
-function describeReloadHint(response) {
-  if (!response) {
-    return "—";
-  }
-  if (response.restartRequired) {
-    return response.reloadHint === "restart-plugin"
-      ? "保存后需重启宿主以重新加载插件配置"
-      : "保存后需重启宿主以生效";
-  }
-  return response.reloadHint === "reload-profiles" ? "profiles 已热重载" : "无需重启";
+// ------------------------------------------------------------------ trace
+
+function applyTraceText(text) {
+  patchTrace({ text });
+  ui.traceInput.value = text;
+  ui.traceView.innerHTML = renderTimeline(parseStatusText(text), { limit: state.trace.limit });
 }
 
-function fillDocumentSelect(snapshot) {
-  const documents = (snapshot.config?.documents || []).map((doc) => doc.id);
-  const fallback = ["profiles", `plugin:${snapshot.self.pluginId}`];
-  const ids = documents.length ? documents : fallback;
-  const current = ui.configDoc.value || fallback[0];
+// ------------------------------------------------------------------ diagnostics
 
-  ui.configDoc.replaceChildren();
-  for (const id of ids) {
-    const option = document.createElement("option");
-    option.value = id;
-    option.textContent = id;
-    ui.configDoc.appendChild(option);
-  }
+async function exportDiagnostics() {
+  patchDiag({ state: "running", error: null });
+  ui.diagView.innerHTML = renderDiag({ state: "running" });
+  ui.diagExport.disabled = true;
 
-  ui.configDoc.value = ids.includes(current) ? current : ids[0];
-  configDocumentId = ui.configDoc.value;
-}
-
-function renderUndo(entries) {
-  ui.configUndo.replaceChildren();
-  ui.configUndo.appendChild(node(
-    "p",
-    "会话内快照：每文档最多 8 条、全局 32 条、30 分钟后失效；控制台不读取宿主备份内容，"
-      + "宿主备份需在服务器上手动恢复（路径由保存响应给出）。",
-    "doc",
-  ));
-
-  if (!entries.length) {
-    ui.configUndo.appendChild(node("p", "当前没有可回滚的会话内快照。", "empty"));
-    return;
-  }
-
-  const canRollback = currentRole === "admin" && rolePermissions.write === true;
-
-  for (const entry of entries) {
-    const row = node("div", undefined, "undo-row");
-    row.appendChild(node("span", `${entry.undoId} · ${formatTime(entry.recordedAt)} · ${entry.sizeBytes} B`, "muted"));
-    if (entry.backupPath) {
-      row.appendChild(node("span", ` 宿主备份（手动恢复）：${entry.backupPath}`, "doc"));
+  try {
+    const response = await fetch("/api/diagnostics", { credentials: "same-origin", cache: "no-store" });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null);
+      throw Object.assign(new Error(payload?.error?.message || `HTTP ${response.status}`), {
+        code: payload?.error?.code ?? `http.${response.status}`,
+      });
     }
-    const button = node("button", canRollback ? "回滚到此处" : "回滚（需 admin）");
-    button.type = "button";
-    button.disabled = !canRollback;
-    button.addEventListener("click", () => rollbackConfig(entry.undoId));
-    row.appendChild(button);
-    ui.configUndo.appendChild(row);
-  }
-}
 
-function renderValidation(validation) {
-  const lines = [
-    `valid=${validation.valid} source=${validation.source || "?"} etag=${validation.eTag || "?"}`,
-    `size=${validation.sizeBytes} bytes secret=${validation.containsSecretLiteral}`,
-  ];
+    const blob = await response.blob();
+    const fileName = parseFileName(response.headers.get("Content-Disposition")) ?? "natter-diag.zip";
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = fileName;
+    anchor.click();
+    URL.revokeObjectURL(url);
 
-  for (const issue of validation.issues || []) {
-    lines.push(`- ${issue.pointer || "$"} [${issue.code}] ${issue.message}`);
-  }
-
-  const diff = validation.diff;
-  if (diff) {
-    lines.push("", `diff +${diff.added} -${diff.removed}${diff.truncated ? " (截断)" : ""}`);
-    lines.push(...(diff.lines || []).slice(0, 60));
-  }
-
-  ui.configDiff.textContent = lines.join("\n");
-}
-
-async function loadConfigDocument() {
-  if (!configDocumentId) {
-    return;
-  }
-
-  setConfigStatus("加载中…", false);
-  try {
-    const document = await api(`/api/config/${encodeURIComponent(configDocumentId)}`);
-    configEtag = document.exists ? document.eTag : null;
-    ui.configText.value = document.content || "";
-    ui.configDiff.textContent = "";
-    setConfigStatus(
-      `${document.exists ? "已加载" : "文档不存在（保存将创建）"} · etag=${document.eTag} · `
-        + `source=${document.source} · ${describeReloadHint(document)}`,
-      false,
-    );
-    await refreshUndo();
+    const last = {
+      fileName,
+      totalBytes: blob.size,
+      maxTotalBytes: 8 * 1024 * 1024,
+      truncated: response.headers.get("X-WebConsole-Diag-Truncated") === "true",
+      redaction: "见 manifest.json",
+      files: [],
+    };
+    patchDiag({ state: "ready", last, error: null });
+    ui.diagView.innerHTML = renderDiag({ state: "ready", last });
   } catch (error) {
-    setConfigStatus(`${error.code || "error"}：${error.message}`, true);
-  }
-}
-
-async function refreshUndo() {
-  if (!configDocumentId) {
-    return;
-  }
-  try {
-    const payload = await api(`/api/config/${encodeURIComponent(configDocumentId)}/undo`);
-    renderUndo(payload.entries || []);
-  } catch {
-    renderUndo([]);
-  }
-}
-
-async function validateConfig() {
-  if (!configDocumentId) {
-    return;
-  }
-
-  setConfigStatus("校验中…", false);
-  try {
-    const payload = await api(`/api/config/${encodeURIComponent(configDocumentId)}/validate`, {
-      method: "POST",
-      body: { content: ui.configText.value },
-    });
-    renderValidation(payload.validation);
-    setConfigStatus(payload.validation.valid ? "校验通过。" : "校验未通过，见下方问题列表。", !payload.validation.valid);
-  } catch (error) {
-    setConfigStatus(`${error.code || "error"}：${error.message}`, true);
-  }
-}
-
-async function saveConfig() {
-  if (!configDocumentId) {
-    return;
-  }
-
-  setConfigStatus("保存中…", false);
-  try {
-    const payload = await api(`/api/config/${encodeURIComponent(configDocumentId)}`, {
-      method: "POST",
-      body: { content: ui.configText.value, etag: configEtag },
-    });
-    configEtag = payload.eTag;
-    const backup = payload.backupPath
-      ? `宿主备份 ${payload.backupPath}（服务器端手动恢复）`
-      : "新建文档，无宿主备份";
-    setConfigStatus(
-      `已保存 · etag=${payload.eTag} · ${backup} · ${describeReloadHint(payload)}`
-        + (payload.undoId ? ` · 可回滚快照 ${payload.undoId}` : ""),
-      false,
-    );
-    renderValidation({ valid: true, source: "host", eTag: payload.eTag, sizeBytes: 0, containsSecretLiteral: false, issues: [], diff: payload.diff });
-    await refreshUndo();
-  } catch (error) {
-    if (error.status === 409 && error.code === "config.conflict") {
-      const current = error.detail?.conflictETag;
-      if (current) {
-        configEtag = current;
-      }
-      setConfigStatus(`内容已被他人修改（当前 etag=${current || "?"}）。请重新加载后再保存。`, true);
-      return;
-    }
-    setConfigStatus(`${error.code || "error"}：${error.message}`, true);
-  }
-}
-
-async function rollbackConfig(undoId) {
-  if (!configDocumentId) {
-    return;
-  }
-
-  setConfigStatus("回滚中…", false);
-  try {
-    const payload = await api(`/api/config/${encodeURIComponent(configDocumentId)}/rollback`, {
-      method: "POST",
-      body: { etag: configEtag, undoId },
-    });
-    const saved = payload.saved || {};
-    configEtag = saved.eTag || configEtag;
-    setConfigStatus(`已回滚到快照 ${undoId} · etag=${saved.eTag || "?"}`, false);
-    await loadConfigDocument();
-  } catch (error) {
-    if (error.code === "config.undo_empty") {
-      setConfigStatus("没有可回滚的会话内快照（可能已超过 30 分钟或已被使用）；请用宿主备份路径手动恢复。", true);
-      return;
-    }
-    setConfigStatus(`${error.code || "error"}：${error.message}`, true);
-  }
-}
-
-function applyAdminAvailability(snapshot) {
-  adminStatus = snapshot.admin || {};
-  const configAvailable = Boolean(adminStatus.configStoreAvailable);
-  const writeEnabled = Boolean(snapshot.config?.writeEnabled);
-
-  for (const element of [ui.configLoad, ui.configValidate]) {
-    element.disabled = !configAvailable;
-  }
-  ui.configSave.disabled = !configAvailable || !writeEnabled;
-  ui.configDoc.disabled = !configAvailable;
-
-  if (!configAvailable) {
-    setConfigStatus(`配置编辑不可用：${snapshot.config?.writeGapCode || "host.admin_config.unavailable"}`, true);
-  } else if (currentRole !== "admin") {
-    setConfigStatus("viewer 只读会话：可以查看与校验，保存/回滚需要 admin 角色。", true);
-  } else if (!writeEnabled) {
-    setConfigStatus("只读模式：readOnly=true（统一返回 console.read_only），或 allowConfigWrite=false。", true);
-  } else {
-    setConfigStatus(`宿主配置已接入（${snapshot.config?.writeGapCode || "可写"}）。`, false);
-  }
-
-  const commandAvailable = Boolean(adminStatus.commandRunnerAvailable);
-  const commandEnabled = Boolean(adminStatus.commandEnabled);
-  ui.commandRun.disabled = !commandAvailable || !commandEnabled;
-  ui.commandName.disabled = !commandEnabled;
-  ui.commandArgs.disabled = !commandEnabled;
-  if (currentRole !== "admin") {
-    ui.commandStatus.textContent = "viewer 只读会话：命令执行需要 admin 角色（服务端强制）。";
-  } else if (commandEnabled) {
-    ui.commandStatus.textContent = commandAvailable
-      ? `允许命令：${(adminStatus.commandAllowlist || []).join(", ") || "（空）"} · 超时 ${adminStatus.commandTimeoutSeconds}s`
-      : `命令控制台不可用：${adminStatus.commandGapCode || "host.admin_command.unavailable"}`;
-  } else {
-    ui.commandStatus.textContent = "命令控制台已禁用：readOnly=true 或 allowCommandConsole=false。";
-  }
-  ui.commandStatus.className = commandEnabled && commandAvailable ? "muted" : "error";
-}
-
-async function runCommand() {
-  const command = ui.commandName.value.trim();
-  if (!command) {
-    ui.commandOutput.textContent = "请先输入命令（需与 commandAllowlist 精确匹配）。";
-    return;
-  }
-
-  ui.commandRun.disabled = true;
-  ui.commandOutput.textContent = "运行中…";
-  try {
-    const payload = await api("/api/commands", {
-      method: "POST",
-      body: { command, args: parseArgs(ui.commandArgs.value) },
-    });
-    ui.commandOutput.textContent = [
-      `exit=${payload.exitCode} duration=${payload.durationMs}ms bytes=${payload.outputBytes}`
-        + `${payload.truncated ? " (output 已截断)" : ""}`,
-      payload.stdout ? `--- stdout ---\n${payload.stdout}` : "",
-      payload.stderr ? `--- stderr ---\n${payload.stderr}` : "",
-    ].filter(Boolean).join("\n");
-  } catch (error) {
-    const result = error.result;
-    const detail = result
-      ? `exit=${result.exitCode} duration=${result.durationMs}ms${result.timedOut ? " (超时)" : ""}\n`
-        + `${result.stdout || ""}${result.stderr ? "\n" + result.stderr : ""}`
-      : "";
-    ui.commandOutput.textContent = `${error.code || "error"}：${error.message}\n${detail}`;
+    const described = describeError(error);
+    patchDiag({ state: "error", error: described });
+    ui.diagView.innerHTML = renderDiag({ state: "error", error: described });
   } finally {
-    ui.commandRun.disabled = false;
+    ui.diagExport.disabled = false;
   }
 }
 
-async function load() {
-  ui.statusLine.textContent = "loading…";
-  try {
-    const snapshot = await api("/api/snapshot");
-    render(snapshot);
-  } catch (error) {
-    if (error.status === 401) {
-      csrf = null;
-      showLogin("会话已过期，请重新登录。");
-      return;
-    }
-    throw error;
-  }
+function parseFileName(disposition) {
+  const match = /filename="?([^";]+)"?/i.exec(disposition || "");
+  return match ? match[1] : null;
 }
 
-async function bootstrap() {
-  try {
-    const session = await api("/api/session");
-    csrf = session.csrf;
-    applySession(session);
-    showDashboard();
-    await load();
-  } catch (error) {
-    if (error.status === 401) {
-      showLogin();
-      return;
-    }
-    showLogin(error.message);
-  }
-}
+// ------------------------------------------------------------------ wiring
 
 ui.loginForm.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -835,71 +494,140 @@ ui.loginForm.addEventListener("submit", async (event) => {
   button.disabled = true;
 
   try {
-    const session = await api("/api/session", { method: "POST", body: { token: ui.token.value } });
-    csrf = session.csrf;
+    const session = await request("/api/session", { method: "POST", body: { token: ui.token.value } });
     applySession(session);
     ui.token.value = "";
     showDashboard();
-    await load();
+    await loadSnapshot();
   } catch (error) {
-    ui.loginError.textContent = error.message;
+    ui.loginError.textContent = describeError(error).message;
   } finally {
     button.disabled = false;
   }
 });
 
-ui.configDoc.addEventListener("change", () => {
-  configDocumentId = ui.configDoc.value;
-  configEtag = null;
-  ui.configText.value = "";
-  ui.configDiff.textContent = "";
-  setConfigStatus(`已选择 ${configDocumentId}，点击“加载”读取当前内容。`, false);
-  renderUndo([]);
-});
-
-ui.configLoad.addEventListener("click", () => {
-  loadConfigDocument().catch((error) => setConfigStatus(`加载失败：${error.message}`, true));
-});
-
-ui.configValidate.addEventListener("click", () => {
-  validateConfig().catch((error) => setConfigStatus(`校验失败：${error.message}`, true));
-});
-
-ui.configSave.addEventListener("click", () => {
-  saveConfig().catch((error) => setConfigStatus(`保存失败：${error.message}`, true));
-});
-
-ui.commandRun.addEventListener("click", () => {
-  runCommand().catch((error) => {
-    ui.commandOutput.textContent = `运行失败：${error.message}`;
-    ui.commandRun.disabled = false;
-  });
-});
-
-ui.logQuery.addEventListener("click", () => {
-  queryLogs({ resetOffset: true }).catch((error) => setLogStatus(`查询失败：${error.message}`, true));
-});
-
-ui.logPrev.addEventListener("click", previousLogPage);
-ui.logNext.addEventListener("click", nextLogPage);
-ui.logExportText.addEventListener("click", () => exportLogs("text"));
-ui.logExportJsonl.addEventListener("click", () => exportLogs("jsonl"));
-
 ui.refresh.addEventListener("click", () => {
-  load().catch((error) => {
+  loadSnapshot().catch((error) => {
     ui.statusLine.className = "status error";
-    ui.statusLine.textContent = `刷新失败：${error.message}`;
+    ui.statusLine.textContent = `刷新失败：${describeError(error).message}`;
   });
 });
 
 ui.logout.addEventListener("click", async () => {
   try {
-    await api("/api/session", { method: "DELETE" });
+    await request("/api/session", { method: "DELETE" });
   } catch {
     // A dead session still returns to the login screen.
   }
-  csrf = null;
+  update({ csrf: null });
+  stopPolling();
   showLogin("已退出。");
 });
 
-bootstrap();
+ui.logQuery.addEventListener("click", () => queryLogs({ resetOffset: true }).catch(() => {}));
+ui.logPrev.addEventListener("click", () => {
+  const limit = Number(ui.logLimit.value || "200");
+  patchLogs({ offset: Math.max(0, state.logs.offset - limit) });
+  queryLogs().catch(() => {});
+});
+ui.logNext.addEventListener("click", () => {
+  const limit = Number(ui.logLimit.value || "200");
+  patchLogs({ offset: state.logs.nextOffset ?? state.logs.offset + limit });
+  queryLogs().catch(() => {});
+});
+ui.logExportText.addEventListener("click", () => exportLogs("text"));
+ui.logExportJsonl.addEventListener("click", () => exportLogs("jsonl"));
+
+ui.configDoc.addEventListener("change", () => {
+  patchConfig({ documentId: ui.configDoc.value, etag: null });
+  ui.configText.value = "";
+  ui.configDiff.innerHTML = "";
+  ui.configStatus.innerHTML = renderConfigMessage(`已选择 ${ui.configDoc.value}，点击“加载”读取当前内容。`, false);
+  ui.configUndo.innerHTML = renderUndo([]);
+});
+ui.configLoad.addEventListener("click", () => loadConfigDocument().catch(() => {}));
+ui.configValidate.addEventListener("click", () => validateConfig().catch(() => {}));
+ui.configSave.addEventListener("click", () => saveConfig().catch(() => {}));
+
+ui.configUndo.addEventListener("click", (event) => {
+  const button = event.target.closest("button[data-action='rollback']");
+  if (!button) {
+    return;
+  }
+
+  rollbackConfig(button.dataset.undo).catch(() => {});
+});
+
+ui.commandRun.addEventListener("click", () => runCommand().catch(() => {}));
+
+ui.traceParse.addEventListener("click", () => applyTraceText(ui.traceInput.value));
+ui.traceClear.addEventListener("click", () => {
+  patchTrace({ text: "", limit: 10 });
+  ui.traceInput.value = "";
+  ui.traceView.innerHTML = renderTimeline(null);
+});
+
+// Load more is a delegated action so the view stays a pure string renderer.
+ui.traceView.addEventListener("click", (event) => {
+  const target = event.target;
+  if (target.matches("[data-action='trace-more']")) {
+    patchTrace({ limit: state.trace.limit + 10 });
+    ui.traceView.innerHTML = renderTimeline(parseStatusText(state.trace.text), { limit: state.trace.limit });
+    return;
+  }
+
+  const copyable = target.closest("[data-copy]");
+  if (copyable) {
+    navigator.clipboard?.writeText(copyable.dataset.copy ?? "");
+  }
+});
+
+ui.diagExport.addEventListener("click", () => exportDiagnostics().catch(() => {}));
+
+function startPolling() {
+  stopPolling();
+  pollTimer = setInterval(() => {
+    if (!ui.dashboard.hidden) {
+      loadSnapshot().catch(() => {});
+    }
+  }, POLL_INTERVAL_MS);
+}
+
+function stopPolling() {
+  if (pollTimer !== null) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+}
+
+// Re-render the badge when the state changes; views stay pure.
+subscribe(() => {
+  ui.roleBadge.textContent = state.role;
+  ui.roleBadge.className = `badge ${state.role === "admin" ? "ok" : "degraded"}`;
+});
+
+async function bootstrap() {
+  try {
+    const session = await request("/api/session");
+    applySession(session);
+    showDashboard();
+    await loadSnapshot();
+    startPolling();
+  } catch (error) {
+    const described = describeError(error);
+    if (described.status === 401) {
+      showLogin();
+      return;
+    }
+
+    showLogin(described.message);
+  }
+}
+
+// Exported for tests: the entry module is importable without a browser (no top-level DOM writes
+// beyond element lookups that tolerate missing nodes).
+export { applyTraceText, exportDiagnostics, loadSnapshot, renderSnapshot, state };
+
+if (typeof document !== "undefined" && ui.loginForm) {
+  bootstrap();
+}
