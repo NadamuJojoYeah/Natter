@@ -2,7 +2,7 @@ namespace Natter.Plugin.PromptLibrary;
 
 /// <summary>
 /// Prompt Library plugin configuration (NPS config.json). The plugin only provides data
-/// (fragments/presets); compilation, ordering, budgets and the mandatory host safety block stay
+/// (fragments/presets); compilation, ordering and budgets stay
 /// in the host composer. See docs/PROMPT_COMPILER.md §5/§6.
 /// </summary>
 public sealed class PromptLibraryOptions
@@ -50,11 +50,6 @@ public sealed class PromptFragmentDefinition
     public int Order { get; init; }
 
     public bool EnabledByDefault { get; init; } = true;
-
-    public bool CanDisable { get; init; } = true;
-
-    /// <summary>Rejected by the loader: only the host may create mandatory fragments.</summary>
-    public bool Mandatory { get; init; }
 
     public int MaxCharacters { get; init; } = 8000;
 

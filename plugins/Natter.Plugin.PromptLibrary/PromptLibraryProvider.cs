@@ -4,9 +4,9 @@ namespace Natter.Plugin.PromptLibrary;
 
 /// <summary>
 /// NPS <c>prompt.provider</c> implementation. The plugin supplies presets/fragments; compilation
-/// goes through the host-owned <see cref="PromptComposer"/>, which always injects the mandatory
-/// host safety fragment, so this provider cannot remove it. On any failure the provider degrades to
-/// the same safe fallback as <c>host#static</c> (which lets the context assembler append safety).
+/// goes through the host-owned <see cref="PromptComposer"/>, which injects no fragments and
+/// treats safety like any other preset fragment. On any failure the provider degrades to the same
+/// safe fallback as <c>host#static</c> (the fallback has no appended safety block).
 /// No prompt text or variable value is ever logged.
 /// </summary>
 public sealed class PromptLibraryProvider : IPromptProvider
@@ -54,6 +54,8 @@ public sealed class PromptLibraryProvider : IPromptProvider
                 DisabledFragmentIds = Combine(library.DisabledFragments, request.Profile.Prompt.DisabledFragments),
                 PluginFragments = pluginFragments.Fragments,
                 PluginFragmentWarnings = pluginFragments.Warnings,
+                PluginFragmentProviderCount = pluginFragments.ProviderCount,
+                PluginFragmentElapsedMilliseconds = pluginFragments.ElapsedMilliseconds,
             };
 
             var plan = _composer.Compose(compose);
@@ -66,11 +68,7 @@ public sealed class PromptLibraryProvider : IPromptProvider
                 plan.Disabled.Count,
                 plan.Hash);
 
-            return _composer.ToBundle(plan) with
-            {
-                PluginFragmentCount = plan.PluginFragmentCount,
-                PluginFragmentProviderCount = pluginFragments.ProviderCount,
-            };
+            return _composer.ToBundle(plan);
         }
         catch (PromptCompilationException exception)
         {
@@ -131,7 +129,6 @@ public sealed class PromptLibraryProvider : IPromptProvider
         if (string.IsNullOrWhiteSpace(system))
             system = FallbackSystemPrompt;
 
-        // SafetyAppended stays false so the host context assembler appends the mandatory block.
         return new PromptBundle(system, Persona: null, Version: "prompt-library-fallback:" + reason);
     }
 

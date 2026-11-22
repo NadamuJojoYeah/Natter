@@ -14,7 +14,6 @@ public static class PromptLibraryCodes
     public const string FragmentPathInvalid = "promptlibrary.fragment-path-invalid";
     public const string FragmentTooLarge = "promptlibrary.fragment-too-large";
     public const string FragmentNotUtf8 = "promptlibrary.fragment-not-utf8";
-    public const string FragmentMandatory = "promptlibrary.fragment-mandatory-not-allowed";
     public const string PresetInvalid = "promptlibrary.preset-invalid";
     public const string PresetDuplicate = "promptlibrary.preset-duplicate";
     public const string PresetMissing = "promptlibrary.preset-missing";
@@ -215,11 +214,6 @@ public static class PromptLibraryLoader
                 PromptLibraryCodes.FragmentInvalid,
                 $"Fragment id '{definition.Id}' must match [A-Za-z0-9][A-Za-z0-9._:#-]{{0,127}}.");
 
-        if (definition.Mandatory)
-            throw new PromptLibraryLoadException(
-                PromptLibraryCodes.FragmentMandatory,
-                $"Fragment '{definition.Id}' declares mandatory=true; only the host may create mandatory fragments.");
-
         var hasText = !string.IsNullOrWhiteSpace(definition.Text);
         var hasFile = !string.IsNullOrWhiteSpace(definition.File);
         if (hasText == hasFile)
@@ -249,8 +243,6 @@ public static class PromptLibraryLoader
             source,
             definition.Order,
             definition.EnabledByDefault,
-            definition.CanDisable,
-            Mandatory: false,
             MaxCharacters: limit,
             Version: definition.Version,
             Tags: definition.Tags is { Count: > 0 } tags ? tags.ToArray() : null);

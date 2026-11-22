@@ -64,12 +64,6 @@
           "file": { "type": "string", "description": "Fragment file relative to promptDirectory (read-only, UTF-8, max 64 KiB)." },
           "order": { "type": "integer", "default": 0 },
           "enabledByDefault": { "type": "boolean", "default": true },
-          "canDisable": { "type": "boolean", "default": true },
-          "mandatory": {
-            "type": "boolean",
-            "default": false,
-            "description": "Only false is accepted: the host owns mandatory fragments."
-          },
           "maxCharacters": { "type": "integer", "minimum": 0, "maximum": 8000, "default": 8000 },
           "version": { "type": "string" },
           "tags": { "type": "array", "items": { "type": "string" }, "default": [] }
