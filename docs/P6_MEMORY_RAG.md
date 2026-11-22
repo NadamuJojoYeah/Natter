@@ -3,6 +3,10 @@
 > **状态**：设计已定 · 分阶段实现
 > **日期**：2026-11-22
 > **定位**：把 memory 从「精确匹配 + 最近窗口」升级为「相关度检索」，并在其上叠加可选 RAG。默认必须轻量。
+> **⚠️ 部分被取代**：关于「记忆是什么」的设计（§1-4、§7、§10）已由
+> [P6_MEMORY_SYSTEM.md](P6_MEMORY_SYSTEM.md) 取代——记忆改为五类分层、遗忘曲线、
+> 自动提炼、工具按需检索。本文档的 **RAG / 向量部分（§5-6、MEVD 核实、sqlite-vec 部署代价）继续有效**。
+>
 > **关联**：[Prompt Compiler](PROMPT_COMPILER.md)、[Harness 责任边界](HARNESS_RESPONSIBILITY.md)、[State & Vitals](STATE_VITALS_DESIGN.md)
 
 ---
