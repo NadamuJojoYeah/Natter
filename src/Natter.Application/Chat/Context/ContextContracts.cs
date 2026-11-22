@@ -30,6 +30,12 @@ public sealed record PromptBundle(
     public PromptPlan? Plan { get; init; }
 
     public bool SafetyAppended { get; init; }
+
+    /// <summary>Plugin fragments that reached the compiled plan (diagnostics only).</summary>
+    public int PluginFragmentCount { get; init; }
+
+    /// <summary>Number of <c>prompt.fragment</c> providers consulted for this prompt.</summary>
+    public int PluginFragmentProviderCount { get; init; }
 }
 
 public interface IPromptProvider
@@ -62,7 +68,9 @@ public sealed record ContextDiagnostics(
     bool SummaryIncluded,
     int TrimmedCharacters,
     string? FallbackReason = null,
-    string? PromptPlanHash = null);
+    string? PromptPlanHash = null,
+    int PluginFragmentCount = 0,
+    int PluginFragmentProviderCount = 0);
 
 public sealed record ContextBundle(
     IReadOnlyList<ChatMessage> Messages,

@@ -68,13 +68,18 @@ public sealed class PromptComposer : IPromptComposer
             disabled.Select(record => record.Id),
             usedVariables);
 
+        var pluginFragmentCount = kept.Count(fragment => fragment.Source == PromptFragmentSource.Plugin);
+        var allWarnings = Deduplicate(
+            (request.PluginFragmentWarnings ?? []).Concat(warnings));
+
         return new PromptPlan(
             preset.Id,
             preset.Version,
             kept,
             disabled,
             hash,
-            Deduplicate(warnings));
+            allWarnings,
+            pluginFragmentCount);
     }
 
     public PromptBundle ToBundle(PromptPlan plan)
@@ -96,7 +101,7 @@ public sealed class PromptComposer : IPromptComposer
 
     private static List<PromptFragment> PrepareFragments(PromptComposeRequest request, List<string> warnings)
     {
-        var fragments = new List<PromptFragment>();
+        var hostFragments = new List<PromptFragment>();
 
         foreach (var fragment in request.Fragments ?? [])
         {
@@ -124,12 +129,81 @@ public sealed class PromptComposer : IPromptComposer
                 && fragment.Source is PromptFragmentSource.Plugin or PromptFragmentSource.File)
             {
                 warnings.Add($"{PromptCompilerCodes.FragmentTruncated}:{fragment.Id}");
-                fragments.Add(fragment with { MaxCharacters = PromptCompilerDefaults.FragmentMaxCharacters });
+                hostFragments.Add(fragment with { MaxCharacters = PromptCompilerDefaults.FragmentMaxCharacters });
                 continue;
             }
 
-            fragments.Add(fragment);
+            hostFragments.Add(fragment);
         }
+
+        var hostIds = new HashSet<string>(
+            hostFragments.Select(fragment => fragment.Id)
+                .Concat(HostPromptSafety.Fragments.Select(fragment => fragment.Id)),
+            StringComparer.Ordinal);
+
+        // Plugin fragments arrive cleaned from HostPromptFragmentSource; the composer stays
+        // strict about the rules so a direct host caller cannot smuggle a malformed fragment in.
+        // A collision with a host id is defensive only (aggregator already dropped known ones):
+        // drop the guest fragment instead of failing the whole prompt.
+        var pluginFragments = new List<PromptFragment>();
+        foreach (var fragment in request.PluginFragments ?? [])
+        {
+            if (fragment is null)
+                throw new PromptCompilationException(
+                    PromptCompilerCodes.FragmentInvalid,
+                    "A plugin fragment entry is null.");
+
+            if (fragment.Mandatory)
+                throw new PromptCompilationException(
+                    PromptCompilerCodes.PluginMandatoryForbidden,
+                    $"Plugin fragment '{fragment.Id}' declares mandatory=true; only the host may do that.");
+
+            if (fragment.Source is PromptFragmentSource.HostBuiltin)
+                throw new PromptCompilationException(
+                    PromptCompilerCodes.FragmentSourceForbidden,
+                    $"Plugin fragment '{fragment.Id}' claims hostBuiltin source.");
+
+            if (!PromptPluginFragmentRules.IsValidId(fragment.Id))
+                throw new PromptCompilationException(
+                    PromptCompilerCodes.FragmentIdRejected,
+                    $"Plugin fragment id '{fragment.Id}' must match {PromptPluginFragmentRules.IdPattern}.");
+
+            if (string.IsNullOrWhiteSpace(fragment.Text))
+                throw new PromptCompilationException(
+                    PromptCompilerCodes.FragmentTextRejected,
+                    $"Plugin fragment '{fragment.Id}' has no text.");
+
+            if (fragment.Text.Length > PromptCompilerDefaults.FragmentMaxCharacters)
+                throw new PromptCompilationException(
+                    PromptCompilerCodes.FragmentTooLong,
+                    $"Plugin fragment '{fragment.Id}' exceeds {PromptCompilerDefaults.FragmentMaxCharacters} characters.");
+
+            if (hostIds.Contains(fragment.Id))
+            {
+                warnings.Add($"{PromptCompilerCodes.FragmentConflict}:{fragment.Id}");
+                continue;
+            }
+
+            pluginFragments.Add(fragment with
+            {
+                Source = PromptFragmentSource.Plugin,
+                Order = PromptPluginFragmentRules.NormalizeOrder(fragment.Order),
+                CanDisable = true,
+                Mandatory = false,
+                MaxCharacters = fragment.MaxCharacters <= 0
+                    ? PromptCompilerDefaults.FragmentMaxCharacters
+                    : Math.Min(fragment.MaxCharacters, PromptCompilerDefaults.FragmentMaxCharacters),
+            });
+        }
+
+        if (pluginFragments.Count > PromptCompilerDefaults.PluginMaxFragments)
+            throw new PromptCompilationException(
+                PromptCompilerCodes.PluginFragmentLimit,
+                $"Plugin fragments exceed the host limit of {PromptCompilerDefaults.PluginMaxFragments}.");
+
+        var fragments = new List<PromptFragment>(hostFragments.Count + pluginFragments.Count + 1);
+        fragments.AddRange(hostFragments);
+        fragments.AddRange(pluginFragments);
 
         foreach (var mandatory in HostPromptSafety.Fragments)
         {
@@ -367,6 +441,26 @@ public sealed class PromptComposer : IPromptComposer
             candidates.Add(new Candidate(fragment, text, order));
         }
 
+        // Plugin fragments are guests: they are appended (after preset-referenced fragments) even
+        // when the preset cannot know their ids. Host/library fragments are not auto-included.
+        var referencedByPreset = (preset.Sections ?? [])
+            .Select(section => section.FragmentId)
+            .ToHashSet(StringComparer.Ordinal);
+        foreach (var plugin in fragments
+                     .Where(fragment => fragment.Source == PromptFragmentSource.Plugin
+                                        && !referencedByPreset.Contains(fragment.Id))
+                     .OrderBy(fragment => fragment.Order)
+                     .ThenBy(fragment => fragment.Id, StringComparer.Ordinal))
+        {
+            if (IsDisabledByProfile(request, plugin.Id))
+                continue;
+
+            if (!plugin.EnabledByDefault)
+                continue;
+
+            candidates.Add(new Candidate(plugin, plugin.Text, plugin.Order));
+        }
+
         // Host mandatory fragments are appended even when the preset does not reference them.
         foreach (var mandatory in HostPromptSafety.Fragments)
         {
@@ -428,6 +522,29 @@ public sealed class PromptComposer : IPromptComposer
                     fragment.Source,
                     reason,
                     PromptHasher.ShortHash(fragment.Text)));
+        }
+
+        // Unreferenced plugin fragments: profile disable wins, otherwise a fragment that opted out
+        // by default is recorded so toggling it is visible in the plan hash.
+        var referencedByPreset = (preset.Sections ?? [])
+            .Select(section => section.FragmentId)
+            .ToHashSet(StringComparer.Ordinal);
+        foreach (var plugin in fragments
+                     .Where(fragment => fragment.Source == PromptFragmentSource.Plugin
+                                        && !referencedByPreset.Contains(fragment.Id))
+                     .OrderBy(fragment => fragment.Order)
+                     .ThenBy(fragment => fragment.Id, StringComparer.Ordinal))
+        {
+            var profileDisabled = IsDisabledByProfile(request, plugin.Id);
+            if (!profileDisabled && plugin.EnabledByDefault)
+                continue;
+
+            if (seen.Add(plugin.Id))
+                records.Add(new DisabledPromptFragment(
+                    plugin.Id,
+                    plugin.Source,
+                    profileDisabled ? "profile" : "default",
+                    PromptHasher.ShortHash(plugin.Text)));
         }
 
         return records;

@@ -9,11 +9,14 @@ namespace Natter.Application.Chat;
 /// host safety fragment is appended last. The emitted system prompt text for an existing profile is
 /// byte-identical to the pre-compiler behaviour (profile text + mandatory safety suffix).
 /// </summary>
-public sealed class HostStaticPromptProvider(IPromptComposer? composer = null) : IPromptProvider
+public sealed class HostStaticPromptProvider(
+    IPromptComposer? composer = null,
+    IPromptFragmentSource? fragmentSource = null) : IPromptProvider
 {
     public const string SystemFragmentId = "host.profile.system";
 
     private readonly IPromptComposer _composer = composer ?? new PromptComposer();
+    private readonly IPromptFragmentSource? _fragmentSource = fragmentSource;
 
     public async ValueTask<PromptBundle> GetAsync(PromptRequest request, CancellationToken cancellationToken = default)
     {
@@ -48,6 +51,12 @@ public sealed class HostStaticPromptProvider(IPromptComposer? composer = null) :
             version,
             [new PromptSectionRef(SystemFragmentId, Order: 10)]);
 
+        var pluginFragments = _fragmentSource is null
+            ? PromptFragmentSourceResult.Empty
+            : await _fragmentSource.GetFragmentsAsync(
+                PromptFragmentContexts.FromPromptRequest(request, PromptCompilerDefaults.StaticPresetId),
+                cancellationToken).ConfigureAwait(false);
+
         var plan = await _composer.ComposeAsync(
             new PromptComposeRequest(
                 request.Profile,
@@ -61,10 +70,16 @@ public sealed class HostStaticPromptProvider(IPromptComposer? composer = null) :
                 ConversationKind: request.Conversation.Kind.ToString(),
                 UserName: request.User.Name,
                 Variables: request.Variables,
-                DisabledFragmentIds: request.Profile.Prompt.DisabledFragments),
+                DisabledFragmentIds: request.Profile.Prompt.DisabledFragments,
+                PluginFragments: pluginFragments.Fragments,
+                PluginFragmentWarnings: pluginFragments.Warnings),
             cancellationToken).ConfigureAwait(false);
 
-        return _composer.ToBundle(plan);
+        return _composer.ToBundle(plan) with
+        {
+            PluginFragmentCount = plan.PluginFragmentCount,
+            PluginFragmentProviderCount = pluginFragments.ProviderCount,
+        };
     }
 }
 
@@ -175,7 +190,9 @@ public sealed class HostRecentWindowContextAssembler : IContextAssembler
                 memories.Count,
                 !string.IsNullOrWhiteSpace(summaryText),
                 trimmed,
-                PromptPlanHash: request.Prompt.PlanHash)));
+                PromptPlanHash: request.Prompt.PlanHash,
+                PluginFragmentCount: request.Prompt.PluginFragmentCount,
+                PluginFragmentProviderCount: request.Prompt.PluginFragmentProviderCount)));
     }
 }
 

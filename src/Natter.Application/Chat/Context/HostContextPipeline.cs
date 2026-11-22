@@ -180,7 +180,9 @@ public sealed class HostContextPipeline(
                     false,
                     0,
                     fallback ?? "assembler:" + ex.GetType().Name,
-                    prompt.PlanHash));
+                    prompt.PlanHash,
+                    prompt.PluginFragmentCount,
+                    prompt.PluginFragmentProviderCount));
         }
     }
 }

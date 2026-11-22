@@ -105,9 +105,14 @@ public sealed class ChatCompositionModule : ICompositionModule
                     Path.GetFullPath(context.Options.StateDirectory),
                     "natter.db")));
         services.AddSingleton<Natter.Application.Chat.IPromptComposer, Natter.Application.Chat.PromptComposer>();
+        services.AddSingleton<Natter.Application.Chat.IPromptFragmentSource>(provider =>
+            new Natter.Application.Chat.HostPromptFragmentSource(
+                provider.GetRequiredService<Natter.Application.Chat.IContextComponentCatalog>(),
+                provider.GetService<Microsoft.Extensions.Logging.ILogger<Natter.Application.Chat.HostPromptFragmentSource>>()));
         services.AddSingleton<Natter.Application.Chat.IPromptProvider>(provider =>
             new Natter.Application.Chat.HostStaticPromptProvider(
-                provider.GetRequiredService<Natter.Application.Chat.IPromptComposer>()));
+                provider.GetRequiredService<Natter.Application.Chat.IPromptComposer>(),
+                provider.GetRequiredService<Natter.Application.Chat.IPromptFragmentSource>()));
         services.AddSingleton<Natter.Application.Chat.IContextAssembler, Natter.Application.Chat.HostRecentWindowContextAssembler>();
         services.AddSingleton<Natter.Application.Chat.IMemoryStore>(_ =>
             string.IsNullOrWhiteSpace(context.Options.StateDirectory)
@@ -120,7 +125,10 @@ public sealed class ChatCompositionModule : ICompositionModule
         services.AddSingleton<Natter.Application.Chat.ContextComponentCatalog>(provider =>
         {
             var catalog = new Natter.Application.Chat.ContextComponentCatalog();
-            catalog.RegisterPrompt("host#static", provider.GetRequiredService<Natter.Application.Chat.IPromptProvider>());
+            catalog.RegisterPrompt(
+                "host#static",
+                new Natter.Application.Chat.DeferredPromptProvider(
+                    () => provider.GetRequiredService<Natter.Application.Chat.IPromptProvider>()));
             catalog.RegisterAssembler("host#recent-window", provider.GetRequiredService<Natter.Application.Chat.IContextAssembler>());
             var memory = provider.GetRequiredService<Natter.Application.Chat.IMemoryStore>();
             catalog.RegisterMemory("host#inline", memory);

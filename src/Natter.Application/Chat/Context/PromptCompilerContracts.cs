@@ -24,6 +24,14 @@ public static class PromptCompilerDefaults
     /// <summary>Upper bound on fragments a single plugin/library may contribute.</summary>
     public const int PluginMaxFragments = 64;
 
+    /// <summary>Upper bound on the combined text contributed by plugin fragment providers.</summary>
+    public const int PluginTotalMaxCharacters = 32000;
+
+    /// <summary>Default per-provider timeout used by the host fragment aggregator.</summary>
+    public const int PluginFragmentTimeoutMilliseconds = 2000;
+
+    public const int PluginFragmentOrderMax = 1_000_000;
+
     public const int VariableMaxCharacters = 200;
 }
 
@@ -81,11 +89,13 @@ public sealed record PromptPlan(
     IReadOnlyList<PromptFragment> Fragments,
     IReadOnlyList<DisabledPromptFragment> Disabled,
     string Hash,
-    IReadOnlyList<string> Warnings)
+    IReadOnlyList<string> Warnings,
+    int PluginFragmentCount = 0)
 {
     /// <summary>One-line diagnostic; contains ids/counts/hash only, never prompt text or variable values.</summary>
     public string Explain
-        => $"preset={PresetId} v={PresetVersion} fragments={Fragments.Count} disabled={Disabled.Count} hash={Hash}";
+        => $"preset={PresetId} v={PresetVersion} fragments={Fragments.Count} "
+           + $"pluginFragments={PluginFragmentCount} disabled={Disabled.Count} hash={Hash}";
 }
 
 /// <summary>Compilation failure. <see cref="Code"/> is a stable <c>prompt.*</c> code.</summary>
@@ -117,6 +127,17 @@ public static class PromptCompilerCodes
     public const string FragmentTruncated = "prompt.fragment_truncated";
     public const string BudgetExceeded = "prompt.budget_exceeded";
     public const string SourceMismatch = "prompt.fragment_source_mismatch";
+
+    // Aggregator warnings (plugin fragments are dropped, the prompt still compiles).
+    public const string FragmentTimeout = "prompt.fragment_timeout";
+    public const string FragmentFailed = "prompt.fragment_failed";
+    public const string FragmentMandatoryRejected = "prompt.fragment_mandatory_rejected";
+    public const string FragmentSourceRejected = "prompt.fragment_source_rejected";
+    public const string FragmentIdRejected = "prompt.fragment_id_rejected";
+    public const string FragmentTextRejected = "prompt.fragment_text_rejected";
+    public const string FragmentTooLong = "prompt.fragment_too_long";
+    public const string FragmentConflict = "prompt.fragment_conflict";
+    public const string FragmentBudget = "prompt.fragment_budget";
 }
 
 public enum PromptMissingVariableBehavior
@@ -151,7 +172,9 @@ public sealed record PromptComposeRequest(
     string? UserName = null,
     IReadOnlyDictionary<string, string>? Variables = null,
     IReadOnlyList<string>? DisabledFragmentIds = null,
-    PromptMissingVariableBehavior MissingVariables = PromptMissingVariableBehavior.Warning)
+    PromptMissingVariableBehavior MissingVariables = PromptMissingVariableBehavior.Warning,
+    IReadOnlyList<PromptFragment>? PluginFragments = null,
+    IReadOnlyList<string>? PluginFragmentWarnings = null)
 {
     /// <summary>Builds a host request from an <see cref="IPromptProvider"/> call.</summary>
     public static PromptComposeRequest FromPromptRequest(
@@ -197,7 +220,10 @@ public sealed record PromptFragmentContext(
     ConversationKind ConversationKind,
     IReadOnlyDictionary<string, string> Variables);
 
-/// <summary>Plugin contribution point for fragments (P3 wires this into the host pipeline).</summary>
+/// <summary>
+/// Plugin contribution point for fragments. The host aggregates providers through
+/// <see cref="IPromptFragmentSource"/> and hands the cleaned result to the composer.
+/// </summary>
 public interface IPromptFragmentProvider
 {
     ValueTask<IReadOnlyList<PromptFragment>> GetFragmentsAsync(
