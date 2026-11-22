@@ -70,6 +70,31 @@ public sealed class DiscordOptions
 
     public int ReadyTimeoutSeconds { get; set; } = 30;
 
+    /// <summary>
+    /// P0 (2026-11-22 incident): rebuild the gateway transport when the upstream stays
+    /// disconnected past <see cref="ReconnectWatchdogThresholdMs"/>. Discord.Net's internal
+    /// reconnect loop can terminate permanently, and nothing else in the host would recover.
+    /// </summary>
+    public bool ReconnectWatchdog { get; set; } = true;
+
+    /// <summary>How long <c>connected=false</c> is tolerated before the watchdog rebuilds the transport.</summary>
+    public int ReconnectWatchdogThresholdMs { get; set; } = 60_000;
+
+    /// <summary>Watchdog poll interval in milliseconds; 0 derives one from the threshold.</summary>
+    public int ReconnectWatchdogTickMs { get; set; }
+
+    /// <summary>First backoff delay between rebuild attempts.</summary>
+    public int ReconnectBackoffInitialMs { get; set; } = 1_000;
+
+    /// <summary>Upper bound for the exponential rebuild backoff.</summary>
+    public int ReconnectBackoffMaxMs { get; set; } = 60_000;
+
+    /// <summary>
+    /// Consecutive failed rebuilds tolerated before the upstream flags "manual intervention
+    /// required" and stops retrying instead of hammering the platform forever.
+    /// </summary>
+    public int ReconnectMaxAttempts { get; set; } = 10;
+
     public string? DevGuildId { get; set; }
 
     public bool IsGuildAllowed(string? guildId)

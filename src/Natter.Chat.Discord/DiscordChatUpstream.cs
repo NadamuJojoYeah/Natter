@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Natter.Abstractions.Ports;
 
 namespace Natter.Chat.Discord;
@@ -15,12 +17,17 @@ public sealed class DiscordChatUpstream : IChatUpstream, IChatUpstreamHealth, ID
     private readonly DiscordOptions _options;
     private readonly IClock _clock;
     private readonly DiscordEventMapper _mapper;
+    private readonly ILogger<DiscordChatUpstream> _logger;
     private readonly Subject<ChatEvent> _events = new();
     private readonly IObservable<ChatEvent> _synchronizedEvents;
     private readonly ConcurrentDictionary<string, ChatAck> _idempotency = new(StringComparer.Ordinal);
     private readonly Capabilities _capabilities;
     private readonly Lock _gate = new();
+    private readonly Lock _watchdogGate = new();
     private IDisposable? _transportSubscription;
+    private CancellationTokenSource? _watchdogCts;
+    private Task? _watchdogTask;
+    private TaskCompletionSource _connectedSignal = NewConnectedSignal();
     private long _sequence;
     private bool _connected;
     private bool _disposed;
@@ -30,17 +37,28 @@ public sealed class DiscordChatUpstream : IChatUpstream, IChatUpstreamHealth, ID
     private DateTimeOffset? _lastEventAt;
     private DateTimeOffset? _lastConnectedAt;
     private DateTimeOffset? _lastDisconnectAt;
+    private DateTimeOffset? _disconnectedSince;
+    private DateTimeOffset? _nextReconnectAt;
+    private string? _lastReconnectError;
+    private int _reconnectAttempts;
+    private int _watchdogTriggers;
+    private int _reconnectExhausted;
+    private int _reconnectInProgress;
 
     public DiscordChatUpstream(
         Source source,
         IDiscordTransport transport,
         DiscordOptions options,
-        IClock clock)
+        IClock clock,
+        ILoggerFactory? loggerFactory = null)
     {
         Source = source ?? throw new ArgumentNullException(nameof(source));
         _transport = transport ?? throw new ArgumentNullException(nameof(transport));
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
+        // Plugins resolve their services from a container that exposes ILoggerFactory but not an
+        // open ILogger<> registration, so the factory (not ILogger<T>) is the injectable seam.
+        _logger = loggerFactory?.CreateLogger<DiscordChatUpstream>() ?? NullLogger<DiscordChatUpstream>.Instance;
         _mapper = new DiscordEventMapper(source, options);
         _synchronizedEvents = Subject.Synchronize(_events);
         _capabilities = DiscordCapabilities.Create(options);
@@ -67,6 +85,52 @@ public sealed class DiscordChatUpstream : IChatUpstream, IChatUpstreamHealth, ID
     /// <summary>OBS-019: stable code of the most recent disconnect (transport code or fallback).</summary>
     public string? LastDisconnectCode { get; private set; }
 
+    /// <summary>Consecutive failed watchdog rebuilds; reset to zero by a successful connect.</summary>
+    public int ReconnectAttemptCount => Volatile.Read(ref _reconnectAttempts);
+
+    /// <summary>How many times the watchdog rebuilt the transport since the last successful connect.</summary>
+    public int WatchdogTriggerCount => Volatile.Read(ref _watchdogTriggers);
+
+    /// <summary>When the next rebuild attempt is allowed (after backoff); null when not waiting.</summary>
+    public DateTimeOffset? NextReconnectAt
+    {
+        get
+        {
+            lock (_gate)
+                return _nextReconnectAt;
+        }
+    }
+
+    /// <summary>Reason reported by the most recent failed rebuild attempt.</summary>
+    public string? LastReconnectError
+    {
+        get
+        {
+            lock (_gate)
+                return _lastReconnectError;
+        }
+    }
+
+    /// <summary>
+    /// True when the watchdog gave up after <see cref="DiscordOptions.ReconnectMaxAttempts"/>
+    /// consecutive failures. The service stays up but cannot self-heal until an operator steps in
+    /// (or the host calls ConnectAsync again).
+    /// </summary>
+    public bool ReconnectExhausted => Volatile.Read(ref _reconnectExhausted) != 0;
+
+    /// <summary>Explicit operator-facing flag raised when the watchdog stopped retrying.</summary>
+    public bool RequiresManualIntervention => ReconnectExhausted;
+
+    /// <summary>Diagnostics: the background watchdog task, null once it exited or was never started.</summary>
+    public Task? WatchdogTask
+    {
+        get
+        {
+            lock (_watchdogGate)
+                return _watchdogTask;
+        }
+    }
+
     public int? GuildCount { get; private set; }
 
     public int? ChannelCount { get; private set; }
@@ -88,6 +152,14 @@ public sealed class DiscordChatUpstream : IChatUpstream, IChatUpstreamHealth, ID
             _transportSubscription ??= _transport.Events.Subscribe(new TransportObserver(this));
         }
 
+        _logger?.LogInformation(
+            "Discord upstream connecting (source={Source}, watchdog={Watchdog}, thresholdMs={ThresholdMs}, "
+            + "maxAttempts={MaxAttempts}).",
+            Source.Key,
+            _options.ReconnectWatchdog,
+            _options.ReconnectWatchdogThresholdMs,
+            _options.ReconnectMaxAttempts);
+
         try
         {
             await _transport.ConnectAsync(cancellationToken).ConfigureAwait(false);
@@ -98,24 +170,51 @@ public sealed class DiscordChatUpstream : IChatUpstream, IChatUpstreamHealth, ID
                 throw new InvalidOperationException($"Discord transport failed to become ready: {LastError ?? "no Ready event"}");
             }
 
+            // A caller-driven connect is the clean slate: drop watchdog counters from earlier
+            // failures and (re)arm the watchdog for the connection that just came up.
+            ResetReconnectState("connect succeeded");
+            StartWatchdog();
             PublishStatus(UpstreamState.Ready);
+
+            _logger?.LogInformation(
+                "Discord upstream connected (source={Source}, guilds={GuildCount}, channels={ChannelCount}, "
+                + "latencyMs={LatencyMs}, watchdog={Watchdog}).",
+                Source.Key,
+                GuildCount,
+                ChannelCount,
+                LatencyMs,
+                WatchdogTask is { IsCompleted: false });
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            SetError("connect_failed", ex.Message);
-            PublishStatus(UpstreamState.Error, ex.Message);
+            SetError("connect_failed", DiscordLogRedaction.Redact(ex.Message));
+            PublishStatus(UpstreamState.Error, LastError);
+            // Exception objects are logged as a redacted string on purpose: exception text can
+            // echo request details, and the journal must never contain the bot token.
+            _logger?.LogError(
+                "Discord upstream connect failed (source={Source}, errorType={ErrorType}, error={Error}).",
+                Source.Key,
+                ex.GetType().Name,
+                LastError);
             throw;
         }
     }
 
     public async ValueTask DisconnectAsync(CancellationToken cancellationToken = default)
     {
+        // Stop the watchdog first: a shutdown must not race a rebuild and must not leave a
+        // background task holding the transport.
+        await StopWatchdogAsync().ConfigureAwait(false);
+
         lock (_gate)
         {
             _transportSubscription?.Dispose();
             _transportSubscription = null;
             _connected = false;
+            _disconnectedSince = null;
         }
+
+        _logger?.LogInformation("Discord upstream disconnecting (source={Source}).", Source.Key);
 
         try
         {
@@ -123,7 +222,12 @@ public sealed class DiscordChatUpstream : IChatUpstream, IChatUpstreamHealth, ID
         }
         catch (Exception ex)
         {
-            LastError = ex.Message;
+            LastError = DiscordLogRedaction.Redact(ex.Message);
+            _logger?.LogWarning(
+                "Discord upstream transport disconnect failed (source={Source}, errorType={ErrorType}, error={Error}).",
+                Source.Key,
+                ex.GetType().Name,
+                LastError);
         }
 
         PublishStatus(UpstreamState.Disconnected);
@@ -194,7 +298,13 @@ public sealed class DiscordChatUpstream : IChatUpstream, IChatUpstreamHealth, ID
             _lastDisconnectAt,
             _reconnectCount,
             LastDisconnectError,
-            LastDisconnectCode);
+            LastDisconnectCode,
+            _options.ReconnectWatchdog,
+            ReconnectAttemptCount,
+            WatchdogTriggerCount,
+            NextReconnectAt,
+            LastReconnectError,
+            RequiresManualIntervention);
 
     public void Dispose()
     {
@@ -202,7 +312,9 @@ public sealed class DiscordChatUpstream : IChatUpstream, IChatUpstreamHealth, ID
             return;
 
         _disposed = true;
+        StopWatchdogSynchronously();
         _transportSubscription?.Dispose();
+        _transportSubscription = null;
         _events.OnCompleted();
         _events.Dispose();
         if (_transport is IDisposable disposable)
@@ -373,30 +485,74 @@ public sealed class DiscordChatUpstream : IChatUpstream, IChatUpstreamHealth, ID
                 PublishInteraction(transportEvent);
                 break;
             case DiscordTransportEventKind.Error:
-                LastError = $"{transportEvent.ErrorCode ?? "transport_error"}: {transportEvent.ErrorMessage ?? "Discord transport error."}";
+                LastError = DiscordLogRedaction.Redact(
+                    $"{transportEvent.ErrorCode ?? "transport_error"}: {transportEvent.ErrorMessage ?? "Discord transport error."}");
                 if (transportEvent.Fatal)
                 {
                     lock (_gate)
+                    {
                         _connected = false;
+                        _disconnectedSince ??= _clock.UtcNow;
+                    }
                 }
+                _logger?.LogWarning(
+                    "Discord upstream transport error (source={Source}, code={Code}, fatal={Fatal}, reason={Reason}, "
+                    + "downSince={DownSince}).",
+                    Source.Key,
+                    transportEvent.ErrorCode ?? "transport_error",
+                    transportEvent.Fatal,
+                    LastError,
+                    _disconnectedSince);
                 PublishStatus(UpstreamState.Error, LastError);
                 break;
             case DiscordTransportEventKind.Disconnected:
                 lock (_gate)
+                {
                     _connected = false;
+                    // The watchdog measures downtime from the first disconnect event; repeated
+                    // disconnect noise while already down must not extend or reset the window.
+                    _disconnectedSince ??= _clock.UtcNow;
+                }
                 // OBS-019: disconnect cause is persisted (and never cleared by Ready), so /health
                 // can explain a reconnect instead of reporting "disconnected without reason".
-                LastDisconnectCode = string.IsNullOrWhiteSpace(transportEvent.ErrorCode)
-                    ? "transport_disconnected"
+                var incomingCode = string.IsNullOrWhiteSpace(transportEvent.ErrorCode)
+                    ? null
                     : transportEvent.ErrorCode;
-                LastDisconnectError = string.IsNullOrWhiteSpace(transportEvent.ErrorMessage)
-                    ? "Discord transport disconnected."
-                    : transportEvent.ErrorMessage;
+                var incomingReason = DiscordLogRedaction.Redact(
+                    string.IsNullOrWhiteSpace(transportEvent.ErrorMessage)
+                        ? "Discord transport disconnected."
+                        : transportEvent.ErrorMessage);
+
+                if (incomingCode is not null || LastDisconnectCode is null)
+                {
+                    LastDisconnectCode = incomingCode ?? "transport_disconnected";
+                    LastDisconnectError = incomingReason;
+                }
+                else
+                {
+                    // A code-less disconnect (the watchdog stopping the old transport before a
+                    // rebuild, or a transport that reports no detail) must not erase the real
+                    // close code that caused the outage.
+                    _logger?.LogDebug(
+                        "Discord upstream reported a disconnect without a code (source={Source}); "
+                        + "keeping the known cause {Code}.",
+                        Source.Key,
+                        LastDisconnectCode);
+                }
+
                 // LastError keeps its "current/latest error" semantics; the disconnect reason lives
                 // in LastDisconnectError/LastDisconnectCode and survives a reconnect (OBS-019).
-                if (!string.IsNullOrWhiteSpace(transportEvent.ErrorMessage))
-                    LastError = transportEvent.ErrorMessage;
-                PublishStatus(UpstreamState.Disconnected, transportEvent.ErrorMessage);
+                if (incomingCode is not null || !string.IsNullOrWhiteSpace(transportEvent.ErrorMessage))
+                    LastError = incomingReason;
+                _logger?.LogWarning(
+                    "Discord upstream disconnected (source={Source}, code={Code}, reason={Reason}, "
+                    + "reconnectCount={ReconnectCount}, downSince={DownSince}).",
+                    Source.Key,
+                    LastDisconnectCode,
+                    LastDisconnectError,
+                    _reconnectCount,
+                    _disconnectedSince);
+                PublishStatus(UpstreamState.Disconnected, LastDisconnectError);
                 break;
         }
     }
@@ -416,8 +572,371 @@ public sealed class DiscordChatUpstream : IChatUpstream, IChatUpstreamHealth, ID
 
         LastError = null;
         lock (_gate)
+        {
             _connected = true;
+            _disconnectedSince = null;
+        }
+
+        // A Ready event is the definition of a healthy gateway: reset the watchdog counters here
+        // (not only in the rebuild path) so health never reports a stale attempt count after the
+        // library itself recovered, and so connected=true implies attempts==0.
+        if (ReconnectAttemptCount != 0 || ReconnectExhausted)
+            ResetReconnectState("gateway became ready again");
+
+        // Releases the watchdog rebuild currently waiting for this Ready event.
+        _connectedSignal.TrySetResult();
     }
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // P0 reconnect watchdog (2026-11-22 incident): Discord.Net's internal _reconnect loop can
+    // terminate for good and leave the host with connected=false forever. This watchdog is the
+    // external supervisor that rebuilds the transport (StopAsync → LoginAsync → StartAsync,
+    // expressed as DisconnectAsync + ConnectAsync) with backoff, and stops after a hard cap.
+    // ─────────────────────────────────────────────────────────────────────────────
+
+    private static readonly TimeSpan WatchdogShutdownTimeout = TimeSpan.FromSeconds(5);
+
+    private TimeSpan WatchdogThreshold
+        => TimeSpan.FromMilliseconds(Math.Max(1, _options.ReconnectWatchdogThresholdMs));
+
+    private TimeSpan ConnectedSignalGrace
+        => TimeSpan.FromSeconds(Math.Max(5, _options.ReadyTimeoutSeconds + 5));
+
+    private void StartWatchdog()
+    {
+        if (!_options.ReconnectWatchdog)
+            return;
+
+        lock (_watchdogGate)
+        {
+            if (_watchdogTask is { IsCompleted: false })
+                return;
+
+            _watchdogCts?.Dispose();
+            _watchdogCts = new CancellationTokenSource();
+            var token = _watchdogCts.Token;
+            _watchdogTask = Task.Run(() => WatchdogLoopAsync(token), CancellationToken.None);
+        }
+
+        _logger?.LogInformation(
+            "Discord gateway watchdog started (source={Source}, thresholdMs={ThresholdMs}, tickMs={TickMs}, "
+            + "backoffMs={BackoffMs}..{BackoffMaxMs}, maxAttempts={MaxAttempts}).",
+            Source.Key,
+            _options.ReconnectWatchdogThresholdMs,
+            (long)ResolveWatchdogTick().TotalMilliseconds,
+            _options.ReconnectBackoffInitialMs,
+            _options.ReconnectBackoffMaxMs,
+            _options.ReconnectMaxAttempts);
+    }
+
+    private async ValueTask StopWatchdogAsync()
+    {
+        CancellationTokenSource? cts;
+        Task? task;
+        lock (_watchdogGate)
+        {
+            cts = _watchdogCts;
+            task = _watchdogTask;
+            _watchdogCts = null;
+            _watchdogTask = null;
+        }
+
+        if (cts is null && task is null)
+            return;
+
+        try
+        {
+            cts?.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+
+        if (task is not null)
+        {
+            try
+            {
+                await task.WaitAsync(WatchdogShutdownTimeout).ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+                _logger?.LogWarning(
+                    "Discord gateway watchdog did not stop within {TimeoutMs}ms (source={Source}).",
+                    (long)WatchdogShutdownTimeout.TotalMilliseconds,
+                    Source.Key);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }
+
+        cts?.Dispose();
+    }
+
+    private void StopWatchdogSynchronously()
+    {
+        CancellationTokenSource? cts;
+        Task? task;
+        lock (_watchdogGate)
+        {
+            cts = _watchdogCts;
+            task = _watchdogTask;
+            _watchdogCts = null;
+            _watchdogTask = null;
+        }
+
+        if (cts is null && task is null)
+            return;
+
+        try
+        {
+            cts?.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+
+        if (task is not null)
+        {
+            try
+            {
+                if (!task.Wait(WatchdogShutdownTimeout))
+                {
+                    _logger?.LogWarning(
+                        "Discord gateway watchdog did not stop within {TimeoutMs}ms while disposing (source={Source}).",
+                        (long)WatchdogShutdownTimeout.TotalMilliseconds,
+                        Source.Key);
+                }
+            }
+            catch (AggregateException)
+            {
+                // The loop reports its own failure; disposal must never throw.
+            }
+        }
+
+        cts?.Dispose();
+    }
+
+    private async Task WatchdogLoopAsync(CancellationToken cancellationToken)
+    {
+        var tick = ResolveWatchdogTick();
+        try
+        {
+            using var timer = new PeriodicTimer(tick);
+            while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
+            {
+                if (!await WatchdogTickAsync(cancellationToken).ConfigureAwait(false))
+                    return;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Clean host shutdown (DisconnectAsync/Dispose): no leak, no extra attempt.
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(
+                "Discord gateway watchdog loop failed (source={Source}, errorType={ErrorType}, error={Error}).",
+                Source.Key,
+                ex.GetType().Name,
+                DiscordLogRedaction.Redact(ex.Message));
+        }
+    }
+
+    private async ValueTask<bool> WatchdogTickAsync(CancellationToken cancellationToken)
+    {
+        if (IsConnected)
+        {
+            // A successful reconnect (ours or the library's) resets the failure counters.
+            if (ReconnectAttemptCount != 0 || ReconnectExhausted)
+                ResetReconnectState("gateway became ready again");
+            return true;
+        }
+
+        DateTimeOffset? disconnectedSince;
+        lock (_gate)
+            disconnectedSince = _disconnectedSince;
+
+        // Never connected yet: ConnectAsync owns that failure path, not the watchdog.
+        if (disconnectedSince is null)
+            return true;
+
+        var downFor = _clock.UtcNow - disconnectedSince.Value;
+        if (downFor < WatchdogThreshold || !CanAttemptReconnectNow())
+            return true;
+
+        return await AttemptReconnectAsync(downFor, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async ValueTask<bool> AttemptReconnectAsync(TimeSpan downFor, CancellationToken cancellationToken)
+    {
+        if (Interlocked.CompareExchange(ref _reconnectInProgress, 1, 0) != 0)
+            return true;
+
+        try
+        {
+            var attempt = Interlocked.Increment(ref _reconnectAttempts);
+            Interlocked.Increment(ref _watchdogTriggers);
+            var lastCode = LastDisconnectCode ?? "unknown";
+
+            _logger?.LogWarning(
+                "Discord gateway watchdog rebuilding transport (source={Source}, attempt={Attempt}, "
+                + "maxAttempts={MaxAttempts}, downForMs={DownForMs}, lastCode={LastCode}, lastError={LastError}).",
+                Source.Key,
+                attempt,
+                _options.ReconnectMaxAttempts,
+                (long)downFor.TotalMilliseconds,
+                lastCode,
+                LastDisconnectError);
+
+            // Arm the Ready signal before touching the transport so a fast reconnect cannot be
+            // missed: only a Ready event proves the gateway is usable again.
+            var ready = ResetConnectedSignal();
+
+            try
+            {
+                try
+                {
+                    await _transport.DisconnectAsync(cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    _logger?.LogDebug(
+                        "Discord gateway watchdog could not stop the old transport before rebuilding "
+                        + "(source={Source}, errorType={ErrorType}, error={Error}).",
+                        Source.Key,
+                        ex.GetType().Name,
+                        DiscordLogRedaction.Redact(ex.Message));
+                }
+
+                await _transport.ConnectAsync(cancellationToken).ConfigureAwait(false);
+                await ready.Task.WaitAsync(ConnectedSignalGrace, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                return RecordReconnectFailure(ex, attempt, lastCode);
+            }
+
+            ResetReconnectState("watchdog rebuild succeeded");
+            _logger?.LogInformation(
+                "Discord gateway watchdog reconnect succeeded (source={Source}, attempt={Attempt}, "
+                + "guilds={GuildCount}, latencyMs={LatencyMs}).",
+                Source.Key,
+                attempt,
+                GuildCount,
+                LatencyMs);
+
+            return true;
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _reconnectInProgress, 0);
+        }
+    }
+
+    private bool RecordReconnectFailure(Exception exception, int attempt, string lastCode)
+    {
+        var reason = DiscordLogRedaction.Redact(exception.Message);
+        lock (_gate)
+            _lastReconnectError = reason;
+
+        var maxAttempts = Math.Max(1, _options.ReconnectMaxAttempts);
+        if (attempt >= maxAttempts)
+        {
+            Volatile.Write(ref _reconnectExhausted, 1);
+            _logger?.LogError(
+                "Discord gateway reconnect exhausted after {Attempts} attempt(s); manual intervention required "
+                + "(source={Source}, lastCode={LastCode}, errorType={ErrorType}, lastError={LastError}). "
+                + "The watchdog stopped retrying.",
+                attempt,
+                Source.Key,
+                lastCode,
+                exception.GetType().Name,
+                reason);
+            PublishStatus(UpstreamState.Error, "reconnect_exhausted: manual intervention required");
+            return false;
+        }
+
+        var delay = ComputeBackoff(attempt);
+        lock (_gate)
+            _nextReconnectAt = _clock.UtcNow + delay;
+
+        _logger?.LogWarning(
+            "Discord gateway reconnect attempt {Attempt} failed; retrying in {DelayMs}ms "
+            + "(source={Source}, lastCode={LastCode}, errorType={ErrorType}, lastError={LastError}).",
+            attempt,
+            (long)delay.TotalMilliseconds,
+            Source.Key,
+            lastCode,
+            exception.GetType().Name,
+            reason);
+
+        return true;
+    }
+
+    private void ResetReconnectState(string reason)
+    {
+        var previousAttempts = Interlocked.Exchange(ref _reconnectAttempts, 0);
+        Volatile.Write(ref _reconnectExhausted, 0);
+
+        DateTimeOffset? previousNext;
+        lock (_gate)
+        {
+            previousNext = _nextReconnectAt;
+            _nextReconnectAt = null;
+            _lastReconnectError = null;
+        }
+
+        if (previousAttempts > 0 || previousNext is not null)
+        {
+            _logger?.LogInformation(
+                "Discord gateway reconnect state reset after {Reason} (source={Source}, clearedAttempts={Attempts}).",
+                reason,
+                Source.Key,
+                previousAttempts);
+        }
+    }
+
+    private bool CanAttemptReconnectNow()
+    {
+        DateTimeOffset? next;
+        lock (_gate)
+            next = _nextReconnectAt;
+        return next is null || _clock.UtcNow >= next.Value;
+    }
+
+    private TimeSpan ComputeBackoff(int attempt)
+    {
+        var initial = Math.Max(1, _options.ReconnectBackoffInitialMs);
+        var max = Math.Max(initial, _options.ReconnectBackoffMaxMs);
+        var shift = Math.Clamp(attempt - 1, 0, 20);
+        var scaled = (long)initial << shift;
+        return TimeSpan.FromMilliseconds(Math.Clamp(scaled, (long)initial, (long)max));
+    }
+
+    private TimeSpan ResolveWatchdogTick()
+    {
+        if (_options.ReconnectWatchdogTickMs > 0)
+            return TimeSpan.FromMilliseconds(Math.Clamp(_options.ReconnectWatchdogTickMs, 10, 60_000));
+
+        var thresholdMs = Math.Max(1, _options.ReconnectWatchdogThresholdMs);
+        return TimeSpan.FromMilliseconds(Math.Clamp(thresholdMs / 4.0, 25, 5_000));
+    }
+
+    private TaskCompletionSource ResetConnectedSignal()
+    {
+        var signal = NewConnectedSignal();
+        lock (_gate)
+            _connectedSignal = signal;
+        return signal;
+    }
+
+    private static TaskCompletionSource NewConnectedSignal()
+        => new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     private Message? PublishMappedMessage(DiscordTransportEvent transportEvent, bool isEdit)
     {
@@ -620,4 +1139,10 @@ public sealed record DiscordStatusSnapshot(
     DateTimeOffset? LastDisconnectAt = null,
     int ReconnectCount = 0,
     string? LastDisconnectError = null,
-    string? LastDisconnectCode = null);
+    string? LastDisconnectCode = null,
+    bool ReconnectWatchdogEnabled = false,
+    int ReconnectAttempts = 0,
+    int WatchdogTriggers = 0,
+    DateTimeOffset? NextReconnectAt = null,
+    string? LastReconnectError = null,
+    bool RequiresManualIntervention = false);

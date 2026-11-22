@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Net;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
@@ -8,6 +9,8 @@ using Discord.Net;
 using Discord.Net.Rest;
 using Discord.Net.WebSockets;
 using Discord.WebSocket;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Natter.Chat.Discord;
 
@@ -20,6 +23,7 @@ public sealed class DiscordSocketTransport : IDiscordTransport, IDisposable
     private readonly DiscordSocketClient _client;
     private readonly DiscordBotToken _token;
     private readonly DiscordOptions _options;
+    private readonly ILogger<DiscordSocketTransport> _logger;
     private readonly Subject<DiscordTransportEvent> _events = new();
     private readonly IObservable<DiscordTransportEvent> _synchronizedEvents;
     private readonly ConcurrentDictionary<string, CachedInteraction> _interactions = new(StringComparer.Ordinal);
@@ -31,14 +35,22 @@ public sealed class DiscordSocketTransport : IDiscordTransport, IDisposable
     private bool _disposed;
     private int _commandsRegistered;
     private string? _lastGatewayError;
+    private int _lastCloseCode = -1;
     private bool _proxyConfigured;
     private bool _restCompleted;
     private bool _gatewayStarted;
 
-    public DiscordSocketTransport(DiscordOptions options, DiscordBotToken token)
+    public DiscordSocketTransport(
+        DiscordOptions options,
+        DiscordBotToken token,
+        ILoggerFactory? loggerFactory = null)
     {
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _token = token ?? throw new ArgumentNullException(nameof(token));
+        // Plugins resolve their services from a container that exposes ILoggerFactory but not an
+        // open ILogger<> registration, so the factory (not ILogger<T>) is the injectable seam.
+        _logger = loggerFactory?.CreateLogger<DiscordSocketTransport>()
+            ?? NullLogger<DiscordSocketTransport>.Instance;
 
         var config = new DiscordSocketConfig
         {
@@ -70,6 +82,22 @@ public sealed class DiscordSocketTransport : IDiscordTransport, IDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         _ready = NewReadySource();
+        var restarting = _started || _restCompleted || _gatewayStarted;
+        _lastGatewayError = null;
+        // A close code captured before this connect attempt belongs to the previous socket.
+        Volatile.Write(ref _lastCloseCode, -1);
+        var startedAt = Stopwatch.StartNew();
+
+        // P1 observability: the 2026-11-22 stall produced zero journal lines for three hours.
+        _logger.LogInformation(
+            "Discord gateway connect starting (selfId={SelfId}, restart={Restart}, proxy={Proxy}, "
+            + "restCompleted={RestCompleted}, gatewayStarted={GatewayStarted}, timeoutSeconds={TimeoutSeconds}).",
+            _options.SelfId,
+            restarting,
+            _proxyConfigured,
+            _restCompleted,
+            _gatewayStarted,
+            _options.ReadyTimeoutSeconds);
 
         try
         {
@@ -84,29 +112,60 @@ public sealed class DiscordSocketTransport : IDiscordTransport, IDisposable
 
             await _ready.Task.WaitAsync(TimeSpan.FromSeconds(Math.Max(1, _options.ReadyTimeoutSeconds)), cancellationToken)
                 .ConfigureAwait(false);
+
+            _logger.LogInformation(
+                "Discord gateway connect completed (selfId={SelfId}, connectionState={ConnectionState}, "
+                + "latencyMs={LatencyMs}, elapsedMs={ElapsedMs}).",
+                _options.SelfId,
+                _client.ConnectionState,
+                _client.Latency,
+                startedAt.ElapsedMilliseconds);
         }
         catch (TimeoutException ex)
         {
             var actualPhase = _lastGatewayError is not null || !_restCompleted
                 ? (_restCompleted ? "ws_connect" : "rest_gateway")
                 : (_client.ConnectionState == ConnectionState.Connected ? "identify_ready" : "ws_connect");
+            _logger.LogError(
+                "Discord gateway connect timed out (selfId={SelfId}, phase={Phase}, timeoutSeconds={TimeoutSeconds}, "
+                + "connectionState={ConnectionState}, proxy={Proxy}, lastDisconnectedError={LastError}).",
+                _options.SelfId,
+                actualPhase,
+                _options.ReadyTimeoutSeconds,
+                _client.ConnectionState,
+                _proxyConfigured,
+                Redact(_lastGatewayError ?? "none"));
             throw new TimeoutException(
                 $"Discord gateway did not become ready during phase '{actualPhase}' within "
                 + $"{_options.ReadyTimeoutSeconds}s. lastDisconnectedError="
-                + $"{Sanitize(_lastGatewayError ?? "none")}; connectionState={_client.ConnectionState}; "
+                + $"{Redact(_lastGatewayError ?? "none")}; connectionState={_client.ConnectionState}; "
                 + $"proxy={_proxyConfigured}; restCompleted={_restCompleted}; gatewayStarted={_gatewayStarted}.",
                 ex);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            _logger.LogInformation(
+                "Discord gateway connect cancelled (selfId={SelfId}, elapsedMs={ElapsedMs}).",
+                _options.SelfId,
+                startedAt.ElapsedMilliseconds);
             throw;
         }
         catch (Exception ex)
         {
             var actualPhase = !_restCompleted ? "rest_gateway" : "ws_connect";
+            // Never hand the exception object to ILogger: exception text can echo request
+            // details, and the journal must stay token-free.
+            _logger.LogError(
+                "Discord gateway connect failed (selfId={SelfId}, phase={Phase}, errorType={ErrorType}, "
+                + "error={Error}, proxy={Proxy}).",
+                _options.SelfId,
+                actualPhase,
+                ex.GetType().Name,
+                Redact(ex.Message),
+                _proxyConfigured);
             throw new InvalidOperationException(
                 $"Discord connect failed during phase '{actualPhase}': {ex.GetType().Name}; "
-                + $"lastDisconnectedError={Sanitize(_lastGatewayError ?? "none")}; proxy={_proxyConfigured}.",
+                + $"lastDisconnectedError={Redact(_lastGatewayError ?? "none")}; proxy={_proxyConfigured}.",
                 ex);
         }
     }
@@ -115,6 +174,14 @@ public sealed class DiscordSocketTransport : IDiscordTransport, IDisposable
     {
         if (_disposed)
             return;
+
+        if (_started)
+        {
+            _logger.LogInformation(
+                "Discord gateway disconnect requested (selfId={SelfId}, connectionState={ConnectionState}).",
+                _options.SelfId,
+                _client.ConnectionState);
+        }
 
         try
         {
@@ -127,11 +194,21 @@ public sealed class DiscordSocketTransport : IDiscordTransport, IDisposable
         }
         catch (Exception ex)
         {
+            // The socket is already unusable when Stop/Logout throws; reset the flags so an
+            // external rebuild (the reconnect watchdog) can run Login/Start again instead of
+            // waiting on a get-ready handshake that will never happen.
+            _started = false;
+            _logger.LogWarning(
+                "Discord gateway stop failed; marking the transport restartable (selfId={SelfId}, "
+                + "errorType={ErrorType}, error={Error}).",
+                _options.SelfId,
+                ex.GetType().Name,
+                Redact(ex.Message));
             Publish(new DiscordTransportEvent
             {
                 Kind = DiscordTransportEventKind.Error,
                 ErrorCode = "disconnect_failed",
-                ErrorMessage = ex.Message,
+                ErrorMessage = Redact(ex.Message),
             });
         }
 
@@ -355,6 +432,15 @@ public sealed class DiscordSocketTransport : IDiscordTransport, IDisposable
             LatencyMs = _client.Latency,
         });
 
+        _logger.LogInformation(
+            "Discord gateway ready (selfId={SelfId}, guilds={GuildCount}, channels={ChannelCount}, "
+            + "latencyMs={LatencyMs}, connectionState={ConnectionState}).",
+            _options.SelfId,
+            _client.Guilds.Count,
+            _client.Guilds.Sum(guild => guild.Channels.Count),
+            _client.Latency,
+            _client.ConnectionState);
+
         _ready.TrySetResult();
 
         if (Interlocked.Exchange(ref _commandsRegistered, 1) == 0)
@@ -547,12 +633,38 @@ public sealed class DiscordSocketTransport : IDiscordTransport, IDisposable
 
     private Task OnDisconnectedAsync(Exception exception)
     {
-        _lastGatewayError = Sanitize(exception?.Message ?? "gateway disconnected without exception detail");
+        // Discord.Net wraps every reconnectable close in GatewayReconnectException with the fixed
+        // message "Server requested a reconnect". Recover the numeric close code that was captured
+        // from the gateway log/exception before it is flattened into that message.
+        var reason = Redact(exception?.Message) is { Length: > 0 } text
+            ? text
+            : "gateway disconnected without exception detail";
+        // Written from Discord.Net's log/websocket threads; read once and clear atomically so a
+        // stale code can never be attributed to the next disconnect.
+        var cachedCloseCode = Volatile.Read(ref _lastCloseCode);
+        Volatile.Write(ref _lastCloseCode, -1);
+        var closeCode = cachedCloseCode >= 0
+            ? cachedCloseCode
+            : DiscordGatewayCloseCode.TryExtract(exception);
+        var errorCode = DiscordGatewayCloseCode.ToDisconnectCode(closeCode);
+        var detail = DiscordGatewayCloseCode.ToDisconnectMessage(closeCode, reason);
+
+        _lastGatewayError = detail;
+
+        _logger.LogWarning(
+            "Discord gateway disconnected (selfId={SelfId}, code={Code}, closeCode={CloseCode}, "
+            + "reason={Reason}, connectionState={ConnectionState}).",
+            _options.SelfId,
+            errorCode,
+            closeCode?.ToString() ?? "unknown",
+            reason,
+            _client.ConnectionState);
+
         Publish(new DiscordTransportEvent
         {
             Kind = DiscordTransportEventKind.Disconnected,
-            ErrorCode = "gateway_disconnected",
-            ErrorMessage = _lastGatewayError,
+            ErrorCode = errorCode,
+            ErrorMessage = detail,
         });
 
         return Task.CompletedTask;
@@ -560,9 +672,22 @@ public sealed class DiscordSocketTransport : IDiscordTransport, IDisposable
 
     private Task OnLogAsync(LogMessage message)
     {
+        // Discord.Net logs "The server sent close <code> (<reason>)" at warning/error level. Scan
+        // every severity: the close code is our only source of a real disconnect cause.
+        var raw = DescribeGatewayLog(message);
+        if (DiscordGatewayCloseCode.TryExtract(raw) is { } closeCode)
+            Volatile.Write(ref _lastCloseCode, closeCode);
+
         if (message.Severity is LogSeverity.Error or LogSeverity.Critical)
         {
-            _lastGatewayError = Sanitize(message.Exception?.Message ?? message.Message);
+            _lastGatewayError = Redact(message.Exception?.Message ?? message.Message);
+            var captured = Volatile.Read(ref _lastCloseCode);
+            _logger.LogWarning(
+                "Discord.Net reported an error (source={Source}, severity={Severity}, closeCode={CloseCode}, message={Message}).",
+                message.Source,
+                message.Severity,
+                captured >= 0 ? captured.ToString() : "unknown",
+                Redact(message.Message));
             Publish(new DiscordTransportEvent
             {
                 Kind = DiscordTransportEventKind.Error,
@@ -570,9 +695,31 @@ public sealed class DiscordSocketTransport : IDiscordTransport, IDisposable
                 ErrorMessage = _lastGatewayError,
             });
         }
+        else
+        {
+            _logger.LogDebug(
+                "Discord.Net log (source={Source}, severity={Severity}, message={Message}).",
+                message.Source,
+                message.Severity,
+                Redact(message.Message));
+        }
 
         return Task.CompletedTask;
     }
+
+    private static string DescribeGatewayLog(LogMessage message)
+    {
+        var text = message.Message ?? string.Empty;
+        if (message.Exception is null)
+            return text;
+
+        return string.IsNullOrWhiteSpace(message.Exception.Message)
+            ? text
+            : $"{text} {message.Exception.Message}";
+    }
+
+    private string Redact(string? value)
+        => DiscordLogRedaction.Redact(value, _token.Value);
 
     private void PublishMessage(SocketMessage message, DiscordTransportEventKind kind)
     {
@@ -760,13 +907,6 @@ public sealed class DiscordSocketTransport : IDiscordTransport, IDisposable
 
     private void Publish(DiscordTransportEvent transportEvent)
         => _events.OnNext(transportEvent);
-
-    private static string Sanitize(string message)
-        => System.Text.RegularExpressions.Regex.Replace(
-            message,
-            @"(https?://)([^/@\s]+)@",
-            "$1***@",
-            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
     private static TaskCompletionSource NewReadySource()
         => new(TaskCreationOptions.RunContinuationsAsynchronously);
