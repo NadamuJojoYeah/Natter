@@ -420,6 +420,8 @@ warning XA0033: Failed to get the Java SDK version ... (Android workload，本�
 
 ## 5. S3 低优先级（合并清单）
 
+> **复核状态（2026-11-22，基线 commit `eadcd77`）**：45 项已逐条复核并分级 → [S3 45 项复核与分级（Triage）](CODE_REVIEW_S3_TRIAGE.md)。汇总：仍成立 27 / 已修复 1 / 记录过期 7 / 不值得修 10。派工与取舍以 triage 文档为准，下面的原始条目保留不动。
+
 完整条目见附录；此处按主题给出代表项与数量：
 
 | 主题 | 数量 | 代表项 |
