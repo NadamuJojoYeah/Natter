@@ -66,12 +66,39 @@ public static class CliHostStartupPlanner
             return new CliHostStartupPlan(null, CliHostRequirement.None, false, false, null, null);
         }
 
+        // S2: `--no-host` / `--offline` must be honoured before the unknown-command fallback below,
+        // otherwise every plugin command (e.g. `web status`) bypasses it. Plugin commands are not in
+        // the catalog until activation, so ResolveCommandName returns null for them and the early
+        // return used to skip the offline branch entirely - which made it impossible to inspect a
+        // running instance with a plugin command, the exact case the flag exists for.
+        var offlineRequestedEarly = noHostRequested
+                                    || options.NoHost
+                                    || args.Contains(NoHostFlag, StringComparer.Ordinal)
+                                    || args.Contains(OfflineFlag, StringComparer.Ordinal);
+
         var commandName = ResolveCommandName(args, catalog);
         if (commandName is null)
         {
             // Not built in and not declared: it can only come from a plugin, and plugin commands are
             // registered while the host activates. Start it so the command has a chance to exist; if
             // nothing provides it, the runner reports "Unknown command" right afterwards.
+            if (offlineRequestedEarly)
+            {
+                var earlyFlag = noHostRequested
+                                || options.NoHost
+                                || args.Contains(NoHostFlag, StringComparer.Ordinal)
+                    ? NoHostFlag
+                    : OfflineFlag;
+                return new CliHostStartupPlan(
+                    args[0],
+                    CliHostRequirement.Runtime,
+                    StartHost: false,
+                    TakeInstanceLock: false,
+                    Reason: "command is not built in; plugin commands are registered during activation",
+                    Note: $"note: '{args[0]}' normally needs a running host (it may come from a plugin); "
+                          + $"running without one because {earlyFlag} was given — live state will be unavailable.");
+            }
+
             return RuntimePlan(args[0], "command is not built in; plugin commands are registered during activation");
         }
 

@@ -303,6 +303,42 @@ public sealed class CliHostStartupTests : IDisposable
         Assert.Equal(CliHostRequirement.None, catalog.GetRequirement("webconsole status"));
     }
 
+    [Fact]
+    public void No_host_is_honoured_for_plugin_commands_that_are_not_in_the_catalog_yet()
+    {
+        // Regression: an unknown command (a plugin command, only registered during activation) used to
+        // take the RuntimePlan early return, which skipped the offline branch entirely. The result was
+        // that `natter web status --no-host` still took the instance lock and failed with
+        // HL-CLI-HOST-BUSY whenever a host was running - exactly the case the flag exists for.
+        var catalog = new CliHostRequirementCatalog([new DefaultCliHostRequirements()]);
+
+        var withHost = CliHostStartupPlanner.Plan(["web", "status", "--json"], catalog, new NatterCliOptions());
+        Assert.True(withHost.StartHost);
+        Assert.True(withHost.TakeInstanceLock);
+
+        // The real entry point strips the global flag before planning (NatterCli.cs), so the planner
+        // sees it either in options or mid-argument - never as args[0] (that would be "usage", not a
+        // command). Mirror that here instead of handing the planner a shape it never receives.
+        foreach (var (argv, label) in new (string[], string)[]
+                 {
+                     (["web", "status", "--json"], "options.NoHost"),
+                     (["web", "status", "--json", "--no-host"], "flag after the command"),
+                     (["web", "--no-host", "status", "--json"], "flag between command tokens"),
+                 })
+        {
+            var parsed = NatterCliOptions.Parse(argv);
+            var stripped = argv.Where(a => a != CliHostStartupPlanner.NoHostFlag).ToArray();
+            var plan = label == "options.NoHost"
+                ? CliHostStartupPlanner.Plan(argv, catalog, new NatterCliOptions { NoHost = true })
+                : CliHostStartupPlanner.Plan(stripped, catalog, parsed, parsed.NoHost);
+
+            Assert.False(plan.StartHost);
+            Assert.False(plan.TakeInstanceLock);
+            Assert.True(plan.Degraded);
+            Assert.Contains("--no-host", plan.Note);
+        }
+    }
+
     private sealed class StubProvider(CliHostRule rule) : ICliHostRequirementProvider
     {
         public IEnumerable<CliHostRule> GetRules() => [rule];
