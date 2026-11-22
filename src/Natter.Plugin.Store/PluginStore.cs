@@ -58,10 +58,10 @@ public sealed class PluginStore
     public string PendingPath => Path.Combine(RootDirectory, "pending.json");
 
     public string GetPluginConfigPath(string pluginId)
-        => Path.Combine(ConfigDirectory, pluginId + ".json");
+        => Path.Combine(ConfigDirectory, PluginStoreIds.Validate(pluginId) + ".json");
 
     public string GetPluginDataDirectory(string pluginId)
-        => Path.Combine(DataDirectory, pluginId);
+        => Path.Combine(DataDirectory, PluginStoreIds.Validate(pluginId));
 
     public IReadOnlyList<InstalledPluginRecord> GetInstalledPlugins()
     {
@@ -414,39 +414,45 @@ public sealed class PluginStore
         string pluginId,
         bool deleteData = false,
         bool deleteConfig = false,
+        bool force = false,
         CancellationToken cancellationToken = default)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(pluginId);
+        // S1-01: the id is validated before any path is derived from it. Absolute paths, "..",
+        // uppercase and over-long ids are rejected by the store, not by the CLI only.
+        var id = PluginStoreIds.Validate(pluginId);
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             var state = ReadState();
             var pending = ReadPending();
-            var record = state.Plugins.FirstOrDefault(plugin => string.Equals(plugin.Id, pluginId, StringComparison.Ordinal));
+            var record = state.Plugins.FirstOrDefault(plugin => string.Equals(plugin.Id, id, StringComparison.Ordinal));
 
             if (record is not null)
             {
                 var trash = Path.Combine(TrashDirectory, "txn-" + Guid.NewGuid().ToString("N"));
-                var pluginRoot = Path.Combine(RootDirectory, pluginId);
+                var pluginRoot = Path.Combine(RootDirectory, id);
 
                 if (Directory.Exists(pluginRoot))
                 {
                     Directory.CreateDirectory(trash);
-                    Directory.Move(pluginRoot, Path.Combine(trash, pluginId));
+                    Directory.Move(pluginRoot, Path.Combine(trash, id));
                 }
 
                 state.Plugins.Remove(record);
                 WriteState(state);
             }
 
-            pending.Plugins.RemoveAll(item => string.Equals(item.PluginId, pluginId, StringComparison.Ordinal));
+            pending.Plugins.RemoveAll(item => string.Equals(item.PluginId, id, StringComparison.Ordinal));
             WritePending(pending);
 
-            if (deleteConfig)
-                TryDeleteFile(GetPluginConfigPath(pluginId));
+            // Data/config are only removed for an installed plugin, or when the operator explicitly
+            // passes --force. An unknown id with --delete-data must not touch the filesystem.
+            var allowDeletes = record is not null || force;
+            if (deleteConfig && allowDeletes)
+                TryDeleteFile(EnsureWithinDirectory(ConfigDirectory, GetPluginConfigPath(id)));
 
-            if (deleteData)
-                TryDeleteDirectory(GetPluginDataDirectory(pluginId));
+            if (deleteData && allowDeletes)
+                TryDeleteDirectory(EnsureWithinDirectory(DataDirectory, GetPluginDataDirectory(id)));
         }
         finally
         {
@@ -550,12 +556,40 @@ public sealed class PluginStore
         }
     }
 
+    /// <summary>Full-path + root-prefix guard (with separator) for every delete target.</summary>
+    private static string EnsureWithinDirectory(string root, string candidate)
+    {
+        var rootFull = Path.GetFullPath(root);
+        var candidateFull = Path.GetFullPath(candidate);
+        var comparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+        var prefix = Path.TrimEndingDirectorySeparator(rootFull) + Path.DirectorySeparatorChar;
+        if (!candidateFull.StartsWith(prefix, comparison))
+        {
+            throw new PluginStoreException(
+                $"refusing to delete outside the plugin store root: '{candidateFull}'",
+                [new PluginPackageIssue("delete-outside-store", $"Delete target '{candidateFull}' is outside '{rootFull}'.")]);
+        }
+
+        return candidateFull;
+    }
+
     private static void TryDeleteDirectory(string directory)
     {
         try
         {
-            if (Directory.Exists(directory))
-                Directory.Delete(directory, recursive: true);
+            if (!Directory.Exists(directory))
+                return;
+
+            // A symlinked data directory deletes the link only; the link target is never removed.
+            if (new DirectoryInfo(directory).LinkTarget is not null)
+            {
+                Directory.Delete(directory, recursive: false);
+                return;
+            }
+
+            Directory.Delete(directory, recursive: true);
         }
         catch
         {
