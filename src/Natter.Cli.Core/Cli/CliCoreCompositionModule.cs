@@ -20,6 +20,10 @@ public sealed class CliCoreCompositionModule : ICompositionModule
         services.AddSingleton<ConsoleAccessor>();
         services.AddSingleton<IConsoleAccessor>(provider => provider.GetRequiredService<ConsoleAccessor>());
         services.AddSingleton<CliCommandRegistry>();
+        // The NPS runtime withdraws a plugin's CLI commands on teardown through this sink. Resolving
+        // it is deferred to that moment, so the registry itself stays lazily constructed (task-6).
+        services.AddSingleton<Natter.Infrastructure.Plugins.Nps.IPluginCliCommandSink>(
+            provider => provider.GetRequiredService<CliCommandRegistry>());
         // S1-11: host startup is data driven — built-in rules here, plugins may add their own.
         services.AddSingleton<ICliHostRequirementProvider, DefaultCliHostRequirements>();
         services.AddSingleton<CliHostRequirementCatalog>();

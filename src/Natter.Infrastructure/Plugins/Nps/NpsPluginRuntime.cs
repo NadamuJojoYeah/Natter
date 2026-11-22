@@ -204,6 +204,7 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
 
             _portRouter?.UnregisterPlugin(candidate.Id);
             candidate.Unload();
+            WithdrawCliCommands(candidate);
         }
 
         _portRouter = null;
@@ -874,7 +875,29 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
         _portRouter?.UnregisterPlugin(candidate.Id);
 
         candidate.Unload();
+        WithdrawCliCommands(candidate);
         _startedOrder.Remove(candidate);
+    }
+
+    /// <summary>
+    /// Removes the CLI commands a plugin contributed (task-43). Called from every teardown path so a
+    /// stopped/unloaded plugin can no longer be resolved by `natter help` or invoked.
+    ///
+    /// Only withdrawal is pushed from the runtime: publishing still happens when the registry first
+    /// enumerates contributors, which preserves the lazy construction fixed in task-6. Resolving the
+    /// sink here creates the registry at most at teardown time, when the plugin set is already final.
+    /// </summary>
+    private void WithdrawCliCommands(NpsPluginCandidate candidate)
+    {
+        try
+        {
+            if (_hostProvider?.GetService(typeof(IPluginCliCommandSink)) is IPluginCliCommandSink sink)
+                sink.ReplaceOwnerCommands(NpsCliCommandOwners.For(candidate.Id), Array.Empty<CliCommandDescriptor>());
+        }
+        catch
+        {
+            // Teardown stays best-effort: a failing sink must not keep the host alive.
+        }
     }
 
     private async ValueTask StopCandidateAsync(NpsPluginCandidate candidate, CancellationToken cancellationToken)
@@ -936,6 +959,7 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
         _portRouter?.UnregisterPlugin(candidate.Id);
 
         candidate.Unload();
+        WithdrawCliCommands(candidate);
         candidate.SetState(PluginState.Stopped);
         candidate.SetContributionStatus("inactive");
         _catalog.UpdateDescriptor(candidate.Id, _ => candidate.Descriptor);
