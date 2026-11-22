@@ -296,6 +296,20 @@ natter-admin.example.com {
 | 504 | `command.timeout` | 超时；`result` 仍带部分 stdout/stderr |
 | 502 | `host.admin_command.failed` | runner 抛异常（消息已脱敏） |
 
+### 7.2.1 validate 的可见性（S1-04 修复）
+
+`POST /api/config/{id}/validate` 只做判定、不写盘，因此**在只读模式与 viewer 会话下仍可用**；但它返回的 diff 是基于**已存文档**构造的，`-` 行就是当前配置原文。规则：
+
+| 角色 | validate | `diff` 字段 |
+| --- | --- | --- |
+| `admin` | 200 | 返回，**逐行脱敏**后（`lines[]` 保留行首 `" "/-/+ "` 前缀；`added/removed/changed/truncated` 只含计数） |
+| `viewer` | 200（只读也是） | **不返回**，响应带 `diffOmitted: "role:viewer"`；只给 `valid/eTag/sizeBytes/containsSecretLiteral/issues/code/reloadHint/restartRequired` |
+
+- 无宿主 store 时走插件策略分支，`diff` 恒为 `null`，`diffOmitted: "no-host-store"`；
+- 保存（`POST /api/config/{id}`）响应的 diff 同样逐行脱敏；
+- 脱敏规则（内容/`diff`/命令输出/日志/审计共用）：PEM 私钥块（含未闭合的 `-----BEGIN …`）、`sk-*`/`ak-*`/`Bearer …`、`key=value` / `"key": "value"` 形式的敏感键值对；`${secret:NAME}` 引用**不脱敏**（保留语义）；
+- 因此 viewer 即使能调 validate，也无法通过 diff 读到未脱敏原文；admin 看到的是脱敏 diff。
+
 ### 7.3 日志过滤 / 分页 / 导出
 
 `GET /api/logs` 查询参数（全部可选，非法值 → `400 logs.invalid_query`）：
@@ -339,6 +353,9 @@ natter-admin.example.com {
 ---
 
 ## 8. 安全边界
+
+- **validate 不返回原文**：`/validate` 的 diff 只给 admin，且逐行脱敏；viewer 只拿判定与 issues（见 §7.2.1，S1-04）；
+- **读取路径脱敏**：`GET /api/config/{id}` 的 `content` 经同一套规则处理，PEM/令牌/敏感键值对不会出现在响应里；
 
 - 默认只绑定 loopback；
 - token 只从 secret provider 读取，日志/HTML/JSON/审计都不出现明文；
@@ -389,6 +406,6 @@ natter-admin.example.com {
 - `profiles` 保存后宿主返回 `restart-host`（当前不会热重载 profile store）；
 - 命令执行依赖宿主在进程内解析 CLI 命令（`admin.command.execute` 触发的命令表提前固化缺陷已由 `0f3d61c` 修复，见缺口文档 OBS-003）；
 - `external` 模式只做探测，不代理另一个实例的请求；
-- 单 token / 单角色（admin）；viewer 角色与多用户未实现；
+- 双角色（admin / viewer），仍是单会话单凭据模型；多用户/每用户账号未实现；
 - 会话只存内存，插件重启后需要重新登录；
 - 审计日志路径由 `NATTER_STATE_DIR` 决定；未设置时回落到插件目录（只读部署下不可用，会在激活阶段失败）。
