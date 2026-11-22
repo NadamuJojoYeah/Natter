@@ -1,7 +1,8 @@
 # Natter Prompt Compiler / Prompt Library 设计
 
 > **状态**：P1（host 契约 + 内置 composer）+ P2（Natter.Plugin.PromptLibrary）+ P3（`prompt.fragment` 聚合）已实现；P4–P5 待做。默认 profile 仍使用 `host#static`。
-> **日期**：2026-11-21
+> **修订**：2026-11-22 依据 [Harness 责任边界](HARNESS_RESPONSIBILITY.md) 修订 mandatory 语义——安全条款从「host 强制不可关闭」改为「默认可关闭片段」。本文中标注 **(已修订)** 的条目以新口径为准。
+> **日期**：2026-11-21（mandatory 语义 2026-11-22 修订）
 > **定位**：把 prompt 从 profile 里的临时 `systemPrompt` 提升为可管理、可组合、可关闭、可版本化的 Prompt Compiler。
 > **关联**：[Context & Memory](P3_CONTEXT_MEMORY.md)、[Context/Memory 插件](CONTEXT_MEMORY_PLUGIN.md)、[Harness 架构](HARNESS_ARCHITECTURE.md)
 
@@ -20,7 +21,37 @@
 5. 片段可排序；
 6. **每一条提示词可以关闭，不需要删除文本**；
 7. 版本、hash、诊断可追踪；
-8. host 强制安全策略不可被插件移除。
+8. ~~host 强制安全策略不可被插件移除。~~ **(已修订)** 安全条款是默认可关闭的片段，由配置/插件决定，见 [责任边界](HARNESS_RESPONSIBILITY.md) 与 §0.1。
+
+---
+
+## 0.1 责任边界（2026-11-22 修订）
+
+> 完整论证见 [Harness 责任边界](HARNESS_RESPONSIBILITY.md)。此处只记录对本文生效的结论。
+
+Natter 是 harness：**提供机制，不背书内容**。
+
+| 层 | 归属 | 本模块的体现 |
+| --- | --- | --- |
+| 机制约束 | host | 超时、异常隔离、配额、id 命名空间、可归因、编译确定性 |
+| 内容不变量 | 配置 / 插件 | 安全条款、话术、业务约束 |
+| 内容质量 | 插件 | 片段写得对不对 |
+
+因此本文早期版本的以下语义 **已被推翻**：
+
+| 旧语义（P1 实现） | 新语义 |
+| --- | --- |
+| composer 注入 `host.safety.untrusted-data`，`Mandatory=true`、`CanDisable=false` | safety 是默认 preset 里的普通片段，默认启用、**可关闭** |
+| mandatory 片段永远排在最后 | 无排序特权，按 `Order` |
+| mandatory 预算先预留 | 与普通片段一致 |
+| 关闭只产生 `prompt.mandatory_ignored` 警告，片段仍在 | 关闭即从 plan 移除，**不产生警告**（属正常配置） |
+| `PromptFragment.Mandatory` / `CanDisable` 生效 | 字段移除 |
+| `PromptBundle.SafetyAppended` 生效 | 字段移除 |
+| 截断时 `HostPromptSafety.Fit` 保底拼回安全后缀 | 移除，按普通截断 |
+
+保留：`host#static` 作为**零插件 fallback**（默认实现，非特权层）。
+
+实施状态：**设计已定，代码尚未迁移**。迁移影响面与验收标准见责任边界文档 §7 / §10。
 
 ---
 
@@ -62,7 +93,7 @@ Prompt Composer
   ├── escape
   ├── trim / budget
   ├── stable sort
-  └── append mandatory host safety
+  └── append safety fragment (default-on, closable)   **(已修订)**
         │
         ▼
 PromptPlan → ChatMessage[]
@@ -99,7 +130,7 @@ public enum PromptFragmentSource
 约束：
 
 - `Id` 全局唯一；
-- `Mandatory=true` 只能由 host 创建，且不可 disable；
+- ~~`Mandatory=true` 只能由 host 创建，且不可 disable；~~ **(已修订)** 字段将移除，安全条款改为默认启用、可关闭的普通片段；
 - `CanDisable=false` 的片段默认不能被 preset 关闭；
 - 关闭不删除源文本；
 - `MaxCharacters` 在编译时生效；
@@ -179,7 +210,7 @@ public sealed record PromptPlan(
 
 从高到低：
 
-1. host `Mandatory` 片段：永不可关闭；
+1. ~~host `Mandatory` 片段：永不可关闭；~~ **(已修订)** 不再存在不可关闭的片段，见 §0.1；
 2. preset 显式 `enabled: false` / `disabled`；
 3. profile-level override；
 4. fragment `enabledByDefault`；
@@ -245,7 +276,7 @@ public interface IPromptFragmentProvider
 
 - `prompt.fragment` contribution；
 - 有权限、版本、最大长度；
-- 不能创建 `Mandatory=true`；
+- ~~不能创建 `Mandatory=true`；~~ **(已修订)** 该字段移除后此限制自然消失；插件仍不能冒充 `HostBuiltin`；
 - host 负责排序和最终安全检查；
 - 插件不能移除其他片段。
 
@@ -289,7 +320,7 @@ public interface IPromptFragmentProvider
 - `Order` 升序；
 - `Order` 相同按 fragment id 稳定排序；
 - 支持 `before` / `after` 作为可选增强；
-- host mandatory 片段永远最后；
+- ~~host mandatory 片段永远最后；~~ **(已修订)** 无排序特权，按 `Order` → id 稳定排序；
 - 重复 fragment id 编译失败；
 - 循环依赖编译失败；
 - 关闭片段不参与排序。
@@ -354,7 +385,7 @@ Host 控制：
 prompt.control = full
 ```
 
-插件可以控制完整 message 组装，但仍不能移除 host 的 mandatory safety；必须单独 permission，默认关闭。
+插件可以控制完整 message 组装。~~但仍不能移除 host 的 mandatory safety；~~ **(已修订)** 既然 safety 已是默认可关闭片段，「不能移除」不再是需要 full 模式讨论的约束；full 模式仍须单独 permission 且默认关闭。
 
 第一阶段不做 full。
 
@@ -456,7 +487,7 @@ host 负责最终编译；插件只提供数据。
 - 关闭后源文本仍在；
 - 重新启用恢复；
 - 关闭改变 hash；
-- Mandatory 不可关闭；
+- ~~Mandatory 不可关闭；~~ **(已修订)** safety 片段默认启用、可关闭、可重新启用，关闭后 prompt 仍能编译；
 - CanDisable=false 关闭失败；
 - 重复 id；
 - 缺 fragment；
@@ -552,17 +583,17 @@ host 负责最终编译；插件只提供数据。
 
 1. **关闭不删除**：`PromptSectionRef.Enabled=false` 或 profile `prompt.disabledFragments` 只把片段排除在 `PromptPlan.Fragments` 之外；`DisabledPromptFragment` 只记录 `id/source/reason/hash`。源文本仍在配置/文件/插件对象里，下一轮把 `Enabled` 改回 true（或从 disabled 列表移除）即可恢复。
 2. **关闭改变 hash**：plan hash 包含 preset id/version、有序 fragment 的源文本 hash、disabled ids、变量名。`EnabledByDefault=false` 的片段也会以 `reason=default` 进入 disabled 列表，因此默认开关同样反映在 hash 里。
-3. **host mandatory 不可关闭**：composer 自己注入 `host.safety.untrusted-data`（`Mandatory=true`、`CanDisable=false`、`HostBuiltin`），调用方不能提供同 id 片段，也不能把它放进 disabled 列表；尝试关闭只产生 `prompt.mandatory_ignored` warning，片段仍然出现在最后。
+3. **host mandatory 不可关闭** **(已修订，见 §0.1)**：P1 实现曾由 composer 注入 `host.safety.untrusted-data`（`Mandatory=true`、`CanDisable=false`、`HostBuiltin`），关闭只产生 `prompt.mandatory_ignored` warning。新口径下 safety 为默认可关闭片段，此段仅作历史记录。
 4. **profile 级覆盖**：`prompt.disabledFragments` 可关闭 `CanDisable=true` 的片段；`CanDisable=false` 的片段被关闭是编译错误 `prompt.fragment_not_disableable`。
 5. **来源混合**：同一 preset 可引用 inline / file / plugin 片段。宿主内部直接传给 composer 的非法 plugin 片段会编译失败（`prompt.fragment_mandatory_forbidden` / `prompt.fragment_source_forbidden` / `prompt.fragment_reserved`）；来自第三方 provider 的同类片段在聚合器处降级为 warning + 丢弃，prompt 继续（见 §18）。文件片段只读、UTF-8、64 KiB 上限、禁止绝对路径/`..`/盘符/符号链接。
-6. **排序**：`Order` 升序 → fragment id ordinal；mandatory 组永远最后；preset 重复引用同一 fragment 或 fragment id 重复都会编译失败。
+6. **排序**：`Order` 升序 → fragment id ordinal；~~mandatory 组永远最后~~ **(已修订)**；preset 重复引用同一 fragment 或 fragment id 重复都会编译失败。
 7. **preset 选择**：profile `prompt.preset` → 请求 preset → locale 精确匹配 → locale 语言前缀 → `*` → id 为 `default` 的 preset → 首个声明 preset → 内置 fallback（用全部非 mandatory 片段合成，version=`fallback`）。
 8. **继承/覆盖**：`Extends` 链按 base→child 合并，child 以 `fragmentId` 覆盖 base 的 section（child 未写 `order` 时保留 base order）；变量 base→child 覆盖；循环/缺失 base 都是编译错误。
 9. **变量**：仅 `{{profile.id}}` / `{{platform}}` / `{{locale}}` / `{{conversation.kind}}` / `{{user.name}}` 会被替换。值会折叠换行/控制字符、把 `{ } < >` 折成全角（阻止递归模板与角色标签注入）、长度上限 200。未知变量保留字面量并 warning；缺失变量默认 warning（可配 `error`）。
-10. **预算**：单片段 `MaxCharacters`（默认 8000）先截断；总预算（默认 12000）只淘汰/截断非 mandatory 片段，mandatory 预算先预留，截断时 `HostPromptSafety.Fit` 会把安全后缀重新拼回。
+10. **预算**：单片段 `MaxCharacters`（默认 8000）先截断；总预算（默认 12000）。~~只淘汰/截断非 mandatory 片段，mandatory 预算先预留~~ **(已修订)** 所有片段同等对待，安全片段不再预留预算、不再有截断保底。
 11. **hash**：`sha256(presetId + presetVersion + 有序 fragment 源文本 hash + disabled ids + 变量名)`。按设计文档 §10，变量值不进入 hash；变量值变化不会改变 plan hash（recipe 身份，不是渲染文本身份）。
 12. **日志**：plan 只通过 `PromptPlan.Explain` 输出 `preset=... v=... fragments=N disabled=M hash=...`；插件 debug 日志同样只有这些字段。prompt 正文、变量值、disabled 片段 hash 之外的内容都不写日志。
-13. **host#static 兼容**：默认 profile 不变；`HostStaticPromptProvider` 用 `PromptBudget.Unbounded`（片段不设上限）编译内置 preset，输出 `profile.systemPrompt + "\n\n" + mandatory`，与 P0 一致；`PromptBundle.SafetyAppended=true` 让 assembler 不重复追加，并保证 system prompt 截断时安全后缀仍存在。唯一差异：现有 systemPrompt 若显式写了白名单占位符（如 `{{platform}}`）会被替换，未使用占位符的提示词逐字节不变。
+13. **host#static 兼容**：默认 profile 不变；`HostStaticPromptProvider` 用 `PromptBudget.Unbounded`（片段不设上限）编译内置 preset，输出 `profile.systemPrompt + "\n\n" + safety`，与 P0 一致。~~`PromptBundle.SafetyAppended=true` 让 assembler 不重复追加~~ **(已修订)** 该字段将移除；`host#static` 定位改为零插件 fallback，safety 为默认可关闭片段。唯一差异：现有 systemPrompt 若显式写了白名单占位符（如 `{{platform}}`）会被替换，未使用占位符的提示词逐字节不变。
 
 ### 17.3 示例 profile（opt-in）
 
@@ -612,7 +643,7 @@ natter prompt explain --json
 
 - 框架全量：**491/491**（原 426 + 本任务 37 个 composer/host 用例 + 并行 P5.2 tool registry 28 例；本任务用例单独跑 37/37）；
 - Prompt Library 插件：**36/36**（loader/路径安全 18、provider 8、plugin/manifest/CLI 9、NPS 真实装载 1）；
-- 覆盖：关闭不删除源文本、重新启用、关闭改变 hash、mandatory 不可关闭、`CanDisable=false`、重复 fragment/preset、缺失 fragment/base/cycle、排序稳定、locale/profile 选择、变量白名单/转义/缺失、预算截断、插件 fragment 权限、文件路径/符号链接/大小/UTF-8、默认 profile 不回归、日志无正文。
+- 覆盖：关闭不删除源文本、重新启用、关闭改变 hash、~~mandatory 不可关闭~~ **(已修订)**、`CanDisable=false`、重复 fragment/preset、缺失 fragment/base/cycle、排序稳定、locale/profile 选择、变量白名单/转义/缺失、预算截断、插件 fragment 权限、文件路径/符号链接/大小/UTF-8、默认 profile 不回归、日志无正文。
 
 ### 17.6 剩余风险与后续
 
@@ -621,7 +652,7 @@ natter prompt explain --json
 - `prompt explain` 使用合成 profile（id=`prompt-explain`、platform=`host`），不是某条真实会话的最终 prompt；真实 `profile.id/user.name` 变量值不会显示（本身也不应显示）。
 - 插件文件读取是 NPS 权限声明（`filesystem.read`），不是进程级沙箱；只允许插件目录内相对路径。
 - 没有 profile 热重载：修改 `profiles.json` 仍需重启（沿用 P4 结论）。
-- P4（WebConsole 管理）、P5（full-control）未实现；full 模式仍必须保留 host mandatory safety。
+- P4（WebConsole 管理）、P5（full-control）未实现。~~full 模式仍必须保留 host mandatory safety。~~ **(已修订)** 见 §0.1：safety 为默认可关闭片段，full 模式不涉及该约束。
 
 ---
 
@@ -631,7 +662,7 @@ natter prompt explain --json
 
 | 层 | 位置 | 职责 |
 | --- | --- | --- |
-| composer（纯函数） | `PromptCompilerContracts.cs` / `PromptComposer.cs` | `PromptComposeRequest.PluginFragments` 与 `PluginFragmentWarnings` 只是数据；composer 不注入 provider、不做 I/O，仍负责严格校验、排序、预算与 mandatory host safety |
+| composer（纯函数） | `PromptCompilerContracts.cs` / `PromptComposer.cs` | `PromptComposeRequest.PluginFragments` 与 `PluginFragmentWarnings` 只是数据；composer 不注入 provider、不做 I/O，负责严格校验、排序、预算与确定性 hash（~~与 mandatory host safety~~ **(已修订)** safety 迁移为普通片段后，composer 不再注入任何片段） |
 | 聚合器 | `src/Natter.Application/Chat/Context/PromptFragmentSource.cs` | `IPromptFragmentSource` / `HostPromptFragmentSource`：调用所有 provider、独立超时、异常隔离、清洗、去重、数量/长度上限、warning |
 | 目录 | `ContextComponentCatalog.cs` | `RegisterFragmentProvider` / `UnregisterFragmentProvider` / `FragmentProviders`（`owner#id`，与 prompt/context/memory 一致） |
 | NPS | `PluginContributionTypes.cs`、`PluginContracts.cs`、`NpsContributionRegistry.cs`、`NpsPluginRuntime.cs` | 新贡献类型 `prompt.fragment`；`IContributionRegistry.AddPromptFragmentProvider<TProvider>`；运行时按 `owner#id` 注册/注销；未声明该贡献的插件行为不变 |
@@ -665,7 +696,7 @@ Prompt Library 路径：`PromptLibraryProvider` 增加**可选** `IPromptFragmen
 
 不能做：
 
-- `Mandatory=true`（拒绝，warning `prompt.fragment_mandatory_rejected`）；
+- ~~`Mandatory=true`（拒绝，warning `prompt.fragment_mandatory_rejected`）~~ **(已修订)** 字段移除后不再适用；仍拒绝 `HostBuiltin` 冒充与非法 id；
 - 使用 `PromptFragmentSource.HostBuiltin`（拒绝，`prompt.fragment_source_rejected`）；
 - 占用 host 内置 id（`host.profile.system`、`host.safety.untrusted-data` → 丢弃，`prompt.fragment_conflict`）；
 - 与另一个插件重复 id（按 `owner#id` 排序先到先得，后者 `prompt.fragment_duplicate`）；
