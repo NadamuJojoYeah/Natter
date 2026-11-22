@@ -1,6 +1,7 @@
 using System.Reactive.Subjects;
 using Natter.Abstractions.Ports;
 using Natter.Chat;
+using Natter.Chat.Safety;
 
 namespace Natter.Chat.Satori;
 
@@ -40,6 +41,7 @@ public sealed class SatoriChatUpstream : IChatUpstream, IDisposable
     private readonly SatoriCommandMapper _commandMapper = new();
     private readonly SatoriSnTracker _snTracker = new();
     private readonly SatoriCapabilityOptions? _capabilityOptions;
+    private readonly ChatOutboundPolicy _outboundPolicy;
     private readonly ChatIdempotencyCache _idempotency;
     private readonly Subject<ChatEvent> _subject = new();
     private readonly ISubject<ChatEvent> _events;
@@ -54,12 +56,14 @@ public sealed class SatoriChatUpstream : IChatUpstream, IDisposable
         ISatoriTransport transport,
         IClock clock,
         SatoriMappingOptions? mappingOptions = null,
-        SatoriCapabilityOptions? capabilityOptions = null)
+        SatoriCapabilityOptions? capabilityOptions = null,
+        ChatOutboundPolicy? outboundPolicy = null)
     {
         Source = source ?? throw new ArgumentNullException(nameof(source));
         _transport = transport ?? throw new ArgumentNullException(nameof(transport));
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
         _capabilityOptions = capabilityOptions;
+        _outboundPolicy = outboundPolicy ?? ChatOutboundPolicy.Default;
         _mapper = new SatoriEventMapper(clock, mappingOptions);
         _capabilities = SatoriCapabilityMapper.Map(null, capabilityOptions);
         _events = Subject.Synchronize(_subject);
@@ -166,8 +170,16 @@ public sealed class SatoriChatUpstream : IChatUpstream, IDisposable
         if (!string.IsNullOrWhiteSpace(key) && _idempotency.TryGet(key, out var cached) && cached is not null)
             return cached;
 
-        if (!_commandMapper.TryMap(command, out var request) || request is null)
+        // Adapter-side defence in depth: the mapper validates the mention policy against the
+        // mapped elements (not only Content.Mentions), so a caller that bypasses the dispatcher
+        // cannot emit a high-risk mention. Text that merely looks like an element is escaped into
+        // a text node and does not become a mention.
+        if (!_commandMapper.TryMap(command, _outboundPolicy, out var request, out var mapError)
+            || request is null)
         {
+            if (mapError is not null)
+                return ChatAck.Failure(command, mapError);
+
             return ChatAck.Failure(command, ChatError.Create(
                 ChatErrorCodes.Unsupported,
                 $"The Satori adapter cannot map command type '{command.Type}'."));
