@@ -27,10 +27,20 @@ public sealed class TaskDispatcher(
     private readonly int _sendAttempts = Math.Max(1, resultSendAttempts);
     private readonly string _owner = $"host:{Environment.ProcessId}";
     private int _retryLoopStarted;
+    private long _skippedResults;
     // Lease must cover the worker timeout; a 2m lease would let the watchdog expire a
     // legitimate 5m task before it can finish.
     private static readonly TimeSpan TaskTimeout = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan LeaseTtl = TaskTimeout + TimeSpan.FromMinutes(1);
+
+    /// <summary>Results intentionally not sent because this dispatcher never reached the terminal state.</summary>
+    public long SkippedResults => Interlocked.Read(ref _skippedResults);
+
+    /// <summary>Results waiting for the background compensation loop.</summary>
+    public int PendingResultCount => _pendingResults.Count;
+
+    /// <summary>Results delivered successfully at least once.</summary>
+    public int SentResultCount => _resultsSent.Count;
 
     /// <summary>
     /// Idempotent by task id: a task that is already queued/running (or already terminal in the
@@ -72,15 +82,37 @@ public sealed class TaskDispatcher(
             && !string.Equals(task.ActorId, actorId, StringComparison.Ordinal))
             return false;
         if (_cancellations.TryGetValue(taskId, out var cts))
-            cts.Cancel();
+        {
+            try
+            {
+                cts.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+                // The worker finished between the lookup and the cancel; nothing left to cancel.
+            }
+        }
+
         return true;
     }
 
     public async ValueTask DisposeAsync()
     {
-        foreach (var cts in _cancellations.Values)
+        // Take ownership per entry so a finishing worker cannot dispose the CTS concurrently with
+        // Cancel (ObjectDisposedException in host shutdown, OBS-P53-FLAKY-HOST-WIRING).
+        foreach (var taskId in _cancellations.Keys)
         {
-            cts.Cancel();
+            if (!_cancellations.TryRemove(taskId, out var cts))
+                continue;
+
+            try
+            {
+                cts.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+
             cts.Dispose();
         }
         _cancellations.Clear();
@@ -100,6 +132,7 @@ public sealed class TaskDispatcher(
     {
         var task = created;
         var startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
+        var terminalReached = false;
         try
         {
             var current = await store.GetAsync(task.TaskId, cancellationToken).ConfigureAwait(false);
@@ -148,13 +181,13 @@ public sealed class TaskDispatcher(
             if (result.Ok)
             {
                 if (await TryTransitionAsync(task.TaskId, task.Version, AgentTaskStatus.Completed, resultText: result.Text).ConfigureAwait(false))
-                    MarkTerminal(task.TaskId, AgentTaskStatus.Completed, startedAt);
+                    terminalReached = MarkTerminal(task.TaskId, AgentTaskStatus.Completed, startedAt);
             }
             else
             {
                 if (await TryTransitionAsync(task.TaskId, task.Version, AgentTaskStatus.Failed,
                         errorCode: result.ErrorCode, errorMessage: result.ErrorMessage).ConfigureAwait(false))
-                    MarkTerminal(task.TaskId, AgentTaskStatus.Failed, startedAt);
+                    terminalReached = MarkTerminal(task.TaskId, AgentTaskStatus.Failed, startedAt);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -167,7 +200,7 @@ public sealed class TaskDispatcher(
                     && await TryTransitionAsync(current.TaskId, current.Version, AgentTaskStatus.Cancelled,
                         errorCode: "cancelled", errorMessage: "Task cancelled.").ConfigureAwait(false))
                 {
-                    MarkTerminal(task.TaskId, AgentTaskStatus.Cancelled, startedAt);
+                    terminalReached = MarkTerminal(task.TaskId, AgentTaskStatus.Cancelled, startedAt);
                 }
                 else
                 {
@@ -195,7 +228,7 @@ public sealed class TaskDispatcher(
                 logger?.LogError(ex, "Task {TaskId} failed", task.TaskId);
                 if (await TryTransitionAsync(current.TaskId, current.Version, AgentTaskStatus.Failed,
                         errorCode: "task_failed", errorMessage: "Task failed.").ConfigureAwait(false))
-                    MarkTerminal(task.TaskId, AgentTaskStatus.Failed, startedAt);
+                    terminalReached = MarkTerminal(task.TaskId, AgentTaskStatus.Failed, startedAt);
                 else
                     ReleaseTracked(task.TaskId);
             }
@@ -205,15 +238,26 @@ public sealed class TaskDispatcher(
         }
         finally
         {
-            try
+            // S1-07: only a terminal state reached by this dispatcher may deliver a result. A lease
+            // miss, a version conflict or a task advanced elsewhere is "skipped": sending here would
+            // map Pending/Running to "Task failed." and poison _resultsSent for the real result.
+            if (terminalReached)
             {
-                await SendResultOnceAsync(task).ConfigureAwait(false);
+                try
+                {
+                    await SendResultOnceAsync(task).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    logger?.LogWarning(ex, "Task {TaskId} result delivery crashed; result kept for retry.", task.TaskId);
+                    _pendingResults[task.TaskId] = 0;
+                    EnsureResultRetryLoop();
+                }
             }
-            catch (Exception ex)
+            else
             {
-                logger?.LogWarning(ex, "Task {TaskId} result delivery crashed; result kept for retry.", task.TaskId);
-                _pendingResults[task.TaskId] = 0;
-                EnsureResultRetryLoop();
+                Interlocked.Increment(ref _skippedResults);
+                logger?.LogDebug("Task {TaskId} did not reach a terminal state here; result send skipped.", task.TaskId);
             }
 
             if (_cancellations.TryRemove(task.TaskId, out var cts))
@@ -252,10 +296,10 @@ public sealed class TaskDispatcher(
         }
     }
 
-    private void MarkTerminal(string taskId, AgentTaskStatus status, long startedAt)
+    private bool MarkTerminal(string taskId, AgentTaskStatus status, long startedAt)
     {
         if (!_tracked.TryRemove(taskId, out _))
-            return;
+            return false;
 
         metrics?.Duration(System.Diagnostics.Stopwatch.GetElapsedTime(startedAt));
         switch (status)
@@ -273,6 +317,8 @@ public sealed class TaskDispatcher(
                 metrics?.Released();
                 break;
         }
+
+        return true;
     }
 
     private void ReleaseTracked(string taskId)

@@ -90,13 +90,19 @@ public sealed partial class AiChatResponder : IChatResponder
             return null;
 
         var key = _history.GetKey(chatEvent.Source, message.Conversation, message.Sender.Id);
-        var generated = await GenerateAsync(
+
+        // S1-05: the whole history-consistency window (read -> assemble -> model -> append ->
+        // command) runs under the per-conversation lease. Outbound sending happens later in the
+        // orchestrator/dispatcher and is deliberately outside this lease.
+        using var lease = await _gate.AcquireAsync(key, cancellationToken).ConfigureAwait(false);
+        var messages = await AssembleMessagesAsync(
             key,
             chatEvent.Source,
             message.Conversation,
             message.Sender,
             text,
             cancellationToken).ConfigureAwait(false);
+        var generated = await GenerateFromMessagesAsync(messages, cancellationToken).ConfigureAwait(false);
         if (generated.Text is null)
             return null;
 
@@ -132,13 +138,17 @@ public sealed partial class AiChatResponder : IChatResponder
         }
 
         var key = _history.GetKey(chatEvent.Source, interaction.Conversation, interaction.User.Id);
-        var generated = await GenerateAsync(
+
+        // S1-05: same lease window as the message path; no outbound send is performed here.
+        using var lease = await _gate.AcquireAsync(key, cancellationToken).ConfigureAwait(false);
+        var messages = await AssembleMessagesAsync(
             key,
             chatEvent.Source,
             interaction.Conversation,
             interaction.User,
             prompt,
             cancellationToken).ConfigureAwait(false);
+        var generated = await GenerateFromMessagesAsync(messages, cancellationToken).ConfigureAwait(false);
         if (generated.Text is null)
             return null;
 
@@ -152,7 +162,7 @@ public sealed partial class AiChatResponder : IChatResponder
             updateOriginal: false);
     }
 
-    private async ValueTask<GenerationResult> GenerateAsync(
+    private async ValueTask<IReadOnlyList<Microsoft.Extensions.AI.ChatMessage>> AssembleMessagesAsync(
         string conversationKey,
         Source source,
         Conversation conversation,
@@ -201,9 +211,15 @@ public sealed partial class AiChatResponder : IChatResponder
                 cancellationToken).ConfigureAwait(false);
         }
 
+        return messages;
+    }
+
+    private async ValueTask<GenerationResult> GenerateFromMessagesAsync(
+        IReadOnlyList<Microsoft.Extensions.AI.ChatMessage> messages,
+        CancellationToken cancellationToken)
+    {
         try
         {
-            using var lease = await _gate.AcquireAsync(conversationKey, cancellationToken).ConfigureAwait(false);
             var profile = Natter.Application.Chat.ProfileContext.Current;
             var options = string.IsNullOrWhiteSpace(profile?.Ai.Model)
                 ? null
