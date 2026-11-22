@@ -103,6 +103,15 @@ public sealed class ChatCompositionModule : ICompositionModule
                 : new SqliteConversationStore(Path.Combine(
                     Path.GetFullPath(context.Options.StateDirectory),
                     "natter.db")));
+        // Read-only conversation projection consumed by optional plugins (Conversation Console).
+        // The port has no write methods by design, the SQLite implementation never owns the schema
+        // and a host without --state-dir answers empty pages instead of inventing history.
+        services.AddSingleton<Natter.Application.Chat.IConversationQuery>(_ =>
+            string.IsNullOrWhiteSpace(context.Options.StateDirectory)
+                ? new Natter.Application.Chat.EmptyConversationQuery()
+                : new SqliteConversationQuery(Path.Combine(
+                    Path.GetFullPath(context.Options.StateDirectory),
+                    "natter.db")));
         services.AddSingleton<Natter.Application.Chat.IPromptComposer, Natter.Application.Chat.PromptComposer>();
         services.AddSingleton<Natter.Application.Chat.IPromptFragmentSource>(provider =>
             new Natter.Application.Chat.HostPromptFragmentSource(
@@ -276,5 +285,12 @@ public sealed class ChatCompositionModule : ICompositionModule
             ServiceLifetime.Singleton,
             "framework:chat",
             "Replay-window event deduplication."));
+
+        registry.Register(new PortAdapterDescriptor(
+            nameof(Natter.Application.Chat.IConversationQuery),
+            nameof(SqliteConversationQuery),
+            ServiceLifetime.Singleton,
+            "framework:chat",
+            "Read-only conversation projection (list/search/messages) for optional console plugins."));
     }
 }

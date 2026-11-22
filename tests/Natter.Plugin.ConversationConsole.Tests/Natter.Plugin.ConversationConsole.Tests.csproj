@@ -1,0 +1,48 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <RootNamespace>Natter.Plugin.ConversationConsole.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="coverlet.collector">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The console binds a real loopback port in one smoke test; serialize collections. -->
+    <None Update="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../plugins/Natter.Plugin.ConversationConsole/Natter.Plugin.ConversationConsole.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Package layout: <plugin-package>/plugin.json + <plugin-package>/wwwroot/* (asset tests read these). -->
+    <None Include="../../plugins/Natter.Plugin.ConversationConsole/wwwroot/**"
+          Link="plugin-package/wwwroot/%(RecursiveDir)%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../plugins/Natter.Plugin.ConversationConsole/plugin.json"
+          Link="plugin-package/plugin.json"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../plugins/Natter.Plugin.ConversationConsole/config.schema.json"
+          Link="plugin-package/config.schema.json"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../plugins/Natter.Plugin.ConversationConsole/config.sample.json"
+          Link="plugin-package/config.sample.json"
+          CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

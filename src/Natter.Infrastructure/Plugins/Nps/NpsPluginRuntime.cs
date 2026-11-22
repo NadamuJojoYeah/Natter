@@ -659,6 +659,16 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
         if (candidate.Permissions?.Granted.Contains(PluginPermissions.ChatRead) == true)
             services.AddSingleton(_hostProvider.GetRequiredService<IChatEventSource>());
 
+        // Read-only conversation projection for diagnostic consoles (docs/CONVERSATION_CONSOLE.md
+        // §2.3): gated by the same chat.read word. Without the grant the service is simply absent
+        // from the plugin provider, so the plugin keeps its "console unavailable" fallback instead
+        // of reading around the governance layer.
+        if (candidate.Permissions?.Granted.Contains(PluginPermissions.ChatRead) == true
+            && _hostProvider.GetService<Natter.Application.Chat.IConversationQuery>() is { } conversationQuery)
+        {
+            services.AddSingleton(conversationQuery);
+        }
+
         if (candidate.Permissions?.Granted.Contains(PluginPermissions.Storage) == true)
         {
             services.AddSingleton(_hostProvider.GetRequiredService<Natter.Application.Chat.IConversationStore>());

@@ -1,0 +1,11 @@
+{
+  "bind": "127.0.0.1",
+  "port": 5091,
+  "token": "${secret:CONVERSATION_CONSOLE_TOKEN}",
+  "readOnly": true,
+  "pageSize": 25,
+  "messagePageSize": 50,
+  "requestTimeoutSeconds": 15,
+  "maxConcurrentRequests": 16,
+  "auditRetentionFiles": 3
+}

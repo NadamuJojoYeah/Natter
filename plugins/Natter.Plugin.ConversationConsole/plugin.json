@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "id": "natter.plugin.conversation-console",
+  "name": "Natter Conversation Console",
+  "version": "0.1.0",
+  "kind": "tool",
+  "hostApi": ">=0.1.0 <1.0.0",
+  "entry": {
+    "assembly": "lib/Natter.Plugin.ConversationConsole.dll",
+    "type": "Natter.Plugin.ConversationConsole.ConversationConsolePlugin"
+  },
+  "description": "Read-only conversation replay console for Natter: list, filter, search and page through stored conversations via the host IConversationQuery port. P1 has no write path.",
+  "author": "Natter",
+  "license": "MIT",
+  "homepage": "https://github.com/natter-framework/natter",
+  "permissions": [
+    "network",
+    "chat.read",
+    "secrets:CONVERSATION_CONSOLE_TOKEN"
+  ],
+  "secrets": [
+    {
+      "name": "CONVERSATION_CONSOLE_TOKEN",
+      "required": true
+    }
+  ],
+  "configSchema": "config.schema.json",
+  "contributions": [],
+  "platforms": [
+    "windows",
+    "linux",
+    "macos"
+  ],
+  "capabilities": [
+    "chat:read-replay"
+  ]
+}
