@@ -40,6 +40,35 @@ staging 布局（NPS 加载器要求）：
 
 脚本保证：缺 `lib/<assembly>.deps.json` 直接失败、不写 `config.json`、重跑时保留已有 `config.json`。
 
+### 1.1 发布前必须复核 staging 产物是新构建
+
+> 来源：`docs/testing/2026-11-22-review-acceptance.md` 的 OBS-REVIEW-STAGING（High）。
+
+**问题**：源码修复不会自动进入已存在的 staging 目录。复用旧的 staging（例如上次 e2e 留下的
+`artifacts/webconsole-e2e/plugins`）会让修复在实机上完全不生效，而单测全绿。
+
+验收时实测：用旧 staging 起服务，`viewer` 仍能通过 `/validate` 读到明文 `sk-`/`Bearer`/PEM，
+与修复前的行为一致；换成新构建产物后全部合规。
+
+**发布检查项**（每次发布都要做，不能只看测试绿）：
+
+```bash
+# 1) staging 必须来自本次构建，而不是复用旧目录
+./scripts/stage-tier1-plugins.sh -o /opt/natter/plugins -c Release
+
+# 2) 用修复标记验证产物确实是新的（S1-04 的 diffOmitted）
+strings /opt/natter/plugins/natter.plugin.webconsole/lib/Natter.Plugin.WebConsole.dll \
+  | grep -q DiffOmitted || { echo "FAIL: staging 是旧产物"; exit 1; }
+
+# 3) 核对 staging 清单的时间与哈希
+jq '{generatedAt, hostParity}' /opt/natter/plugins/staging-manifest.json
+```
+
+更通用的判据：`staging-manifest.json` 的 `generatedAt` 必须晚于本次 `dotnet publish`，
+且 `hostParity.mismatches` 为 0。
+
+任何"代码已修复但实机行为没变"的现象，先查 staging 是否是旧的，再查代码。
+
 ---
 
 ## 2. systemd
