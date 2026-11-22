@@ -97,7 +97,14 @@ public sealed class ChatCommandRouterTests
 
         Assert.Contains("Task accepted", response.Payload.Content.Text);
         var taskId = response.Payload.Content.Text.Split(':', 2)[1].Trim();
-        Assert.NotNull(await host.Get<ITaskStore>().GetAsync(taskId));
+
+        // OBS-P53-FLAKY-HOST-WIRING: wait for the row instead of assuming it is visible on the
+        // first synchronous read under full parallel load.
+        var store = host.Get<ITaskStore>();
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(10);
+        while (DateTimeOffset.UtcNow < deadline && await store.GetAsync(taskId) is null)
+            await Task.Delay(20);
+        Assert.NotNull(await store.GetAsync(taskId));
     }
 
     [Fact]
