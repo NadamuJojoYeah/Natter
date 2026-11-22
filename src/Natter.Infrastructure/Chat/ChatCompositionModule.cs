@@ -96,6 +96,8 @@ public sealed class ChatCompositionModule : ICompositionModule
             clock: () => provider.GetRequiredService<IClock>().UtcNow));
         services.AddSingleton(ChatOutboundPolicy.Default);
         services.AddSingleton<IChatCommandDispatcher, ChatCommandDispatcher>();
+        services.AddSingleton<Natter.Application.Chat.MemoryRetrievalOptions>();
+        services.AddSingleton<Natter.Application.Chat.MemoryRetrievalMetrics>();
         services.AddSingleton<ChatCommandFactory>();
         services.AddSingleton<Natter.Application.Chat.IConversationStore>(_ =>
             string.IsNullOrWhiteSpace(context.Options.StateDirectory)
@@ -156,7 +158,10 @@ public sealed class ChatCompositionModule : ICompositionModule
                 provider.GetRequiredService<Natter.Application.Chat.ISummaryStore>(),
                 provider.GetRequiredService<Natter.Application.Chat.IPromptProvider>(),
                 provider.GetRequiredService<Natter.Application.Chat.IContextAssembler>(),
-                catalog);
+                catalog,
+                provider.GetRequiredService<Natter.Application.Chat.MemoryRetrievalOptions>(),
+                provider.GetRequiredService<Natter.Application.Chat.MemoryRetrievalMetrics>(),
+                provider.GetService<Microsoft.Extensions.Logging.ILogger<Natter.Application.Chat.HostContextPipeline>>());
         });
         services.AddSingleton<Natter.Application.Chat.ChatResponderRegistry>();
         services.AddSingleton<Natter.Application.Chat.IChatResponderRegistry>(provider =>

@@ -50,6 +50,8 @@ public enum PromptFragmentSource
     Inline,
     File,
     Plugin,
+    /// <summary>Memory summary / recalled entries injected by the host (P6 §7).</summary>
+    Memory,
     HostBuiltin,
 }
 
@@ -198,6 +200,9 @@ public sealed record PromptComposeRequest(
     int PluginFragmentProviderCount = 0,
     long PluginFragmentElapsedMilliseconds = 0)
 {
+    /// <summary>Host memory fragments (summary first, recalled entries after).</summary>
+    public IReadOnlyList<PromptFragment> MemoryFragments { get; init; } = [];
+
     /// <summary>Builds a host request from an <see cref="IPromptProvider"/> call.</summary>
     public static PromptComposeRequest FromPromptRequest(
         PromptRequest request,

@@ -10,7 +10,14 @@ public sealed record PromptRequest(
     Conversation Conversation,
     User User,
     string? Locale,
-    IReadOnlyDictionary<string, string> Variables);
+    IReadOnlyDictionary<string, string> Variables)
+{
+    /// <summary>
+    /// Memory fragments for this turn (P6 §7). They appear in <see cref="PromptPlan.Fragments"/>,
+    /// can be disabled through profile.prompt.disabledFragments and obey the provider quota.
+    /// </summary>
+    public IReadOnlyList<PromptFragment> MemoryFragments { get; init; } = [];
+}
 
 public sealed record PromptSection(string Id, string Text, int Order);
 
@@ -138,7 +145,22 @@ public sealed record MemoryQuery(
     Conversation Conversation,
     User User,
     int Limit = 8,
-    bool IncludePrivate = true);
+    bool IncludePrivate = true)
+{
+    /// <summary>
+    /// Retrieval text (P6). Empty trades relevance for recency (legacy behaviour).
+    /// </summary>
+    public string? Query { get; init; }
+
+    /// <summary>
+    /// Scope filter. Null keeps the legacy "all visible scopes" behaviour so existing call sites
+    /// do not change; the context pipeline passes the profile-configured scope (default actor).
+    /// </summary>
+    public MemoryScopeType? Scope { get; init; }
+
+    /// <summary>Half-life for time decay; defaults to 30 days and only lowers the score.</summary>
+    public TimeSpan DecayHalfLife { get; init; } = TimeSpan.FromDays(30);
+}
 
 public sealed record MemoryDeleteRequest(
     Source Source,

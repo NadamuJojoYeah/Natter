@@ -8,7 +8,13 @@ namespace Natter.Infrastructure.Chat;
 /// </summary>
 internal static class SqliteSchema
 {
-    public const int CurrentVersion = 4;
+    public const int CurrentVersion = 5;
+
+    /// <summary>Tokenizer actually used by memory_fts (trigram when the runtime supports it).</summary>
+    public static string FtsTokenizer { get; private set; } = "trigram";
+
+    /// <summary>Non-null when trigram is unavailable and the schema degraded to unicode61.</summary>
+    public static string? FtsWarning { get; private set; }
 
     /// <summary>Connection-level pragmas that must be identical for every store.</summary>
     public static void Prepare(SqliteConnection connection)
@@ -153,9 +159,65 @@ internal static class SqliteSchema
             current = 4;
         }
 
+        if (current < 5)
+        {
+            // P6 §4: FTS5 is host memory capability, so it lives in the single DDL owner. trigram
+            // is built into SQLite >= 3.34; when unavailable degrade to unicode61 with a warning
+            // instead of failing startup.
+            var existing = ExistingFtsSql(connection);
+            if (existing is null)
+            {
+                try
+                {
+                    Execute(connection, "CREATE VIRTUAL TABLE memory_fts USING fts5(memory_id UNINDEXED, text, tokenize='trigram');");
+                    FtsTokenizer = "trigram";
+                }
+                catch (SqliteException)
+                {
+                    Execute(connection, "CREATE VIRTUAL TABLE memory_fts USING fts5(memory_id UNINDEXED, text, tokenize='unicode61');");
+                    FtsTokenizer = "unicode61";
+                    FtsWarning = "memory FTS trigram tokenizer unavailable; degraded to unicode61";
+                }
+            }
+            else if (existing.Contains("trigram", StringComparison.OrdinalIgnoreCase))
+            {
+                FtsTokenizer = "trigram";
+            }
+            else
+            {
+                FtsTokenizer = "unicode61";
+            }
+
+            Execute(connection, """
+                CREATE TRIGGER IF NOT EXISTS memory_fts_ai AFTER INSERT ON memory_items BEGIN
+                    INSERT INTO memory_fts(memory_id, text) VALUES (new.memory_id, new.text);
+                END;
+                CREATE TRIGGER IF NOT EXISTS memory_fts_au AFTER UPDATE OF text ON memory_items BEGIN
+                    DELETE FROM memory_fts WHERE memory_id = old.memory_id;
+                    INSERT INTO memory_fts(memory_id, text) VALUES (new.memory_id, new.text);
+                END;
+                CREATE TRIGGER IF NOT EXISTS memory_fts_ad AFTER DELETE ON memory_items BEGIN
+                    DELETE FROM memory_fts WHERE memory_id = old.memory_id;
+                END;
+                """);
+            Execute(connection, """
+                INSERT INTO memory_fts(memory_id, text)
+                SELECT memory_id, text FROM memory_items
+                WHERE memory_id NOT IN (SELECT memory_id FROM memory_fts);
+                """);
+            current = 5;
+        }
+
         using var setVersion = connection.CreateCommand();
         setVersion.CommandText = $"PRAGMA user_version = {current};";
         setVersion.ExecuteNonQuery();
+    }
+
+    private static string? ExistingFtsSql(SqliteConnection connection)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT sql FROM sqlite_master WHERE type='table' AND name='memory_fts';";
+        return command.ExecuteScalar() as string;
     }
 
     private static bool ColumnExists(SqliteConnection connection, string table, string column)

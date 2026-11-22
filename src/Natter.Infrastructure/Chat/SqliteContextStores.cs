@@ -125,6 +125,7 @@ public sealed class SqliteMemoryStore : IMemoryStore
 
     public async ValueTask<IReadOnlyList<MemoryItem>> SearchAsync(MemoryQuery query, CancellationToken cancellationToken = default)
     {
+        var now = DateTimeOffset.UtcNow;
         var scopes = new[]
         {
             MemoryScope.Id(query.Source, query.Conversation, query.User, MemoryScopeType.User),
@@ -132,24 +133,40 @@ public sealed class SqliteMemoryStore : IMemoryStore
             MemoryScope.Id(query.Source, query.Conversation, query.User, MemoryScopeType.Guild),
             MemoryScope.Id(query.Source, query.Conversation, query.User, MemoryScopeType.Global),
         };
+        var limit = Math.Max(0, query.Limit);
 
         await using var connection = await _database.OpenAsync(cancellationToken).ConfigureAwait(false);
+
+        var tokens = MemoryScoring.Tokenize(query.Query);
+        if (tokens.Count > 0)
+        {
+            try
+            {
+                var fts = await SearchFtsAsync(connection, query, scopes, tokens, now, limit, cancellationToken).ConfigureAwait(false);
+                if (fts.Count > 0)
+                    return fts;
+                // No relevant hit: fall back to recent entries (legacy behaviour) instead of
+                // returning an empty memory for a turn that used to see its recent memories.
+            }
+            catch (SqliteException)
+            {
+                // A runtime without FTS5 must not break retrieval; fall back to recent entries.
+            }
+        }
+
         await using var command = connection.CreateCommand();
         command.CommandText = $"""
             SELECT memory_id, scope_type, scope_id, subject_id, kind, text, data_json, confidence,
                    sensitivity, user_confirmed, source_message_ids_json, created_at, updated_at, expires_at, version
             FROM memory_items
-            WHERE scope_id IN ($s0, $s1, $s2, $s3)
+            WHERE {ScopePredicate(query, scopes)}
               AND (expires_at IS NULL OR expires_at > $now)
               {(query.IncludePrivate ? string.Empty : "AND sensitivity <> 'private'")}
             ORDER BY updated_at DESC LIMIT $limit;
             """;
-        command.Parameters.AddWithValue("$s0", scopes[0]);
-        command.Parameters.AddWithValue("$s1", scopes[1]);
-        command.Parameters.AddWithValue("$s2", scopes[2]);
-        command.Parameters.AddWithValue("$s3", scopes[3]);
-        command.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToString("O", System.Globalization.CultureInfo.InvariantCulture));
-        command.Parameters.AddWithValue("$limit", Math.Max(0, query.Limit));
+        AddScopeParameters(command, query, scopes);
+        command.Parameters.AddWithValue("$now", now.ToString("O", System.Globalization.CultureInfo.InvariantCulture));
+        command.Parameters.AddWithValue("$limit", limit);
 
         var result = new List<MemoryItem>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
@@ -157,6 +174,91 @@ public sealed class SqliteMemoryStore : IMemoryStore
             result.Add(Read(reader));
         return result;
     }
+
+    private static async ValueTask<IReadOnlyList<MemoryItem>> SearchFtsAsync(
+        SqliteConnection connection,
+        MemoryQuery query,
+        string[] scopes,
+        IReadOnlyList<string> tokens,
+        DateTimeOffset now,
+        int limit,
+        CancellationToken cancellationToken)
+    {
+        var match = string.Join(" OR ", tokens.Select(token => $"\"{token.Replace("\"", string.Empty, StringComparison.Ordinal)}\""));
+        await using var command = connection.CreateCommand();
+        command.CommandText = $"""
+            SELECT m.memory_id, m.scope_type, m.scope_id, m.subject_id, m.kind, m.text, m.data_json, m.confidence,
+                   m.sensitivity, m.user_confirmed, m.source_message_ids_json, m.created_at, m.updated_at, m.expires_at, m.version,
+                   bm25(memory_fts) AS rank
+            FROM memory_fts
+            JOIN memory_items m ON m.memory_id = memory_fts.memory_id
+            WHERE memory_fts MATCH $match
+              AND {ScopePredicate(query, scopes, prefix: "m.")}
+              AND (m.expires_at IS NULL OR m.expires_at > $now)
+              {(query.IncludePrivate ? string.Empty : "AND m.sensitivity <> 'private'")}
+            ORDER BY rank, m.updated_at DESC
+            LIMIT $limit;
+            """;
+        command.Parameters.AddWithValue("$match", match);
+        for (var index = 0; index < scopes.Length; index++)
+            command.Parameters.AddWithValue("$s" + index, scopes[index]);
+        if (query.Scope is { } scope)
+        {
+            command.Parameters.AddWithValue("$scope_type", scope.ToString().ToLowerInvariant());
+            command.Parameters.AddWithValue("$scope_key", scopes[ScopeIndex(scope)]);
+        }
+        command.Parameters.AddWithValue("$now", now.ToString("O", System.Globalization.CultureInfo.InvariantCulture));
+        command.Parameters.AddWithValue("$limit", Math.Max(1, limit));
+
+        var halfLife = query.DecayHalfLife > TimeSpan.Zero ? query.DecayHalfLife : TimeSpan.FromDays(30);
+        var scored = new List<(MemoryItem Item, double Score)>();
+        await using (var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
+        {
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                var item = Read(reader);
+                var bm25 = reader.IsDBNull(15) ? 0d : reader.GetDouble(15);
+                var ageDays = Math.Max(0, (now - item.UpdatedAt).TotalDays);
+                var decay = Math.Exp(-ageDays / Math.Max(1e-6, halfLife.TotalDays));
+                scored.Add((item, (-bm25) * decay));
+            }
+        }
+
+        if (scored.Count == 0)
+            return [];
+
+        return scored
+            .OrderByDescending(pair => pair.Score)
+            .ThenByDescending(pair => pair.Item.UpdatedAt)
+            .Take(limit)
+            .Select(pair => pair.Item)
+            .ToArray();
+    }
+
+    private static string ScopePredicate(MemoryQuery query, string[] scopes, string prefix = "")
+        => query.Scope is null
+            ? $"{prefix}scope_id IN ($s0, $s1, $s2, $s3)"
+            : $"{prefix}scope_type = $scope_type AND {prefix}scope_id = $scope_key";
+
+    private static void AddScopeParameters(SqliteCommand command, MemoryQuery query, string[] scopes)
+    {
+        for (var index = 0; index < scopes.Length; index++)
+            command.Parameters.AddWithValue("$s" + index, scopes[index]);
+        if (query.Scope is { } scope)
+        {
+            command.Parameters.AddWithValue("$scope_type", scope.ToString().ToLowerInvariant());
+            command.Parameters.AddWithValue("$scope_key", scopes[ScopeIndex(scope)]);
+        }
+    }
+
+    private static int ScopeIndex(MemoryScopeType scope) => scope switch
+    {
+        MemoryScopeType.User => 0,
+        MemoryScopeType.Conversation => 1,
+        MemoryScopeType.Guild => 2,
+        MemoryScopeType.Global => 3,
+        _ => 0,
+    };
 
     public async ValueTask<bool> DeleteAsync(MemoryDeleteRequest request, CancellationToken cancellationToken = default)
     {

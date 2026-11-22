@@ -38,7 +38,8 @@ public sealed class HostStaticPromptProvider(
             ? "default"
             : request.Profile.Prompt.Version;
 
-        var fragments = new[]
+        var memoryFragments = request.MemoryFragments;
+        var fragments = new List<PromptFragment>
         {
             new PromptFragment(
                 SystemFragmentId,
@@ -67,6 +68,7 @@ public sealed class HostStaticPromptProvider(
             [
                 new PromptSectionRef(SystemFragmentId, Order: 10),
                 new PromptSectionRef(SafetyFragmentId, Order: 100),
+                .. memoryFragments.Select(fragment => new PromptSectionRef(fragment.Id, fragment.Order)),
             ]);
 
         var pluginFragments = _fragmentSource is null
@@ -92,7 +94,10 @@ public sealed class HostStaticPromptProvider(
                 PluginFragments: pluginFragments.Fragments,
                 PluginFragmentWarnings: pluginFragments.Warnings,
                 PluginFragmentProviderCount: pluginFragments.ProviderCount,
-                PluginFragmentElapsedMilliseconds: pluginFragments.ElapsedMilliseconds),
+                PluginFragmentElapsedMilliseconds: pluginFragments.ElapsedMilliseconds)
+            {
+                MemoryFragments = memoryFragments,
+            },
             cancellationToken).ConfigureAwait(false);
 
         return _composer.ToBundle(plan);
@@ -264,13 +269,30 @@ public sealed class InMemoryMemoryStore : IMemoryStore
         var now = DateTimeOffset.UtcNow;
         lock (_gate)
         {
-            var result = _items.Values
+            IEnumerable<MemoryItem> items = _items.Values
                 .Where(item => item.ExpiresAt is null || item.ExpiresAt > now)
-                .Where(item => MemoryScope.IsVisible(item, query.Source, query.Conversation, query.User, query.IncludePrivate))
-                .OrderByDescending(item => item.UpdatedAt)
-                .Take(Math.Max(0, query.Limit))
-                .ToArray();
-            return ValueTask.FromResult<IReadOnlyList<MemoryItem>>(result);
+                .Where(item => MemoryScope.IsVisibleToQuery(item, query));
+
+            // P6 §4: relevance × time decay × scope, matching the SQLite path. Empty query keeps
+            // the legacy recency ordering byte-for-byte.
+            if (!string.IsNullOrWhiteSpace(query.Query))
+            {
+                var halfLife = query.DecayHalfLife > TimeSpan.Zero ? query.DecayHalfLife : TimeSpan.FromDays(30);
+                var scored = items
+                    .Select(item => (Item: item, Score: MemoryScoring.Score(item.Text, query.Query, item.UpdatedAt, now, halfLife)))
+                    .Where(pair => pair.Score > 0)
+                    .OrderByDescending(pair => pair.Score)
+                    .ThenByDescending(pair => pair.Item.UpdatedAt)
+                    .Select(pair => pair.Item)
+                    .ToArray();
+                items = scored.Length > 0 ? scored : items.OrderByDescending(item => item.UpdatedAt);
+            }
+            else
+            {
+                items = items.OrderByDescending(item => item.UpdatedAt);
+            }
+
+            return ValueTask.FromResult<IReadOnlyList<MemoryItem>>(items.Take(Math.Max(0, query.Limit)).ToArray());
         }
     }
 

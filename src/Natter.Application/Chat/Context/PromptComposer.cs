@@ -96,8 +96,13 @@ public sealed class PromptComposer : IPromptComposer
     {
         ArgumentNullException.ThrowIfNull(plan);
 
-        var text = string.Join(PromptCompilerDefaults.FragmentSeparator, plan.Fragments.Select(fragment => fragment.Text));
-        var sections = plan.Fragments
+        // Memory fragments stay in the plan (id/source/order/hash) but are materialized as a
+        // separate untrusted-data message by the assembler, never inside the system prompt.
+        var rendered = plan.Fragments
+            .Where(fragment => fragment.Source != PromptFragmentSource.Memory)
+            .ToArray();
+        var text = string.Join(PromptCompilerDefaults.FragmentSeparator, rendered.Select(fragment => fragment.Text));
+        var sections = rendered
             .Select(fragment => new PromptSection(fragment.Id, fragment.Text, fragment.Order))
             .ToArray();
 
@@ -203,6 +208,7 @@ public sealed class PromptComposer : IPromptComposer
                 $"Plugin fragments exceed the host limit of {PromptCompilerDefaults.PluginMaxFragments}.");
 
         fragments.AddRange(pluginFragments);
+        AddMemoryFragments(request.MemoryFragments, fragments, warnings);
 
         var duplicate = fragments
             .GroupBy(fragment => fragment.Id, StringComparer.Ordinal)
@@ -583,6 +589,57 @@ public sealed class PromptComposer : IPromptComposer
             warnings.Add($"{PromptCompilerCodes.VariableMissing}:{name}");
             return string.Empty;
         });
+    }
+
+    private static void AddMemoryFragments(
+        IReadOnlyList<PromptFragment>? memoryFragments,
+        List<PromptFragment> fragments,
+        List<string> warnings)
+    {
+        if (memoryFragments is null || memoryFragments.Count == 0)
+            return;
+
+        var accepted = 0;
+        var characters = 0;
+        foreach (var fragment in memoryFragments)
+        {
+            if (!PromptPluginFragmentRules.IsValidNamespacedId(fragment.Id))
+            {
+                warnings.Add($"{PromptCompilerCodes.FragmentIdRejected}:{fragment.Id}");
+                continue;
+            }
+
+            if (accepted >= PromptCompilerDefaults.PluginFragmentsPerProvider)
+            {
+                warnings.Add($"{PromptCompilerCodes.PluginFragmentProviderLimit}:memory");
+                break;
+            }
+
+            var text = fragment.Text ?? string.Empty;
+            if (text.Length > PromptCompilerDefaults.FragmentMaxCharacters)
+            {
+                text = text[..PromptCompilerDefaults.FragmentMaxCharacters];
+                warnings.Add($"{PromptCompilerCodes.FragmentTruncated}:{fragment.Id}");
+            }
+
+            if (characters + text.Length > PromptCompilerDefaults.PluginCharactersPerProvider)
+            {
+                warnings.Add($"{PromptCompilerCodes.PluginFragmentProviderBudget}:memory");
+                break;
+            }
+
+            characters += text.Length;
+            accepted++;
+            fragments.Add(fragment with
+            {
+                Text = text,
+                Source = PromptFragmentSource.Memory,
+                Order = PromptPluginFragmentRules.NormalizeOrder(fragment.Order),
+                MaxCharacters = fragment.MaxCharacters <= 0
+                    ? PromptCompilerDefaults.FragmentMaxCharacters
+                    : Math.Min(fragment.MaxCharacters, PromptCompilerDefaults.FragmentMaxCharacters),
+            });
+        }
     }
 
     private static IReadOnlyList<PromptFragment> ApplyBudget(

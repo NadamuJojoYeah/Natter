@@ -15,6 +15,14 @@ public static class MemoryScope
             _ => source.Key,
         };
 
+    /// <summary>Scope selection for a query: null = legacy all-visible behaviour.</summary>
+    public static bool IsVisibleToQuery(MemoryItem item, MemoryQuery query)
+        => query.Scope is { } scope
+            ? item.ScopeType == scope
+              && string.Equals(item.ScopeId, Id(query.Source, query.Conversation, query.User, scope), StringComparison.Ordinal)
+              && (query.IncludePrivate || !string.Equals(item.Sensitivity, "private", StringComparison.OrdinalIgnoreCase))
+            : IsVisible(item, query.Source, query.Conversation, query.User, query.IncludePrivate);
+
     public static bool IsVisible(MemoryItem item, Source source, Conversation conversation, User user, bool includePrivate)
     {
         if (!includePrivate && string.Equals(item.Sensitivity, "private", StringComparison.OrdinalIgnoreCase))

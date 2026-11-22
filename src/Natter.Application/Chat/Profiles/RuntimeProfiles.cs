@@ -100,6 +100,12 @@ public sealed class ProfileMemory
 {
     public string Store { get; init; } = "host#inline";
 
+    /// <summary>
+    /// P6 scope: conversation | actor | guild. Null keeps the legacy "all visible scopes"
+    /// behaviour (byte-identical default output); profiles opt into actor explicitly.
+    /// </summary>
+    public string? Scope { get; init; }
+
     public string Retriever { get; init; } = "host#recent";
 
     public string Extractor { get; init; } = "host#explicit";
