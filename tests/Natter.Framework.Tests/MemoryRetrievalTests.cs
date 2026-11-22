@@ -64,6 +64,51 @@ public sealed class MemoryRetrievalTests
             fragment => fragment.Id.Contains("memory", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public async Task Default_write_uses_actor_scope()
+    {
+        var store = new InMemoryMemoryStore();
+        var item = await store.WriteAsync(new MemoryWriteRequest(Discord, Direct, Alice, "fact", "default scope memory"));
+
+        Assert.Equal(MemoryScopeType.User, item.ScopeType);
+        Assert.Contains("|user|alice", item.ScopeId, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Profile_can_change_the_default_write_scope()
+    {
+        var store = new InMemoryMemoryStore();
+        using var scope = ProfileContext.Push(new RuntimeProfile
+        {
+            Id = "p",
+            Memory = new ProfileMemory { Scope = "conversation" },
+        });
+        var item = await store.WriteAsync(new MemoryWriteRequest(Discord, Direct, Alice, "fact", "conversation default"));
+        Assert.Equal(MemoryScopeType.Conversation, item.ScopeType);
+        Assert.Contains("|conversation|" + Direct.Id, item.ScopeId, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Default_retrieval_is_a_union_of_user_and_conversation_but_isolated_per_actor()
+    {
+        var store = new InMemoryMemoryStore();
+        await store.WriteAsync(new MemoryWriteRequest(Discord, Direct, Alice, "fact", "default actor memory"));
+        await Write(store, Alice, MemoryScopeType.Conversation, "conversation union memory");
+
+        var union = await Search(store, Alice, null, "memory");
+        Assert.Equal(2, union.Count);
+
+        // A's default actor memory is invisible to B via the scope id, even without a strict
+        // filter; conversation-scoped memories are shared inside the same conversation.
+        var bob = await Search(store, Bob, null, "memory");
+        Assert.DoesNotContain(bob, item => item.ScopeType == MemoryScopeType.User);
+
+        // Explicit strict filter (future recall --scope) excludes the conversation entry.
+        var strict = await Search(store, Alice, MemoryScopeType.User, "memory");
+        Assert.Single(strict);
+        Assert.All(strict, item => Assert.Equal(MemoryScopeType.User, item.ScopeType));
+    }
+
     // ------------------------------------------------------------------ FTS / decay
 
     [Fact]
@@ -200,7 +245,7 @@ public sealed class MemoryRetrievalTests
     private static async Task<MemoryItem> Write(IMemoryStore store, User user, MemoryScopeType scope, string text)
         => await store.WriteAsync(new MemoryWriteRequest(Discord, Direct, user, scope, "fact", text));
 
-    private static async Task<IReadOnlyList<MemoryItem>> Search(IMemoryStore store, User user, MemoryScopeType scope, string query)
+    private static async Task<IReadOnlyList<MemoryItem>> Search(IMemoryStore store, User user, MemoryScopeType? scope, string query)
         => await store.SearchAsync(new MemoryQuery(Discord, Direct, user, 20) { Query = query, Scope = scope });
 
     private static async Task<ContextBundle> Assemble(

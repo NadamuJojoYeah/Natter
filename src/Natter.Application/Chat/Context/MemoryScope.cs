@@ -15,13 +15,37 @@ public static class MemoryScope
             _ => source.Key,
         };
 
-    /// <summary>Scope selection for a query: null = legacy all-visible behaviour.</summary>
+    /// <summary>
+    /// Explicit query filter only. Default retrieval must NOT set <see cref="MemoryQuery.Scope"/>:
+    /// visibility is the union of user + conversation + guild + global, isolated per actor by the
+    /// scope id itself. Strict equality here is for callers like a future <c>recall --scope actor</c>.
+    /// </summary>
     public static bool IsVisibleToQuery(MemoryItem item, MemoryQuery query)
         => query.Scope is { } scope
             ? item.ScopeType == scope
               && string.Equals(item.ScopeId, Id(query.Source, query.Conversation, query.User, scope), StringComparison.Ordinal)
               && (query.IncludePrivate || !string.Equals(item.Sensitivity, "private", StringComparison.OrdinalIgnoreCase))
             : IsVisible(item, query.Source, query.Conversation, query.User, query.IncludePrivate);
+
+    /// <summary>
+    /// Default scope for new memories (P6 §3): profile.memory.scope, defaulting to the acting
+    /// user's actor scope.
+    /// </summary>
+    public static MemoryScopeType DefaultWriteScope(RuntimeProfile? profile = null)
+    {
+        var configured = profile?.Memory.Scope;
+        if (string.IsNullOrWhiteSpace(configured))
+            return MemoryScopeType.User;
+
+        return configured.Trim().ToLowerInvariant() switch
+        {
+            "conversation" => MemoryScopeType.Conversation,
+            "guild" => MemoryScopeType.Guild,
+            "global" => MemoryScopeType.Global,
+            "actor" or "user" => MemoryScopeType.User,
+            _ => MemoryScopeType.User,
+        };
+    }
 
     public static bool IsVisible(MemoryItem item, Source source, Conversation conversation, User user, bool includePrivate)
     {

@@ -138,7 +138,17 @@ public sealed record MemoryWriteRequest(
     double Confidence = 1.0,
     string Sensitivity = "normal",
     bool UserConfirmed = true,
-    DateTimeOffset? ExpiresAt = null);
+    DateTimeOffset? ExpiresAt = null)
+{
+    /// <summary>
+    /// Write without an explicit scope: the profile.memory.scope default (actor/User unless the
+    /// profile selects conversation/guild/global).
+    /// </summary>
+    public MemoryWriteRequest(Source source, Conversation conversation, User user, string kind, string text)
+        : this(source, conversation, user, MemoryScope.DefaultWriteScope(ProfileContext.Current), kind, text)
+    {
+    }
+}
 
 public sealed record MemoryQuery(
     Source Source,

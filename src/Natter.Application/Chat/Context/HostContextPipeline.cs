@@ -104,7 +104,6 @@ public sealed class HostContextPipeline(
 
         IReadOnlyList<MemoryItem> memoryItems = [];
         string? fallback = null;
-        var memoryScope = ResolveMemoryScope(profile, _memoryOptions);
         try
         {
             // P6 §8.1: memory is an enhancement. A 300ms timeout returns no memory and counts the
@@ -119,8 +118,9 @@ public sealed class HostContextPipeline(
                     _memoryOptions.MaxCandidates,
                     IncludePrivate: conversation.Kind is ConversationKind.Direct or ConversationKind.Group)
                 {
+                    // P6 §3: retrieval visibility is the union of all visible scopes; actor
+                    // isolation comes from the scope id, not from a default strict filter.
                     Query = userText,
-                    Scope = memoryScope,
                     DecayHalfLife = _memoryOptions.DecayHalfLife,
                 },
                 timeout.Token).ConfigureAwait(false);
@@ -243,21 +243,6 @@ public sealed class HostContextPipeline(
                     prompt.FragmentDiagnostics,
                     prompt.DisabledFragmentDiagnostics));
         }
-    }
-
-    private static MemoryScopeType? ResolveMemoryScope(RuntimeProfile profile, MemoryRetrievalOptions options)
-    {
-        if (string.IsNullOrWhiteSpace(profile.Memory.Scope))
-            return null; // legacy all-visible behaviour
-
-        return profile.Memory.Scope.Trim().ToLowerInvariant() switch
-        {
-            "conversation" => MemoryScopeType.Conversation,
-            "guild" => MemoryScopeType.Guild,
-            "global" => MemoryScopeType.Global,
-            "actor" or "user" => MemoryScopeType.User,
-            _ => options.DefaultScope,
-        };
     }
 
     private IReadOnlyList<PromptFragment> BuildMemoryFragments(

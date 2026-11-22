@@ -101,10 +101,11 @@ public sealed class ProfileMemory
     public string Store { get; init; } = "host#inline";
 
     /// <summary>
-    /// P6 scope: conversation | actor | guild. Null keeps the legacy "all visible scopes"
-    /// behaviour (byte-identical default output); profiles opt into actor explicitly.
+    /// P6 default scope for NEW memories: actor (User, default) | conversation | guild | global.
+    /// Retrieval visibility remains the union of all visible scopes; Query.Scope only narrows
+    /// when a caller asks for an explicit filter.
     /// </summary>
-    public string? Scope { get; init; }
+    public string? Scope { get; init; } = "actor";
 
     public string Retriever { get; init; } = "host#recent";
 
