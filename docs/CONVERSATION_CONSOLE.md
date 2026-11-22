@@ -1,6 +1,6 @@
 # Conversation Console 插件设计（会话回放与 Playground）
 
-> **状态**：设计已定 · P1 待实现
+> **状态**：设计已定 · **P1 已实现**（`ba76548`）· P2 待做
 > **日期**：2026-11-22
 > **定位**：产品面插件，独立于 WebConsole（管理面）。只读回放优先，Playground 后置。
 > **关联**：[Harness 责任边界](HARNESS_RESPONSIBILITY.md)、[WebConsole UI 方向](WEBCONSOLE_UI_DIRECTION.md)、[插件规范](PLUGIN_SPEC.md)
@@ -10,6 +10,53 @@
 ## 0. 一句话
 
 > 一个可选安装的插件：**看真实会话**（排查「bot 为什么这么答」），以及**自己开个会话试 prompt**，两者都不改变 bot 对真实用户的行为。
+
+---
+
+## 0.1 P1 实现记录（2026-11-22，`ba76548`）
+
+### 与设计文档的 8 处差异
+
+| # | 设计原稿 | 实现 | 原因 |
+| --- | --- | --- | --- |
+| 1 | 记录名 `ConversationSummary` | `ConversationOverview` | 同名记录已被 summary-store 占用（同一命名空间），形状不变，仅改名 |
+| 2 | 时间过滤未明确精度 | since/until 按「最后活动时间」闭区间，用 UTC 全精度串比较 | `datetime()` 只有秒精度，同秒边界会含糊 |
+| 3 | 未提消息长度上限 | 单条正文 8000 字符上限 + `truncated` 标记 | 防止超长消息撑爆响应，UI 显式标注「已截断」 |
+| 4 | `readOnly` 默认 true | `readOnly=false` 被配置校验**直接拒绝** | P1 无写路径，接受 false 等于虚报能力 |
+| 5 | 未明确审计目录缺失时行为 | 未设 `NATTER_STATE_DIR` → **启动失败**，不留插件目录 fallback | 静默 fallback 正是只读挂载下会炸的写法（task-15 教训） |
+| 6 | 未指定认证形态 | 无状态 Bearer，无登录表单/cookie/CSRF，无 viewer 角色 | 比 WebConsole 少一层攻击面 |
+| 7 | `messageCount` 语义 | 列表审计复用它表示「本页返回会话数」 | 审计只有这一个计数字段 |
+| 8 | 未要求 CLI 命令 | P1 不提供 `cli.command` 贡献 | 设计未要求 |
+
+第 4、5 两条是**比文档更严**的取舍，方向正确：宁可启动失败，也不要静默降级成「看起来能用但实际读不到」。
+
+### 实现要点
+
+- `IConversationQuery` 仅两个读方法，用类型系统表达只读意图；
+- `SqliteConversationQuery` 用 ReadOnly 连接 + `query_only=ON` + busy_timeout 5000，复用 `SqliteSchema.Prepare`，**零新增 DDL**；
+- keyset 游标分页，limit 硬上限 200；
+- 搜索用 `EXISTS + LIKE` 保证会话隔离；
+- `chat.read` 门控注入插件 provider，未授予时服务不存在（插件回落到「控制台不可用」）；
+- 审计落 `<state>/conversation-console/audit/`，记 `conversation.view` + sessionId，不含正文与 token。
+
+### 验证
+
+```text
+框架全量        877/877 × 3
+插件测试         67/67 × 3
+WebConsole      334/334（零回归）
+真实 e2e        PASS（真实宿主 + 真实 natter.db + 真实 HTTP）
+```
+
+e2e 覆盖：排序 newest-first、`messageCount`、搜索哨兵只命中 1 个、跨会话 0 命中、`after` 增量翻页、`limit=99999 → 200`、`POST/DELETE → 405`、审计 9 行且无正文。
+
+### P1 遗留风险
+
+1. 搜索是逐会话 `EXISTS` 扫描，大库会慢 → P2 应上 FTS（设计已预留）；
+2. 排序/游标依赖 `sessions.updated_at` 为 UTC "O" 定宽串，历史库若有非 UTC offset 行会排序异常；
+3. ReadOnly + WAL 读连接要求控制台用户可读 db/-shm，权限收紧时答空页且插件侧无独立诊断入口；
+4. 单 token、无角色、无 TLS，仅 loopback 语义，反代未验证；
+5. 审计只对**未认证**写入节流，认证后高频查看如实写满（按设计）。
 
 ---
 
