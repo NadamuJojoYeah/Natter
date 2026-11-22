@@ -5,6 +5,7 @@
     <RootNamespace>Natter.Plugin.ConversationConsole</RootNamespace>
     <AssemblyName>Natter.Plugin.ConversationConsole</AssemblyName>
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <NpsPlugin>true</NpsPlugin>
     <IsPackable>false</IsPackable>
     <Description>Natter Conversation Console plugin: read-only conversation replay (list, filter, search, message paging) over the host IConversationQuery port.</Description>
   </PropertyGroup>
@@ -24,5 +25,7 @@
     <None Update="config.sample.json" CopyToOutputDirectory="PreserveNewest" />
     <None Update="wwwroot/**" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
+
+  <Import Project="$(MSBuildThisFileDirectory)../../build/Natter.Plugin.targets" />
 
 </Project>

@@ -5,6 +5,7 @@
     <RootNamespace>Natter.Plugin.PromptLibrary</RootNamespace>
     <AssemblyName>Natter.Plugin.PromptLibrary</AssemblyName>
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <NpsPlugin>true</NpsPlugin>
     <IsPackable>false</IsPackable>
     <Description>Natter Prompt Library plugin: file/inline prompt fragments, inheritable presets, enable/disable and versioned prompt.provider contributions compiled by the host Prompt Compiler.</Description>
   </PropertyGroup>
@@ -26,5 +27,7 @@
     <None Update="presets.extra.json" CopyToOutputDirectory="PreserveNewest" />
     <None Update="prompts/**" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
+
+  <Import Project="$(MSBuildThisFileDirectory)../../build/Natter.Plugin.targets" />
 
 </Project>

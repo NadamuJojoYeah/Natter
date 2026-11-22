@@ -3,11 +3,15 @@
 #
 # Tier 1 (default): Discord transport + DeepSeek provider — required for a usable host.
 # Tier 2 (--tier2): DingTalk transport + Spark provider — best-effort, optional.
+# Feature (--feature): plugins under plugins/ (webconsole, conversation-console, prompt-library,
+#   state-vitals) including their static assets. Opt-in: a deployment may not want every one.
 #
 # Usage:
 #   ./scripts/stage-tier1-plugins.sh -o artifacts/live/plugins
 #   ./scripts/stage-tier1-plugins.sh -o /opt/natter/plugins -c Release
 #   ./scripts/stage-tier1-plugins.sh -o /opt/natter/plugins --tier2
+#   ./scripts/stage-tier1-plugins.sh -o /opt/natter/plugins --feature
+#   ./scripts/stage-tier1-plugins.sh -o /opt/natter/plugins --tier2 --feature
 #   ./scripts/stage-tier1-plugins.sh -o /opt/natter/plugins --skip-build --json
 #   ./scripts/stage-tier1-plugins.sh -o /opt/natter/plugins --host-dir /opt/natter
 #
@@ -17,6 +21,9 @@
 #   ├── config.schema.json
 #   ├── lib/<entry>.dll + deps.json + private dependencies
 #   └── config.json            # NOT written here — deployment provides it
+#
+# Feature plugins additionally get their declared static assets, e.g.:
+#   <plugin-root>/natter.plugin.webconsole/wwwroot/{index.html,app.js,app.css}
 #
 # Guarantees:
 #   * never writes config.json and never touches a running host;
@@ -38,18 +45,29 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONFIGURATION="${CONFIGURATION:-Release}"
 PLUGIN_ROOT=""
 TIER2=0
+FEATURE=0
 SKIP_BUILD=0
 HOST_DIR=""
 JSON=0
 
 # name|project relative path|directory name|expected plugin id
 PLUGIN_TABLE_TIER1=(
-  "discord|samples/Natter.Sample.Plugin.Discord/Natter.Sample.Plugin.Discord.csproj|discord|natter.transport.discord"
-  "deepseek|src/Natter.Feature.Ai.DeepSeek/Natter.Feature.Ai.DeepSeek.csproj|deepseek|natter.feature.ai.deepseek"
+  "discord|samples/Natter.Sample.Plugin.Discord/Natter.Sample.Plugin.Discord.csproj|discord|natter.transport.discord|"
+  "deepseek|src/Natter.Feature.Ai.DeepSeek/Natter.Feature.Ai.DeepSeek.csproj|deepseek|natter.feature.ai.deepseek|"
 )
 PLUGIN_TABLE_TIER2=(
-  "dingtalk|samples/Natter.Sample.Plugin.DingTalk/Natter.Sample.Plugin.DingTalk.csproj|dingtalk|natter.transport.dingtalk"
-  "spark|src/Natter.Feature.Ai.Spark/Natter.Feature.Ai.Spark.csproj|spark|natter.feature.ai.spark"
+  "dingtalk|samples/Natter.Sample.Plugin.DingTalk/Natter.Sample.Plugin.DingTalk.csproj|dingtalk|natter.transport.dingtalk|"
+  "spark|src/Natter.Feature.Ai.Spark/Natter.Feature.Ai.Spark.csproj|spark|natter.feature.ai.spark|"
+)
+# Feature plugins live under plugins/ and carry static assets (wwwroot/, prompts/, definitions/).
+# Column 5 lists those extras explicitly: directory names get copied recursively, file names are
+# installed as-is. Never infer this from the folder contents - plugin source folders also contain
+# C# packages (Kernel/, Rendering/, ...) that must NOT ship.
+PLUGIN_TABLE_FEATURE=(
+  "webconsole|plugins/Natter.Plugin.WebConsole/Natter.Plugin.WebConsole.csproj|natter.plugin.webconsole|natter.plugin.webconsole|wwwroot,config.sample.json"
+  "conversation-console|plugins/Natter.Plugin.ConversationConsole/Natter.Plugin.ConversationConsole.csproj|natter.plugin.conversation-console|natter.plugin.conversation-console|wwwroot,config.sample.json"
+  "prompt-library|plugins/Natter.Plugin.PromptLibrary/Natter.Plugin.PromptLibrary.csproj|natter.prompt.library|natter.prompt.library|prompts,presets.extra.json,config.sample.json"
+  "state-vitals|plugins/Natter.Plugin.StateVitals/Natter.Plugin.StateVitals.csproj|natter.plugin.state-vitals|natter.plugin.state-vitals|definitions,config.sample.json"
 )
 
 usage() {
@@ -62,6 +80,8 @@ while [[ $# -gt 0 ]]; do
     -o|--output) PLUGIN_ROOT="${2:-}"; shift 2 ;;
     -c|--configuration) CONFIGURATION="${2:-}"; shift 2 ;;
     --tier2) TIER2=1; shift ;;
+    --feature) FEATURE=1; shift ;;
+    --no-feature) FEATURE=0; shift ;;
     --skip-build) SKIP_BUILD=1; shift ;;
     --host-dir) HOST_DIR="${2:-}"; shift 2 ;;
     --json) JSON=1; shift ;;
@@ -94,6 +114,9 @@ mkdir -p "$PLUGIN_ROOT"
 entries=("${PLUGIN_TABLE_TIER1[@]}")
 if [[ "$TIER2" == "1" ]]; then
   entries+=("${PLUGIN_TABLE_TIER2[@]}")
+fi
+if [[ "$FEATURE" == "1" ]]; then
+  entries+=("${PLUGIN_TABLE_FEATURE[@]}")
 fi
 
 declare -a staged_names=() staged_ids=() staged_paths=() staged_files=()
@@ -132,7 +155,7 @@ verify_host_parity() {
 }
 
 stage_one() {
-  local name="$1" project="$2" dirname="$3" expected_id="$4"
+  local name="$1" project="$2" dirname="$3" expected_id="$4" extra="$5"
   local project_path bin_dir source_dir
   project_path="$ROOT/$project"
   bin_dir="$ROOT/$(dirname "$project")/bin/$CONFIGURATION/net10.0"
@@ -175,6 +198,25 @@ stage_one() {
   cp -a "$bin_dir/lib/." "$tmp/lib/"
   install -m 0644 "$source_dir/plugin.json" "$source_dir/config.schema.json" "$tmp/"
 
+  # Static assets declared per plugin (wwwroot/, prompts/, definitions/, config.sample.json, ...).
+  if [[ -n "$extra" ]]; then
+    local item
+    IFS=',' read -ra extra_items <<<"$extra"
+    for item in "${extra_items[@]}"; do
+      [[ -n "$item" ]] || continue
+      if [[ -d "$source_dir/$item" ]]; then
+        mkdir -p "$tmp/$item"
+        cp -a "$source_dir/$item/." "$tmp/$item/"
+      elif [[ -f "$source_dir/$item" ]]; then
+        install -m 0644 "$source_dir/$item" "$tmp/$item"
+      else
+        echo "declared extra resource missing for $name: $item" >&2
+        rm -rf "$tmp"
+        exit 6
+      fi
+    done
+  fi
+
   # Preserve a deployment-provided config.json across re-staging.
   if [[ -f "$dest/config.json" ]]; then
     cp -f "$dest/config.json" "$tmp/config.json"
@@ -204,8 +246,8 @@ stage_one() {
 }
 
 for entry in "${entries[@]}"; do
-  IFS='|' read -r name project dirname expected_id <<<"$entry"
-  stage_one "$name" "$project" "$dirname" "$expected_id"
+  IFS='|' read -r name project dirname expected_id extra <<<"$entry"
+  stage_one "$name" "$project" "$dirname" "$expected_id" "$extra"
 done
 
 if [[ -n "$HOST_DIR" && "$host_parity_compared" -eq 0 ]]; then

@@ -55,6 +55,8 @@ staging 布局（NPS 加载器要求）：
 ```bash
 # 1) staging 必须来自本次构建，而不是复用旧目录
 ./scripts/stage-tier1-plugins.sh -o /opt/natter/plugins -c Release
+# 需要 WebConsole / 会话控制台 / Prompt Library / StateVitals 时加 --feature
+./scripts/stage-tier1-plugins.sh -o /opt/natter/plugins -c Release --feature
 
 # 2) 用修复标记验证产物确实是新的（S1-04 的 diffOmitted）
 strings /opt/natter/plugins/natter.plugin.webconsole/lib/Natter.Plugin.WebConsole.dll \
@@ -68,6 +70,42 @@ jq '{generatedAt, hostParity}' /opt/natter/plugins/staging-manifest.json
 且 `hostParity.mismatches` 为 0。
 
 任何"代码已修复但实机行为没变"的现象，先查 staging 是否是旧的，再查代码。
+
+### 1.2 feature 插件必须显式 `--feature`
+
+`stage-tier1-plugins.sh` 默认只 stage **Tier 1 传输/提供者**（discord + deepseek），
+`--tier2` 再加钉钉 + 星火。**feature 插件（WebConsole、会话控制台、Prompt Library、StateVitals）
+不在默认集合里**，必须显式加 `--feature`。
+
+漏掉它的后果不是启动失败，而是"插件目录里根本没有该插件"——`/api/*` 404、`natter web status`
+未知命令，而宿主本身完全健康，很容易被误判成代码问题。
+
+```bash
+# 完整发布（Tier1 + Tier2 + 全部 feature 插件）
+./scripts/stage-tier1-plugins.sh -o /opt/natter/plugins -c Release --tier2 --feature
+```
+
+feature 插件的静态资源按插件显式声明（见脚本里的 `PLUGIN_TABLE_FEATURE` 第 5 列）：
+`wwwroot/`、`prompts/`、`definitions/`、`config.sample.json` 等。
+**不要靠目录内容自动推断**——插件源码目录里还有 `Kernel/`、`Rendering/` 这类 C# 目录，不能进发布包。
+
+所有 NPS 插件工程都必须设置 `<NpsPlugin>true</NpsPlugin>` 并导入 `build/Natter.Plugin.targets`，
+这样构建产物才是 `bin/<cfg>/<tfm>/lib/` 布局。缺这两项的插件无法被 staging 脚本处理
+（脚本会以 `missing build output: .../lib/<assembly>.dll` 明确报错，而不是静默跳过）。
+
+### 1.3 部署后确认 feature 插件确实被装载
+
+```bash
+/opt/natter/natter plugins list | grep -E "webconsole|conversation-console|prompt.library|state-vitals"
+```
+
+预期：
+
+- `webconsole` / `conversation-console` 在配好 secret 后为 `Activated`；
+- `prompt.library` 需要 `config.json`，未配置时报 `not-configured`（这是正常提示，不是缺陷）；
+- `state-vitals` 默认不启用。
+
+若某插件完全不出现在列表里 → 是 staging 漏了，不是代码问题。
 
 ---
 

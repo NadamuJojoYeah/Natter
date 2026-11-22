@@ -5,6 +5,7 @@
     <RootNamespace>Natter.Plugin.WebConsole</RootNamespace>
     <AssemblyName>Natter.Plugin.WebConsole</AssemblyName>
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <NpsPlugin>true</NpsPlugin>
     <IsPackable>false</IsPackable>
     <Description>Natter WebConsole plugin: loopback read-only diagnostics, config preview and restricted command console.</Description>
   </PropertyGroup>
@@ -25,5 +26,7 @@
     <None Update="config.sample.json" CopyToOutputDirectory="PreserveNewest" />
     <None Update="wwwroot/**" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
+
+  <Import Project="$(MSBuildThisFileDirectory)../../build/Natter.Plugin.targets" />
 
 </Project>
