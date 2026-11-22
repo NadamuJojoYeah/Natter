@@ -670,7 +670,50 @@ v1 不引入远程配置中心；后续可通过宿主配置 provider 扩展。
 | `local` | 本地开发插件 | 开发模式可自动授予，生产需确认 |
 | `untrusted` | 来源不明 | 默认不加载，或仅授予最小权限 |
 
-v1 可以只实现 `bundled` 和 `local`；签名/市场属于后续。
+v1 已实现 `bundled` / `signed` / `local` / `untrusted` 四档（信任判定见 §9.4）。
+
+### 9.4 信任与完整性的传播（S1-12，2026-11-22）
+
+插件 store 在安装时校验哈希清单（`package.sha256`）与签名（`package.sig`），把结果写进
+`installed.json` 的 `trust`（`signed` / `unsigned`）与 `signerKeyId`。**激活阶段必须消费这份结果**，
+否则"只信任签名包"的配置形同虚设。
+
+#### 9.4.1 激活期的三道检查
+
+1. **完整性复核**：每次启动对已安装目录重新计算 `package.sha256` 中每个文件的 SHA-256
+   （跳过 `package.sha256` / `package.sig` 自身），并检测未声明的新文件与缺失文件。
+   - 全部匹配 → `verified`
+   - 有不符 → `tampered`（**拒绝加载**，码 `plugin.integrity-mismatch`）
+   - 无哈希清单 / 无法读取 → `unverified`（显式记录，不当作可信）
+2. **签名事实**：只有"安装记录为 `signed` + `signerKeyId` 非空 + 启动完整性 `verified`"才算
+   `signed`；签名本身在安装时验证（启动期没有公钥就无法复验），因此动态宿主无法复验时必须记
+   `unverified` 而不是假定可信。
+3. **策略判定**（`PluginTrustPolicy`）：
+
+| 候选状态 | `RequireSignedPlugins` | `FilePluginTrustLevel` | 结果 |
+| --- | --- | --- | --- |
+| `tampered` | 任意 | 任意 | **拒绝** `plugin.integrity-mismatch` |
+| `signed`（已验证） | 任意 | 任意 | 加载为 `signed`（不降级） |
+| `unverified` | `true` | 任意 | **拒绝** `plugin.unsigned-rejected` |
+| `unverified` | `false` | `signed` | **拒绝** `plugin.signature-required` |
+| `unverified` | `false` | `local`（默认） | 加载为 `local`，并打 `plugin.integrity-unverified` 警告 |
+| `unverified` | `false` | `untrusted` | 加载为 `untrusted`（不授予权限） |
+
+- `RequireSignedPlugins` 默认 **false**，保持既有部署行为；开启后任何无已验证签名的包都不加载。
+- 纯目录（`--plugin-dir`、样例插件、staging 目录）没有 `package.sha256`，只能得到 `unverified`：
+  默认按 `FilePluginTrustLevel` 加载并记录警告；`--plugin-dir` 场景因此**不会**因本机制启动失败。
+- 宿主把判定标签写进 `PluginDescriptor.Trust`（`signed` / `local(unverified)` / `untrusted`），
+  `plugins list` / `plugins doctor` 可见；拒绝时 `ErrorDetail.Phase = trust`，`Code` 见上表，
+  消息只含插件 id、目录与首个不符文件名，不含文件内容。
+- 配置入口：`NatterApplicationBuilder.ConfigurePluginTrust(o => o.RequireSignedPlugins = true)` 与
+  `AddPluginDirectory(new PluginTrustRegistration(dir, signature, signerKeyId, pluginId, detail))`。
+  CLI 开关留给 CLI 层按需接入（本版本未提供命令行参数）。
+
+#### 9.4.2 已知边界
+
+- 启动期能复验**内容完整性**，不能复验签名（无公钥）；签名只在安装时生效。
+- `.staging` 目录中的尚未完成的安装不在候选列表中。
+- 宿主仍然是进程内加载：完整性检查防的是"落地后被替换/篡改"，不是恶意代码隔离（见 §9.3）。
 
 ### 9.2 权限执行点
 
