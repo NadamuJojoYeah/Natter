@@ -232,7 +232,41 @@ public sealed record PromptComposeRequest(
     }
 }
 
-/// <summary>Target facts exposed to <see cref="IPromptFragmentProvider"/> implementations.</summary>
+/// <summary>
+/// Session identity handed to prompt fragment providers (STATE_VITALS_DESIGN.md §11.1). Providers
+/// that only need platform/locale keep ignoring it; providers that need "who am I talking to" (for
+/// example per-conversation content next to a global character state) can read it.
+/// </summary>
+/// <param name="SourceKey">Structured <c>protocol:platform:selfId</c> source key, never parsed back.</param>
+/// <param name="ConversationId">Platform conversation id (opaque).</param>
+/// <param name="GuildId">Guild/space id when the platform has one.</param>
+/// <param name="ActorId">Acting user id (opaque). Absent for platform-level prompts.</param>
+public sealed record ConversationScope(
+    string SourceKey,
+    string ConversationId,
+    string? GuildId = null,
+    string? ActorId = null)
+{
+    /// <summary>Projects the facts of one <see cref="PromptRequest"/> into a scope.</summary>
+    public static ConversationScope FromPromptRequest(PromptRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        return new ConversationScope(
+            request.Source.Key,
+            request.Conversation.Id,
+            request.Conversation.GuildId,
+            string.IsNullOrWhiteSpace(request.User.Id) ? null : request.User.Id);
+    }
+}
+
+/// <summary>
+/// Target facts exposed to <see cref="IPromptFragmentProvider"/> implementations.
+/// <see cref="Conversation"/> is an <c>init</c>-only addition on purpose: it must not become a
+/// positional parameter, because changing the positional signature would break every existing
+/// provider (Prompt Library, test fixtures) at compile time. <c>null</c> keeps the pre-existing
+/// behaviour byte-for-byte.
+/// </summary>
 public sealed record PromptFragmentContext(
     RuntimeProfile Profile,
     string? PresetId,
@@ -240,7 +274,11 @@ public sealed record PromptFragmentContext(
     string Platform,
     string Protocol,
     ConversationKind ConversationKind,
-    IReadOnlyDictionary<string, string> Variables);
+    IReadOnlyDictionary<string, string> Variables)
+{
+    /// <summary>Session identity; <c>null</c> when the caller has none (e.g. <c>prompt explain</c>).</summary>
+    public ConversationScope? Conversation { get; init; }
+}
 
 /// <summary>
 /// Plugin contribution point for fragments. The host aggregates providers through

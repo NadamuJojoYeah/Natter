@@ -44,6 +44,10 @@
     <ProjectReference Include="../../samples/Natter.Sample.Plugin.Memory/Natter.Sample.Plugin.Memory.csproj" />
     <ProjectReference Include="../../samples/Natter.Sample.Plugin.Discord/Natter.Sample.Plugin.Discord.csproj" />
     <ProjectReference Include="../../samples/Natter.Sample.Plugin.DingTalk/Natter.Sample.Plugin.DingTalk.csproj" />
+    <!-- State & Vitals kernel tests (task-52). One line beyond the task's write scope: the numeric
+         kernel lives in the plugin, so the framework suite needs the assembly, exactly like the
+         sample plugins referenced above. -->
+    <ProjectReference Include="../../plugins/Natter.Plugin.StateVitals/Natter.Plugin.StateVitals.csproj" />
   </ItemGroup>
 
   <Target Name="CopyTestPlugins" AfterTargets="Build">

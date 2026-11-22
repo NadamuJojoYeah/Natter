@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Natter.Plugin.StateVitals</RootNamespace>
+    <AssemblyName>Natter.Plugin.StateVitals</AssemblyName>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <NpsPlugin>true</NpsPlugin>
+    <IsPackable>false</IsPackable>
+    <Description>Natter State &amp; Vitals plugin: a global character state plus time-decayed vitals rendered as a stable, bucketed prompt fragment (docs/STATE_VITALS_DESIGN.md).</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/Natter.Plugin.Abstractions/Natter.Plugin.Abstractions.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="plugin.json" LogicalName="Natter.Plugin.StateVitals.plugin.json" />
+    <None Update="plugin.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="config.schema.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="config.sample.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="definitions/**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!-- Stages entry assembly + private dependencies into bin/<cfg>/<tf>/lib (NPS layout). -->
+  <Import Project="$(MSBuildThisFileDirectory)../../build/Natter.Plugin.targets" />
+
+</Project>

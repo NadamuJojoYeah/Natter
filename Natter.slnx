@@ -24,9 +24,11 @@
   <Project Path="plugins/Natter.Plugin.PromptLibrary/Natter.Plugin.PromptLibrary.csproj" />
   <Project Path="plugins/Natter.Plugin.WebConsole/Natter.Plugin.WebConsole.csproj" />
   <Project Path="plugins/Natter.Plugin.ConversationConsole/Natter.Plugin.ConversationConsole.csproj" />
+  <Project Path="plugins/Natter.Plugin.StateVitals/Natter.Plugin.StateVitals.csproj" />
   <Project Path="tests/Natter.Framework.Tests/Natter.Framework.Tests.csproj" />
   <Project Path="tests/Natter.Live.Tests/Natter.Live.Tests.csproj" />
   <Project Path="tests/Natter.Plugin.PromptLibrary.Tests/Natter.Plugin.PromptLibrary.Tests.csproj" />
   <Project Path="tests/Natter.Plugin.WebConsole.Tests/Natter.Plugin.WebConsole.Tests.csproj" />
   <Project Path="tests/Natter.Plugin.ConversationConsole.Tests/Natter.Plugin.ConversationConsole.Tests.csproj" />
+  <Project Path="tests/Natter.Plugin.StateVitals.Tests/Natter.Plugin.StateVitals.Tests.csproj" />
 </Solution>

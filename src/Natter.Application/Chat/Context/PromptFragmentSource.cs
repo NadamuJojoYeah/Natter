@@ -111,7 +111,11 @@ public static class PromptFragmentContexts
             request.Source.Platform,
             request.Source.Protocol,
             request.Conversation.Kind,
-            variables);
+            variables)
+        {
+            // §11.1: session identity travels as an init property so no provider signature changes.
+            Conversation = ConversationScope.FromPromptRequest(request),
+        };
     }
 }
 
