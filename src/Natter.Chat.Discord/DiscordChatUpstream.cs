@@ -20,7 +20,7 @@ public sealed class DiscordChatUpstream : IChatUpstream, IChatUpstreamHealth, ID
     private readonly ILogger<DiscordChatUpstream> _logger;
     private readonly Subject<ChatEvent> _events = new();
     private readonly IObservable<ChatEvent> _synchronizedEvents;
-    private readonly ConcurrentDictionary<string, ChatAck> _idempotency = new(StringComparer.Ordinal);
+    private readonly ChatIdempotencyCache _idempotency;
     private readonly Capabilities _capabilities;
     private readonly Lock _gate = new();
     private readonly Lock _watchdogGate = new();
@@ -52,6 +52,7 @@ public sealed class DiscordChatUpstream : IChatUpstream, IChatUpstreamHealth, ID
         IClock clock,
         ILoggerFactory? loggerFactory = null)
     {
+        _idempotency = new ChatIdempotencyCache(clock: () => _clock.UtcNow);
         Source = source ?? throw new ArgumentNullException(nameof(source));
         _transport = transport ?? throw new ArgumentNullException(nameof(transport));
         _options = options ?? throw new ArgumentNullException(nameof(options));
@@ -249,16 +250,43 @@ public sealed class DiscordChatUpstream : IChatUpstream, IChatUpstreamHealth, ID
                 $"Command source '{command.Source.Key}' does not match upstream '{Source.Key}'."));
 
         var idempotencyKey = command.IdempotencyKey;
-        if (!string.IsNullOrWhiteSpace(idempotencyKey)
-            && _idempotency.TryGetValue(idempotencyKey, out var cached))
+        var reserved = false;
+        if (!string.IsNullOrWhiteSpace(idempotencyKey))
         {
-            return cached;
+            // S2-A1: reserve before publishing so concurrent retries cannot double-send.
+            switch (_idempotency.TryReserve(idempotencyKey, out var cached))
+            {
+                case ChatIdempotencyCache.Reservation.Cached:
+                    return cached!;
+                case ChatIdempotencyCache.Reservation.InFlight:
+                    return ChatAck.Failure(command, ChatError.Create(
+                        ChatErrorCodes.Conflict,
+                        $"A command with idempotency key '{idempotencyKey}' is already in flight."));
+                default:
+                    reserved = true;
+                    break;
+            }
         }
 
-        var ack = await ExecuteCoreAsync(command, cancellationToken).ConfigureAwait(false);
+        ChatAck ack;
+        try
+        {
+            ack = await ExecuteCoreAsync(command, cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            if (reserved)
+                _idempotency.Rollback(idempotencyKey);
+            throw;
+        }
 
-        if (!string.IsNullOrWhiteSpace(idempotencyKey) && ack.Ok)
-            _idempotency.TryAdd(idempotencyKey, ack);
+        if (reserved)
+        {
+            if (ack.Ok)
+                _idempotency.Commit(idempotencyKey, ack);
+            else
+                _idempotency.Rollback(idempotencyKey);
+        }
 
         return ack;
     }
@@ -964,7 +992,9 @@ public sealed class DiscordChatUpstream : IChatUpstream, IChatUpstreamHealth, ID
         ChatEvent chatEvent = isEdit
             ? new MessageUpdatedEvent
             {
-                Id = $"discord:message:{message.Id}:updated",
+                // S2-A13: edits are keyed by revision timestamp, so a second edit of the same
+                // message is not swallowed by dedupe while a replay of one edit stays stable.
+                Id = ChatEventId.DeriveEdit(Source, message.Id, occurredAt),
                 Source = Source,
                 Sequence = Interlocked.Increment(ref _sequence),
                 OccurredAt = occurredAt,

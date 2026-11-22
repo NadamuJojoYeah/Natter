@@ -143,6 +143,7 @@ public static class PromptCompilerCodes
     public const string PresetCycle = "prompt.preset_cycle";
     public const string VariableMissing = "prompt.variable_missing";
     public const string VariableNotAllowed = "prompt.variable_not_allowed";
+    public const string VariableTruncated = "prompt.variable_truncated";
 
     public const string FragmentTruncated = "prompt.fragment_truncated";
     public const string BudgetExceeded = "prompt.budget_exceeded";

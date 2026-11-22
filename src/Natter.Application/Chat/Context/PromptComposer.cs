@@ -36,7 +36,7 @@ public sealed class PromptComposer : IPromptComposer
         var fragments = PrepareFragments(request, warnings);
         var preset = ResolvePreset(request, fragments);
         var candidates = BuildCandidates(request, preset, fragments, warnings);
-        var values = BuildVariableValues(request, preset.Variables);
+        var values = BuildVariableValues(request, preset.Variables, warnings);
 
         var usedVariables = new SortedSet<string>(StringComparer.Ordinal);
         var resolved = new List<Candidate>(candidates.Count);
@@ -171,10 +171,14 @@ public sealed class PromptComposer : IPromptComposer
                     PromptCompilerCodes.FragmentTextRejected,
                     $"Plugin fragment '{fragment.Id}' has no text.");
 
-            if (fragment.Text.Length > PromptCompilerDefaults.FragmentMaxCharacters)
-                throw new PromptCompilationException(
-                    PromptCompilerCodes.FragmentTooLong,
-                    $"Plugin fragment '{fragment.Id}' exceeds {PromptCompilerDefaults.FragmentMaxCharacters} characters.");
+            // S2-A22: size limits consistently truncate + warn (same as host/file fragments and
+            // the total budget); they never throw while another size path truncates silently.
+            var pluginText = fragment.Text;
+            if (pluginText.Length > PromptCompilerDefaults.FragmentMaxCharacters)
+            {
+                warnings.Add($"{PromptCompilerCodes.FragmentTruncated}:{fragment.Id}");
+                pluginText = pluginText[..PromptCompilerDefaults.FragmentMaxCharacters];
+            }
 
             if (hostIds.Contains(fragment.Id))
             {
@@ -184,6 +188,7 @@ public sealed class PromptComposer : IPromptComposer
 
             pluginFragments.Add(fragment with
             {
+                Text = pluginText,
                 Source = PromptFragmentSource.Plugin,
                 Order = PromptPluginFragmentRules.NormalizeOrder(fragment.Order),
                 MaxCharacters = fragment.MaxCharacters <= 0
@@ -504,35 +509,45 @@ public sealed class PromptComposer : IPromptComposer
 
     private static IReadOnlyDictionary<string, string> BuildVariableValues(
         PromptComposeRequest request,
-        IReadOnlyDictionary<string, string>? presetVariables)
+        IReadOnlyDictionary<string, string>? presetVariables,
+        List<string> warnings)
     {
         var values = new Dictionary<string, string>(StringComparer.Ordinal);
 
         foreach (var pair in presetVariables ?? new Dictionary<string, string>())
         {
             if (PromptVariables.IsAllowed(pair.Key))
-                values[pair.Key] = PromptVariables.Escape(pair.Value);
+                values[pair.Key] = EscapeVariable(pair.Key, pair.Value, warnings);
         }
 
         foreach (var pair in request.Variables ?? new Dictionary<string, string>())
         {
             if (PromptVariables.IsAllowed(pair.Key))
-                values[pair.Key] = PromptVariables.Escape(pair.Value);
+                values[pair.Key] = EscapeVariable(pair.Key, pair.Value, warnings);
         }
 
         // Runtime facts win over preset/profile supplied values; they are not spoofable by config.
         if (!string.IsNullOrWhiteSpace(request.Profile.Id))
-            values["profile.id"] = PromptVariables.Escape(request.Profile.Id);
+            values["profile.id"] = EscapeVariable("profile.id", request.Profile.Id, warnings);
         if (!string.IsNullOrWhiteSpace(request.Platform))
-            values["platform"] = PromptVariables.Escape(request.Platform);
+            values["platform"] = EscapeVariable("platform", request.Platform, warnings);
         if (!string.IsNullOrWhiteSpace(request.Locale))
-            values["locale"] = PromptVariables.Escape(request.Locale);
+            values["locale"] = EscapeVariable("locale", request.Locale, warnings);
         if (!string.IsNullOrWhiteSpace(request.ConversationKind))
-            values["conversation.kind"] = PromptVariables.Escape(request.ConversationKind);
+            values["conversation.kind"] = EscapeVariable("conversation.kind", request.ConversationKind, warnings);
         if (!string.IsNullOrWhiteSpace(request.UserName))
-            values["user.name"] = PromptVariables.Escape(request.UserName);
+            values["user.name"] = EscapeVariable("user.name", request.UserName, warnings);
 
         return values;
+    }
+
+    private static string EscapeVariable(string name, string value, List<string> warnings)
+    {
+        // S2-A22: variable values share the single VariableMaxCharacters limit and follow the
+        // same truncate+warning policy as fragment text instead of truncating silently.
+        if (value.Length > PromptCompilerDefaults.VariableMaxCharacters)
+            warnings.Add($"{PromptCompilerCodes.VariableTruncated}:{name}");
+        return PromptVariables.Escape(value);
     }
 
     private static string ResolveVariables(
