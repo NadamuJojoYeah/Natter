@@ -513,20 +513,30 @@ public sealed class FinalS1AcceptanceTests
     }
 
     [Fact]
-    public async Task Reconnect_backoff_grows_between_attempts()
+    public async Task Reconnect_backoff_requests_a_growing_delay_sequence()
     {
+        // Flake fix (task-44): the watchdog computes NextReconnectAt from the injected IClock, so the
+        // requested delays can be read back exactly. Never compare wall-clock deltas here: under a
+        // Release build with parallel collections the scheduling jitter made "second > first"
+        // flaky. The only real-time wait left is the watchdog tick, which is polled generously.
+        var clock = new ControllableClock(new DateTimeOffset(2026, 11, 22, 12, 0, 0, TimeSpan.Zero));
         var transport = new FakeDiscordTransport { FailConnectsAfterDisconnect = true };
-        using var upstream = NewUpstream(transport, maxAttempts: 3);
+        using var upstream = NewUpstream(transport, maxAttempts: 3, clock: clock);
         await upstream.ConnectAsync();
         transport.Disconnect();
 
-        await WaitUntilAsync(() => Task.FromResult(upstream.ReconnectAttemptCount >= 1), TimeSpan.FromSeconds(5));
-        var first = upstream.NextReconnectAt - DateTimeOffset.UtcNow;
-        await WaitUntilAsync(() => Task.FromResult(upstream.ReconnectAttemptCount >= 2), TimeSpan.FromSeconds(5));
-        var second = upstream.NextReconnectAt - DateTimeOffset.UtcNow;
+        clock.Advance(TimeSpan.FromMilliseconds(100));
+        await WaitUntilAsync(() => Task.FromResult(upstream.ReconnectAttemptCount >= 1), TimeSpan.FromSeconds(10));
+        var first = upstream.NextReconnectAt!.Value - clock.UtcNow;
 
-        Assert.True(first >= TimeSpan.FromMilliseconds(50), $"first backoff too short: {first}");
-        Assert.True(second > first, $"backoff must grow: first={first}, second={second}");
+        clock.Advance(TimeSpan.FromMilliseconds(90));
+        await WaitUntilAsync(() => Task.FromResult(upstream.ReconnectAttemptCount >= 2), TimeSpan.FromSeconds(10));
+        var second = upstream.NextReconnectAt!.Value - clock.UtcNow;
+
+        // Exact requested delays: 80ms then 160ms (initial=80, capped shift by attempt).
+        Assert.Equal(80d, first.TotalMilliseconds, precision: 3);
+        Assert.Equal(160d, second.TotalMilliseconds, precision: 3);
+        Assert.True(second > first, $"requested delay must grow: first={first}, second={second}");
     }
 
     [Fact]
@@ -575,7 +585,8 @@ public sealed class FinalS1AcceptanceTests
     private static DiscordChatUpstream NewUpstream(
         FakeDiscordTransport transport,
         int maxAttempts,
-        CapturingLoggerFactory? loggerFactory = null)
+        CapturingLoggerFactory? loggerFactory = null,
+        IClock? clock = null)
         => new(
             Source.Create("discord", "discord", "bot"),
             transport,
@@ -590,8 +601,18 @@ public sealed class FinalS1AcceptanceTests
                 ReconnectMaxAttempts = maxAttempts,
                 ReadyTimeoutSeconds = 3,
             },
-            new SystemClock(),
+            clock ?? new SystemClock(),
             loggerFactory);
+
+    /// <summary>Deterministic clock: only test code moves it, so delay assertions cannot flake.</summary>
+    private sealed class ControllableClock(DateTimeOffset start) : IClock
+    {
+        private DateTimeOffset _now = start;
+
+        public DateTimeOffset UtcNow => _now;
+
+        public void Advance(TimeSpan delta) => _now += delta;
+    }
 
     private static async Task<int> PeakConcurrencyAsync(
         AiConversationGate gate,

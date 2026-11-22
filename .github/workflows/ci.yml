@@ -142,6 +142,12 @@ jobs:
             exit 1
           fi
 
+      # S2 task-44: tests must run on the assemblies built in *this* job. `--no-build` makes that
+      # explicit: a stale bin/ (from a cached checkout or an interrupted incremental build) can
+      # otherwise mix a new test assembly with an old product DLL and produce fake failures, which
+      # is exactly what the merge-verify saw for `Archive_that_lies_about_its_size...`
+      # (`manifest-not-nps` until `dotnet build -c Release` rebuilt Natter.Plugin.Store).
+      #
       # NATTER_LIVE is empty on purpose: the live suite must skip without credentials, and the unit
       # suites must not depend on it.
       - name: Run every test suite
@@ -157,6 +163,7 @@ jobs:
             echo "::group::test $name"
             if ! dotnet test "$project" \
                   -c Release \
+                  --no-build \
                   --logger "trx;LogFileName=${name}.trx" \
                   --results-directory TestResults; then
               failed=$((failed + 1))

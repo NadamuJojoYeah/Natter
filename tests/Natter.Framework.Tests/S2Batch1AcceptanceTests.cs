@@ -13,7 +13,9 @@ using Natter.Cli.Abstractions;
 using Natter.Cli.Core.Commands;
 using Natter.Cli.Core;
 using Natter.Feature.Ai;
+using Microsoft.Extensions.DependencyInjection;
 using Natter.Infrastructure.Chat;
+using Natter.Infrastructure.Composition;
 using Natter.Infrastructure.Plugins;
 using Natter.Infrastructure.Plugins.Nps;
 using Natter.Plugin.Abstractions;
@@ -78,6 +80,49 @@ public sealed class S2Batch1AcceptanceTests
             Assert.True(written <= 512 * 1024, $"extraction guard must stop the write, wrote {written} bytes");
     }
 
+    // ---------------------------------------- C1b manifest-clean then explode
+
+    [Fact]
+    public async Task Package_that_passes_the_manifest_but_expands_only_while_extracting_is_stopped()
+    {
+        // task-44 gap: the first bomb failed on the manifest (no plugin.json). This one is a real
+        // package - valid manifest, real managed PE entry, matching package.sha256 - where only the
+        // zip header lies about payload.bin, so the expansion happens inside ExtractAsync.
+        using var temp = new TempDirectory();
+        var package = temp.Combine("clean-but-expanding.npa");
+        var manifest = Encoding.UTF8.GetBytes(MinimalManifest("natter.s2.expand", entryAssembly: "lib/probe.dll"));
+        var dll = File.ReadAllBytes(Path.Combine(
+            RepoRoot(), "samples", "Natter.Sample.Plugin.Greetings", "bin", "Debug", "net10.0",
+            "Natter.Sample.Plugin.Greetings.dll"));
+        var payload = new byte[4 * 1024 * 1024];
+        var manifestHash = Convert.ToHexString(SHA256.HashData(manifest)).ToLowerInvariant();
+        var dllHash = Convert.ToHexString(SHA256.HashData(dll)).ToLowerInvariant();
+        var payloadHash = Convert.ToHexString(SHA256.HashData(payload)).ToLowerInvariant();
+        var hashFile = Encoding.ASCII.GetBytes(
+            $"{manifestHash}  plugin.json\n{dllHash}  lib/probe.dll\n{payloadHash}  payload.bin\n");
+
+        CreateZip(
+            package,
+            [("plugin.json", manifest), ("lib/probe.dll", dll), ("payload.bin", payload), ("package.sha256", hashFile)]);
+        DeclareSmallUncompressedSize(package, declared: 100, entryHint: "payload.bin");
+
+        var extract = temp.Combine("extract");
+        var validator = new PluginPackageValidator(Options(temp, maxTotalUncompressed: 512 * 1024));
+        var result = await validator.ValidateAsync(package, extract);
+
+        Assert.False(result.IsValid);
+        // The package is rejected on one of the expansion/consistency gates. .NET honours the
+        // declared length when reading an entry, so the lie is also caught by the hash manifest
+        // (extracted 100 B vs declared 4 MiB); either way the bomb never lands on disk.
+        Assert.Contains(
+            result.Issues,
+            issue => issue.Code is "package-uncompressed-too-large" or "compression-ratio" or "hash-mismatch"
+                     || issue.Message.Contains("while extracting", StringComparison.OrdinalIgnoreCase));
+        Assert.True(
+            DiskBytes(extract) <= 2 * 1024 * 1024,
+            $"extraction guard must stop the write, extract grew to {DiskBytes(extract)} bytes");
+    }
+
     // ------------------------------------------------------- A5 webhook SSRF
 
     [Theory]
@@ -106,6 +151,24 @@ public sealed class S2Batch1AcceptanceTests
         Assert.True(DingTalkSessionWebhookPolicy.TryValidate(webhook, out var uri, out var reason), reason);
         Assert.NotNull(uri);
         Assert.Equal(443, uri!.Port);
+    }
+
+    [Fact]
+    public async Task Rejected_session_webhook_never_reaches_the_http_handler()
+    {
+        var handler = new CountingHttpHandler();
+        using var http = new HttpClient(handler);
+        using var transport = new DingTalkWebhookTransport(
+            new DingTalkOptions { ClientId = "ding", ClientSecret = "secret", BotId = "bot" },
+            "app-secret",
+            http);
+
+        var result = await transport.SendAsync(
+            new DingTalkReply("c1", "https://oapi.dingtalk.com.evil.example/robot/send?access_token=x", "hi"));
+
+        Assert.False(result.Ok);
+        Assert.Equal(DingTalkSessionWebhookPolicy.RejectedCode, result.ErrorCode);
+        Assert.Equal(0, handler.Calls);
     }
 
     // --------------------------------------------------- B4 Source round trip
@@ -172,6 +235,48 @@ public sealed class S2Batch1AcceptanceTests
             responder.RespondAsync(Event("hello"), cts.Token).AsTask());
 
         Assert.Equal(0, client.CallCount);
+    }
+
+    // ---------------------------------------------- C3 unload (routing only)
+
+    [Fact]
+    public async Task Unloaded_plugin_is_no_longer_routed_and_its_command_is_unresolvable()
+    {
+        // task-44/C3 PASS criterion: after the host stops the plugin, its command must no longer
+        // resolve. History: BUG-S2-C3-UNREGISTER was found here (state=Stopped but TryGet=true,
+        // because CliCommandRegistry.UnregisterOwner had no caller). The task-43 CLI-unregister
+        // change makes it pass; on HEAD without that change this assertion fails on purpose, so the
+        // defect cannot silently come back.
+        using var temp = new TempDirectory();
+        var pluginDirectory = temp.Combine("plugins", "natter.sample.greetings");
+        Directory.CreateDirectory(pluginDirectory);
+        var sourceDirectory = Path.Combine(RepoRoot(), "samples", "Natter.Sample.Plugin.Greetings");
+        File.Copy(Path.Combine(sourceDirectory, "plugin.json"), Path.Combine(pluginDirectory, "plugin.json"));
+        File.Copy(
+            Path.Combine(sourceDirectory, "bin", "Debug", "net10.0", "Natter.Sample.Plugin.Greetings.dll"),
+            Path.Combine(pluginDirectory, "Natter.Sample.Plugin.Greetings.dll"));
+
+        var builder = NatterApplicationBuilder.Create()
+            .AddNatterFramework()
+            .AddModule(new Natter.Cli.Core.CliCoreCompositionModule())
+            .AddPluginDirectory(pluginDirectory);
+        var host = builder.Build();
+        await host.StartAsync();
+
+        var registry = host.Services.GetRequiredService<CliCommandRegistry>();
+        var catalog = host.Services.GetRequiredService<IPluginCatalog>();
+        Assert.True(registry.TryGet("greet", out _), "the plugin command must resolve while activated");
+        Assert.Equal(PluginState.Activated, catalog.Plugins.Single().State);
+
+        await host.StopAsync();
+
+        Assert.Equal(PluginState.Stopped, catalog.Plugins.Single().State);
+        Assert.False(registry.TryGet("greet", out _), "an unloaded plugin command must not resolve");
+
+        // OBSERVATION (task-43): "the ALC can be collected" is still NOT asserted. Even with the
+        // command unregistered, other host singletons may keep plugin types reachable; a
+        // WeakReference assertion here would be flaky (or need fake cleanup). task-43 owns it.
+        await host.DisposeAsync();
     }
 
     // ---------------------------------------------------- C4 cycle isolation
@@ -330,7 +435,23 @@ public sealed class S2Batch1AcceptanceTests
         }
     }
 
-    private static string MinimalManifest(string id)
+    private sealed class CountingHttpHandler : HttpMessageHandler
+    {
+        private int _calls;
+
+        public int Calls => Volatile.Read(ref _calls);
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _calls);
+            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent("{\"errcode\":0}", Encoding.UTF8, "application/json"),
+            });
+        }
+    }
+
+    private static string MinimalManifest(string id, string entryAssembly = "lib/probe.dll")
         => $$"""
         {
           "schemaVersion": 1,
@@ -339,7 +460,7 @@ public sealed class S2Batch1AcceptanceTests
           "version": "1.0.0",
           "kind": "feature",
           "hostApi": ">=0.1.0 <1.0.0",
-          "entry": { "assembly": "lib/probe.dll", "type": "Probe.Plugin" }
+          "entry": { "assembly": "{{entryAssembly}}", "type": "Probe.Plugin" }
         }
         """;
 
