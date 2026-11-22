@@ -71,6 +71,34 @@ public static class WebConsoleRedaction
         RegexOptions.Compiled | RegexOptions.CultureInvariant,
         TimeSpan.FromSeconds(1));
 
+    /// <summary>
+    /// OBS-WC-S1-04: complete PEM private-key blocks (multi-line). Masked before any value/assignment
+    /// rule because the body lines carry no key name the pair rule could match.
+    /// </summary>
+    private static readonly Regex PemBlockPattern = new(
+        "-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\\s\\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant,
+        TimeSpan.FromSeconds(1));
+
+    /// <summary>
+    /// OBS-WC-S1-04b: <c>${secret:NAME}</c> tokens must survive redaction. Without protecting them
+    /// first, the assignment rule matches the <c>secret:</c> inside the reference and rewrites
+    /// <c>${secret:WEBCONSOLE_TOKEN}</c> to <c>${secret:[redacted]}</c>, which hides the fact that a
+    /// secret reference is configured at all.
+    /// </summary>
+    private static readonly Regex SecretReferenceTokenPattern = new(
+        @"\$\{secret:[A-Za-z0-9_.\-]+\}",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant,
+        TimeSpan.FromSeconds(1));
+
+    private const char ReferencePlaceholder = '\u0001';
+
+    /// <summary>Truncated PEM (no END marker) still must not leak the key body.</summary>
+    private static readonly Regex PemDanglingPattern = new(
+        "-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\\s\\S]*$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant,
+        TimeSpan.FromSeconds(1));
+
     public static (JsonElement Value, IReadOnlyList<string> RedactedPointers) Sanitize(JsonElement raw)
     {
         var redacted = new List<string>();
@@ -94,12 +122,44 @@ public static class WebConsoleRedaction
         if (string.IsNullOrEmpty(value))
             return value ?? string.Empty;
 
-        var redacted = SensitiveValuePattern.Replace(value, "[redacted]");
-        return SensitivePairPattern.Replace(
+        var redacted = PemBlockPattern.Replace(value, "[redacted]");
+        redacted = PemDanglingPattern.Replace(redacted, "[redacted]");
+
+        // Protect `${secret:NAME}` references so no later rule can rewrite them.
+        var references = new List<string>();
+        redacted = SecretReferenceTokenPattern.Replace(redacted, match =>
+        {
+            references.Add(match.Value);
+            return ReferencePlaceholder + (references.Count - 1).ToString(System.Globalization.CultureInfo.InvariantCulture)
+                   + ReferencePlaceholder;
+        });
+
+        redacted = SensitiveValuePattern.Replace(redacted, "[redacted]");
+        var result = SensitivePairPattern.Replace(
             redacted,
-            match => SecretReferencePattern.IsMatch(match.Groups["value"].Value)
-                ? match.Value
-                : match.Groups["prefix"].Value + "[redacted]");
+            match =>
+            {
+                var value = match.Groups["value"].Value;
+
+                // A protected reference placeholder: keep it so the restore step can put the
+                // `${secret:NAME}` token back verbatim.
+                if (value.Contains(ReferencePlaceholder, StringComparison.Ordinal))
+                    return match.Value;
+
+                return SecretReferencePattern.IsMatch(value)
+                    ? match.Value
+                    : match.Groups["prefix"].Value + "[redacted]";
+            });
+
+        for (var index = 0; index < references.Count; index++)
+        {
+            result = result.Replace(
+                ReferencePlaceholder + index.ToString(System.Globalization.CultureInfo.InvariantCulture) + ReferencePlaceholder,
+                references[index],
+                StringComparison.Ordinal);
+        }
+
+        return result;
     }
 
     public static string SanitizeText(string? value, int maxLength = 300)

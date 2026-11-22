@@ -270,7 +270,12 @@ public sealed class WebConsoleRequestHandler
         }
 
         if (route.StartsWith("config/", StringComparison.Ordinal))
-            return await HandleConfigRouteAsync(request, route["config/".Length..], startedAt, cancellationToken)
+            return await HandleConfigRouteAsync(
+                    request,
+                    route["config/".Length..],
+                    session.Role,
+                    startedAt,
+                    cancellationToken)
                 .ConfigureAwait(false);
 
         return Error(404, "route.not_found", "Route not found.");
@@ -563,6 +568,7 @@ public sealed class WebConsoleRequestHandler
     private async ValueTask<WebConsoleHttpResponse> HandleConfigRouteAsync(
         WebConsoleHttpRequest request,
         string remainder,
+        WebConsoleRole role,
         DateTimeOffset startedAt,
         CancellationToken cancellationToken)
     {
@@ -574,7 +580,7 @@ public sealed class WebConsoleRequestHandler
         var documentId = verb is null ? remainder : remainder[..slash];
 
         if (string.Equals(verb, "validate", StringComparison.Ordinal))
-            return await HandleConfigValidateAsync(request, documentId, startedAt, cancellationToken)
+            return await HandleConfigValidateAsync(request, documentId, role, startedAt, cancellationToken)
                 .ConfigureAwait(false);
 
         if (string.Equals(verb, "undo", StringComparison.Ordinal))
@@ -795,6 +801,7 @@ public sealed class WebConsoleRequestHandler
     private async ValueTask<WebConsoleHttpResponse> HandleConfigValidateAsync(
         WebConsoleHttpRequest request,
         string documentId,
+        WebConsoleRole role,
         DateTimeOffset startedAt,
         CancellationToken cancellationToken)
     {
@@ -817,6 +824,12 @@ public sealed class WebConsoleRequestHandler
             if (hostResult.Ok && hostResult.Value is { } host)
             {
                 Audit(request, "config.validate", host.Valid ? "ok" : "invalid", startedAt, documentId);
+
+                // S1-04: the diff is built against the stored document, so its "-" lines are the
+                // current config text. Lines are already redacted in the gateway; only an admin
+                // session may receive the diff at all — a viewer gets verdict + issues.
+                var includeDiff = role == WebConsoleRole.Admin;
+
                 return WebConsoleHttpResponse.Json(200, new
                 {
                     id = documentId,
@@ -831,7 +844,8 @@ public sealed class WebConsoleRequestHandler
                         host.Source,
                         host.ReloadHint,
                         host.RestartRequired,
-                        host.Diff,
+                        Diff = includeDiff ? host.Diff : null,
+                        DiffOmitted = includeDiff ? null : "role:viewer",
                     },
                 });
             }
@@ -855,6 +869,7 @@ public sealed class WebConsoleRequestHandler
                 ReloadHint = "none",
                 RestartRequired = false,
                 Diff = (object?)null,
+                DiffOmitted = "no-host-store",
             },
         });
     }

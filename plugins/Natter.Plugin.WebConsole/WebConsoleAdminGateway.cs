@@ -576,10 +576,33 @@ public sealed class WebConsoleAdminGateway
                     WebConsoleRedaction.SanitizeText(issue.Message, 300)))
                 .ToArray();
 
+    /// <summary>
+    /// Diffs are built against the <em>stored</em> document, so the <c>"-"</c> lines are the current
+    /// config text. Every line is redacted before it can leave the process (S1-04); the counters only
+    /// carry numbers and stay as-is.
+    /// </summary>
     private static WebConsoleAdminDiffView? MapDiff(AdminConfigDiff? diff)
         => diff is null
             ? null
-            : new WebConsoleAdminDiffView(diff.Added, diff.Removed, diff.Changed, diff.Truncated, diff.Lines);
+            : new WebConsoleAdminDiffView(
+                diff.Added,
+                diff.Removed,
+                diff.Changed,
+                diff.Truncated,
+                diff.Lines.Select(RedactDiffLine).ToArray());
+
+    /// <summary>Redacts one diff line, keeping the <c>" "</c>/<c>"-"</c>/<c>"+"</c> prefix readable.</summary>
+    private static string RedactDiffLine(string? line)
+    {
+        if (string.IsNullOrEmpty(line))
+            return line ?? string.Empty;
+
+        var prefix = line[0] is ' ' or '-' or '+' ? line[..1] : string.Empty;
+        var body = prefix.Length == 0 ? line : line[1..];
+
+        var redacted = WebConsoleRedaction.RedactSecrets(body);
+        return prefix + redacted;
+    }
 
     private static string Describe(Exception exception)
     {
