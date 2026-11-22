@@ -169,16 +169,31 @@ run chmod -R a+rX "$TARGET" || die "chmod failed" 5
 echo "verify: release marker files"
 [[ $DRY_RUN -eq 1 ]] || {
   "$TARGET/natter" version >/dev/null 2>&1 || die "release binary does not run" 6
-  WC_DLL="$TARGET/plugins/natter.plugin.webconsole/lib/Natter.Plugin.WebConsole.dll"
-  if [[ -f "$WC_DLL" ]]; then
-    strings "$WC_DLL" | grep -q DiffOmitted || die "WebConsole artifact is stale (no DiffOmitted marker)" 6
-    echo "  webconsole: DiffOmitted marker present"
-  fi
-  DC_DLL="$TARGET/plugins/discord/lib/Natter.Chat.Discord.dll"
-  if [[ -f "$DC_DLL" ]]; then
-    strings "$DC_DLL" | grep -q "gateway watchdog" || die "Discord artifact is stale (no watchdog marker)" 6
-    echo "  discord: watchdog marker present"
-  fi
+
+  # Detect a stale staging directory. Two rules learned the hard way:
+  #   1. Never pipe into `grep -q` under `set -o pipefail`: grep exits early, the producer
+  #      gets SIGPIPE, and the pipeline reports failure even when the marker is present.
+  #      `grep -qa <pattern> <file>` searches the binary directly, no pipeline involved.
+  #   2. Pick markers that actually survive compilation. C# splits interpolated strings
+  #      ("$\"Discord gateway watchdog ...\"") into fragments, so a log sentence is not a
+  #      reliable marker; metadata identifiers are.
+  require_marker() {
+    local file="$1" pattern="$2" label="$3"
+    if [[ ! -f "$file" ]]; then
+      echo "  $label: skipped (not staged)"
+      return 0
+    fi
+    if grep -qa -- "$pattern" "$file"; then
+      echo "  $label: marker '$pattern' present"
+    else
+      die "$label artifact is stale (no '$pattern' marker)" 6
+    fi
+  }
+
+  require_marker "$TARGET/plugins/natter.plugin.webconsole/lib/Natter.Plugin.WebConsole.dll" \
+    "DiffOmitted" "webconsole"
+  require_marker "$TARGET/plugins/discord/lib/Natter.Chat.Discord.dll" \
+    "ReconnectWatchdog" "discord"
 }
 
 if [[ $RESTART -eq 1 ]]; then
