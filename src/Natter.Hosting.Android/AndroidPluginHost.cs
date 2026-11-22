@@ -148,17 +148,26 @@ internal static class AndroidPluginHost
         }
     }
 
+    /// <summary>
+    /// Publisher trust anchors are embedded in the APK assembly (<c>trusted-keys.txt</c>), never
+    /// read from app-writable storage. A process that can write <c>FilesDir</c> must not be able to
+    /// replace the root of trust; changing the anchors now requires rebuilding the APK.
+    /// </summary>
     public static IReadOnlyList<string> LoadTrustedKeys(Context context)
     {
-        // Production builds should embed publisher keys in the APK. For extended/sideload
-        // builds the key list can be provisioned into app-private storage.
-        var path = Path.Combine(context.FilesDir!.AbsolutePath, "plugin-trusted-keys.txt");
-        if (!File.Exists(path))
+        _ = context; // retained for call-site compatibility
+
+        using var stream = typeof(AndroidPluginHost).Assembly.GetManifestResourceStream(EmbeddedTrustedKeys);
+        if (stream is null)
             return [];
 
-        return File.ReadAllLines(path)
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd()
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
             .Select(line => line.Trim())
             .Where(line => line.Length > 0 && !line.StartsWith('#'))
             .ToArray();
     }
+
+    private const string EmbeddedTrustedKeys = "Natter.Hosting.Android.trusted-keys.txt";
 }

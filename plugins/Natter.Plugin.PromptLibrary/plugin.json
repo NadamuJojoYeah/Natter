@@ -15,7 +15,8 @@
   "homepage": "https://github.com/natter-framework/natter",
   "permissions": [
     "filesystem.read",
-    "cli.commands"
+    "cli.commands",
+    "chat.read"
   ],
   "configSchema": "config.schema.json",
   "contributions": [

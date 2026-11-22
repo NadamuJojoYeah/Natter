@@ -271,7 +271,7 @@ v1 权限词汇：
 | `filesystem.read` | 读取插件目录外的文件 |
 | `filesystem.write` | 写入插件目录外的文件 |
 | `secrets:<NAME>` | 读取指定秘密 |
-| `chat.read` | 读取 NLMP 入站消息/事件 |
+| `chat.read` | 读取 NLMP 入站消息/事件，以及 prompt/context 贡献所需的会话、记忆与摘要事实 |
 | `chat.send` | 发送消息 |
 | `chat.edit` | 编辑消息 |
 | `chat.delete` | 删除消息 |
@@ -288,6 +288,19 @@ v1 权限词汇：
 - `IPluginContext.Secrets` 只有在拥有 `secrets:<NAME>` 时才能读取该秘密。
 - 权限拒绝产生结构化错误，不导致宿主崩溃；依赖该能力的插件进入 `Blocked` 或降级。
 - 权限模型是**治理与可观测性**，不是安全沙箱；见 §15。
+
+**贡献类型的最低权限**（S2-C2，2026-11-22）：
+
+| Contribution | 最低权限 | 原因 |
+| --- | --- | --- |
+| `context.assembler` | `chat.read` | 组装上下文会读取会话/记忆/摘要事实 |
+| `prompt.provider` | `chat.read` | 生成 prompt 需要会话与 profile 上下文 |
+| `prompt.fragment` | `chat.read` | 片段提供者收到 profile/source/user/conversation 上下文 |
+
+未声明对应权限时，`IContributionRegistry.AddContextAssembler` /
+`AddPromptProvider` / `AddPromptFragmentProvider` 抛出权限错误，宿主把插件置为
+`Failed`（`phase=permission`、`code=permission-denied`），并给出缺少的权限与 contribution。
+零权限插件不能通过这几类贡献读取宿主会话数据。
 
 ### 4.7 秘密
 
@@ -755,7 +768,8 @@ nps-hash-v2
 - `network` 相关 HTTP/WebSocket 工厂；
 - `ai.complete` 调用；
 - `cli.command` 注册；
-- `filesystem.*` 访问。
+- `filesystem.*` 访问；
+- `context.assembler` / `prompt.provider` / `prompt.fragment` 注册（要求 `chat.read`）。
 
 ### 9.3 进程内限制
 
@@ -765,6 +779,28 @@ nps-hash-v2
 - 恶意插件仍可通过反射/进程权限绕过；
 - 真正不可信第三方插件需要独立进程、容器或 OS 级沙箱；
 - 不要把 `permissions` 宣传为安全边界。
+
+---
+
+### 9.5 Android 信任根（S2-C14，2026-11-22）
+
+Android 动态插件宿主的 publisher trust anchors（`PluginStoreOptions.TrustedPublicKeys`）现在
+**编译进 APK**：`src/Natter.Hosting.Android/trusted-keys.txt` 作为 embedded resource
+（`Natter.Hosting.Android.trusted-keys.txt`）读取，运行时不再读取
+`FilesDir/plugin-trusted-keys.txt`。这样能写应用私有目录的进程不能替换信任锚；要更换锚点必须
+重新构建并签名 APK。
+
+- Release/dynamic 构建：发布方在构建前把 Base64 SubjectPublicKeyInfo 写入该文件；仓库内文件只有
+  注释，因此默认 APK 不信任任何动态插件（与"未配置信任锚"语义一致）。
+- Debug 构建仍可用 `AllowUnsigned=true` 做 sideload 开发；生产不得开启。
+- **已知限制（不假装解决）**：这是应用签名/APK 完整性边界的延伸，不是硬件根信任。已 root/解锁的
+  设备仍可 patch APK、hook 进程或替换整个应用数据目录；v1 未集成 Play Integrity / Key Attestation，
+  也没有独立的系统级 trust store。高保障部署应使用 embedded 插件模式、Play App Signing，并在设备
+  侧校验 APK 签名/完整性；不要把动态插件信任当作安全隔离边界（见 §9.3）。
+- 仍然保留的缓解：安装期签名校验、启动期 `package.sha256` 完整性复核、`RequireSignedPlugins`
+  默认关闭但可在 Release 打开、篡改候选在 trust policy 中无条件拒绝。Android 动态宿主会把
+  `InstalledPluginCandidate.Integrity` 映射为 `PluginSignatureState`，`Tampered` 在 trust policy
+  中无条件拒绝（`plugin.integrity-mismatch`），与桌面加载路径一致。
 
 ---
 
@@ -1126,7 +1162,7 @@ v1 不做：
 | 共享 AI 边界 | `src/Natter.Feature.Ai`：`AiChatResponder`、`IAiContextAssembler`、`IAiConversationStore` |
 | Host 会话 | `IConversationStore` + SQLite；插件凭 `storage` 权限注入 |
 | Profile 路由 | `RuntimeProfile` / `ProfileAwareChatResponder`；provider 由 `pluginId#responderId` 决定 |
-| P3 contribution | `prompt.provider` / `context.assembler` / `memory.store` 类型、NPS 注册/激活/回滚与 host catalog 已实现；`Natter.Sample.Plugin.Memory` 为示例 |
+| P3 contribution | `prompt.provider` / `context.assembler` / `memory.store` 类型、NPS 注册/激活/回滚与 host catalog 已实现；`prompt.provider` / `prompt.fragment` / `context.assembler` 要求 `chat.read`；`Natter.Sample.Plugin.Memory` 为 `memory.store` 示例 |
 | 第二上游/消费者 | `src/Natter.Chat.DingTalk`、`samples/Natter.Sample.Plugin.DingTalk`、`src/Natter.Feature.Ai.Spark` |
 
 ### 18.3 一致性测试映射（对应 §14）

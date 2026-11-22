@@ -125,6 +125,14 @@ public static class NpsPermissionPolicy
                 [PluginPermissions.CliCommands],
             PluginContributionTypes.MemoryStore =>
                 [PluginPermissions.Storage],
+            // Prompt/context contributions read the conversation, memory and summary facts; a
+            // zero-permission plugin must not be able to observe them (S2-C2).
+            PluginContributionTypes.ContextAssembler =>
+                [PluginPermissions.ChatRead],
+            PluginContributionTypes.PromptProvider =>
+                [PluginPermissions.ChatRead],
+            PluginContributionTypes.PromptFragment =>
+                [PluginPermissions.ChatRead],
             _ => [],
         };
 }

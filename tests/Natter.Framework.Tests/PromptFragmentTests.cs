@@ -433,7 +433,7 @@ public sealed class PromptFragmentTests
                 Assembly = "Natter.Framework.Tests.dll",
                 Type = typeof(NpsFragmentTestPlugin).AssemblyQualifiedName!,
             },
-            Permissions = [],
+            Permissions = [PluginPermissions.ChatRead],
             Contributions =
             [
                 new PluginContribution

@@ -62,7 +62,7 @@ public sealed class NpsRuntimeTests
         var plugin = new PromptContributionPlugin();
         var manifest = Manifest(
             "natter.test.prompt",
-            permissions: [],
+            permissions: [PluginPermissions.ChatRead],
             contributions: [new PluginContribution { Type = PluginContributionTypes.PromptProvider, Id = "static" }]);
 
         var builder = NatterApplicationBuilder.Create()
