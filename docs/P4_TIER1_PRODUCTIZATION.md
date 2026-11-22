@@ -454,7 +454,7 @@ deploy/
 | health uptime/Tier1 | 首次 uptime >0、startedAt/sampledAt、Tier2 缺失不降级 | `HostRuntimeClock` / `RuntimeHealth` |
 | health offline | `health --offline` 不启动 gateway | `NatterCli` |
 | upstream 诊断 | lastEvent/connected/disconnect/reconnect count | `IChatUpstreamHealth` |
-| 24h soak | 未执行 | — |
+| 24h soak | **未完成**：按 [passive-soak-24h](operations/passive-soak-24h.md) §3.1 的「累计有效运行」口径，需 Σ有效运行 ≥24h 且满足单段 ≥6h／缺口归因／RSS 漂移三项护栏；截至 2026-11-22 无合格记录（现有 soak-once 0.3%、toolcheck 83.3%、p2 旧格式 0 样本均判 FAIL），不得按 PASS 计 | — |
 | 真实双 guild/DM | 未执行（测试侧） | — |
 
 测试：`Natter.Framework.Tests` **245/245**；P3 232 基线未回归。

@@ -283,6 +283,24 @@ public sealed class ConfigPhase2AcceptanceTests
         Assert.False(File.Exists(harness.Store!.PathFor(ProfilesId)));
     }
 
+    // ------------------------------------------------- F1 harness/product parity
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("{}")]
+    [InlineData("""{"schemaVersion":1,"profiles":[]}""")]
+    [InlineData("""{"a":"中文","b":[1,2,3]}""")]
+    public void Harness_etags_match_the_product_implementation(string content)
+    {
+        // S2-F1: the acceptance harness used to re-implement the ETag algorithm. It now delegates
+        // to AdminETag; this parity case fails if either side drifts.
+        var expected = AdminETag.Compute(content);
+
+        Assert.Equal(expected, FileAdminConfigStore.ETagOf(content));
+        Assert.True(AdminETag.Matches(content, FileAdminConfigStore.ETagOf(content)));
+        Assert.StartsWith(AdminETag.Prefix, expected, StringComparison.Ordinal);
+    }
+
     private static string Profiles(string id)
         => JsonSerializer.Serialize(new
         {

@@ -1,9 +1,13 @@
 # Natter 真实 API 联调测试方案（Discord + DeepSeek）
 
-> **状态**：Accepted · L1–L4 已在本机对真实 DeepSeek / Discord API 执行通过；L5 人工闸门待人工触发  
-> **日期**：2026-11-15  
-> **被测对象**：`natter.transport.discord`（`Natter.Sample.Plugin.Discord` + `Natter.Chat.Discord`）、`natter.feature.ai.deepseek`（`Natter.Feature.Ai.DeepSeek`）  
-> **入口**：`tests/Natter.Live.Tests`、`scripts/live-test.sh`  
+> **状态**：Accepted · **已验证**：L1–L4 已在本机对真实 DeepSeek / Discord API 执行通过（27/27）；
+> **已验证（人工）**：L5 人工闸门修复后已复测通过（2026-11-15 13:50，见 §0 链接）；
+> **待人工/未执行**：24h 被动 soak（口径见 [passive-soak-24h](operations/passive-soak-24h.md) 的「累计有效运行」，
+> 当前无合格记录，按「未完成」计，不得写成 PASS）。
+
+> **日期**：2026-11-15
+> **被测对象**：`natter.transport.discord`（`Natter.Sample.Plugin.Discord` + `Natter.Chat.Discord`）、`natter.feature.ai.deepseek`（`Natter.Feature.Ai.DeepSeek`）
+> **入口**：`tests/Natter.Live.Tests`、`scripts/live-test.sh`
 > **关联**：[Discord 传输设计](DISCORD_PLUGIN_DESIGN.md)、[AI Provider 设计](AI_PROVIDER_DESIGN.md)、[NPS v1](PLUGIN_SPEC.md)
 
 ---

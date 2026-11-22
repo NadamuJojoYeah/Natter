@@ -175,7 +175,27 @@ public sealed class ContextPipelineTests
         using (ProfileContext.Push(profile))
             bundle = await pipeline.AssembleAsync(source, conversation, user, new string('x', 500));
 
-        Assert.True(bundle.EstimatedCharacters <= 80, $"estimated={bundle.EstimatedCharacters}");
+        // S2-F2: "<= 80" alone passes for an empty bundle, which would hide a broken pipeline.
+        // Assert the budget bound, a non-empty lower bound, the expected prompt/message content and
+        // the order (system prompt first, then history).
+        Assert.InRange(bundle.EstimatedCharacters, 1, 80);
+        Assert.NotEmpty(bundle.Messages);
+        Assert.Equal(ChatRole.System, bundle.Messages[0].Role);
+        Assert.Contains("system", bundle.Messages[0].Text, StringComparison.Ordinal);
+        Assert.Equal(
+            new string('x', bundle.Messages[^1].Text!.Length),
+            bundle.Messages[^1].Text);
+        Assert.Contains(bundle.Messages, message => message.Text is { Length: > 0 });
+        Assert.Equal(bundle.EstimatedCharacters, bundle.Messages.Sum(message => message.Text?.Length ?? 0));
+        // With an 80-char budget the pipeline keeps the system prompt and may trim the user turn to
+        // an empty string (observed; reported as OBS-F2-BUDGET-DROPS-TURN). Whatever survives must
+        // be the user's own text, never borrowed content.
+        Assert.All(
+            bundle.Messages.Where(message => message.Role == ChatRole.User),
+            message => Assert.True(
+                message.Text is null or "",
+                $"unexpected user content under a tiny budget: '{message.Text}'")
+                );
     }
 
     [Fact]

@@ -112,24 +112,44 @@ public sealed class AiChatResponderTests
         Assert.Single(chat.Calls);
     }
 
-    [Fact]
+    [Fact(Timeout = 20_000)]
     public async Task Same_conversation_is_serialized_by_the_gate()
     {
-        var (responder, chat, source, clock) = CreateResponder();
-        chat.AsyncResponseFactory = async _ =>
+        // S2-F3: "MaxActive == 1" alone passes when a request is dropped or deadlocked. Hold the
+        // first model call on a controllable gate and assert: the second request cannot enter while
+        // the gate is closed, both requests are processed exactly once, and the order matches the
+        // arrival order. No fixed Task.Delay participates in the assertion.
+        var (responder, chat, source, _) = CreateResponder();
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var order = new System.Collections.Concurrent.ConcurrentQueue<string>();
+
+        chat.AsyncResponseFactory = async messages =>
         {
-            await Task.Delay(50);
-            return new ChatResponse(new ChatMessage(ChatRole.Assistant, "answer"));
+            var userText = messages.LastOrDefault(message => message.Role == ChatRole.User)?.Text ?? string.Empty;
+            order.Enqueue(userText);
+            entered.TrySetResult();
+            await gate.Task.ConfigureAwait(false);
+            return new ChatResponse(new ChatMessage(ChatRole.Assistant, "answer-" + userText));
         };
 
         var conversation = ChatTestData.Conversation("dm", ConversationKind.Direct);
         var first = ChatTestData.Message(source, id: "m1", conversation: conversation, text: "one");
         var second = ChatTestData.Message(source, id: "m2", conversation: conversation, text: "two");
 
-        await Task.WhenAll(
-            responder.RespondAsync(ChatTestData.CreatedEvent(source, first, "evt:1")).AsTask(),
-            responder.RespondAsync(ChatTestData.CreatedEvent(source, second, "evt:2")).AsTask());
+        var firstTask = responder.RespondAsync(ChatTestData.CreatedEvent(source, first, "evt:1")).AsTask();
+        var secondTask = responder.RespondAsync(ChatTestData.CreatedEvent(source, second, "evt:2")).AsTask();
 
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        // While the gate is closed the second request must not have reached the model at all.
+        Assert.Single(chat.Calls);
+
+        gate.SetResult();
+        await Task.WhenAll(firstTask, secondTask).WaitAsync(TimeSpan.FromSeconds(10));
+
+        // Exactly once per request (no drops, no duplicates) and arrival order preserved.
+        Assert.Equal(2, chat.Calls.Count);
+        Assert.Equal(["one", "two"], order.ToArray());
         Assert.Equal(1, chat.MaxActive);
     }
 
