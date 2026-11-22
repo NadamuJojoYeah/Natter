@@ -1,6 +1,7 @@
 # 24h 被动 soak：采样、审计与验收口径
 
-> **目的**：部署后无人值守跑满 24 小时，并留下可复核的证据
+> **目的**：部署后无人值守跑满 24 小时有效运行，并留下可复核的证据
+> **两种口径**：`wallclock`（连续墙钟，适合稳定供电）与 `cumulative`（累计有效运行，适合每晚断电的部署机）——见 [§3.1](#31-验收口径连续墙钟-vs-累计有效运行)
 > **工具**：`scripts/soak-sample.sh`（采样）、`scripts/soak-report.py`（审计）、`scripts/ops-health-alert.sh`（告警）
 > **背景**：P4.5 收口要求「24h 采样完整」，此前两轮都因机器休眠/实例重启没达成
 
@@ -44,7 +45,30 @@ sudo -u natter tail -f /var/log/natter/soak-$(date +%F).jsonl
 ./scripts/soak-sample.sh -i 300 -d 86400 --out-dir /var/log/natter
 ```
 
-### 2.3 验证采样器本身可用（60 秒）
+### 2.3 采样行里新增的两个 best-effort 字段
+
+`soak-sample.sh` 现在每行额外尝试采集两项，**采不到就省略该字段，从不影响采样本身与退出码**：
+
+| 字段 | 来源 | 用途 |
+| --- | --- | --- |
+| `bootId` | `/proc/sys/kernel/random/boot_id` | cumulative 模式用它区分「断电重启」与「服务重启」 |
+| `rssBytes` | `systemctl show $NATTER_UNIT -p MemoryCurrent --value`，回落 `/proc/<MainPID>/status` 的 `VmRSS*1024` | cumulative 模式的内存漂移判定 |
+
+```bash
+# 单位名可通过环境变量覆盖（默认 natter.service）
+NATTER_UNIT=natter.service ./scripts/soak-sample.sh --once --out-dir /var/log/natter
+
+# 一行样例（成功时）
+# {"sampledAt":"...","source":"loopback","status":"healthy",...,
+#  "bootId":"e54cc627-...","rssBytes":102830080}
+#
+# 不可达时仍然写一行，只带 bootId：
+# {"sampledAt":"...","source":"loopback","error":"unreachable","httpCode":"000","bootId":"e54cc627-..."}
+```
+
+> `rssBytes` 的语义是「采集时刻进程 RSS」。它是判趋势用的，不是精确计量；缺失只会让漂移分项变成 `insufficient-data`。
+
+### 2.4 验证采样器本身可用（60 秒）
 
 ```bash
 ./scripts/soak-sample.sh -i 15 -d 45 -o /tmp/soak-smoke.jsonl
@@ -71,7 +95,115 @@ python3 scripts/soak-report.py /var/log/natter/soak-*.jsonl --interval 300
 | `sendFailuresMax` | 发送失败峰值 |
 | `result` | PASS / FAIL + 原因列表 |
 
-### 验收口径（建议写进 P4.5 判定）
+## 3.1 验收口径：连续墙钟 vs 累计有效运行
+
+### 3.1.1 环境约束与决策
+
+部署机（本机）**每晚断电**，能维持的运行窗口只有白天清醒期。原口径要求「连续 24h 墙钟、覆盖率 ≥95%、零缺口」，在这个环境里**永远不可能通过**——不是服务不稳，是电源断了。
+
+因此把验收口径改为 **累计有效运行 24h**，可跨天、跨重启、跨断电累加。这是**有记录的口径调整**（task-24），并同时新增三项防放水的护栏（单段最短时长、缺口归因、RSS 漂移），不是把标准降低。
+
+### 3.1.2 新旧标准并列
+
+| 维度 | `wallclock`（旧口径，保留） | `cumulative`（新口径，现行验收） |
+| --- | --- | --- |
+| 时长 | 连续 24h 墙钟窗口 | **Σ 有效运行时长 ≥ 24h**，可跨天/重启/断电 |
+| 采样覆盖 | ≥ 95%，无单点缺口 > 900s | 不再要求覆盖率；每段内累积 `min(delta, 1.5×interval)` |
+| 缺口 | 任何缺口即 FAIL | **允许缺口，但必须归因**：`host-down` / `host-restart` / `suspend-or-stall`；`unknown` 才判负 |
+| 单段 | —（只有一个窗口） | **最长单段 ≥ 6h**（防止用碎片凑数） |
+| 内存 | 人工看 RSS 趋势 | **最差段 RSS 漂移 ≤ 20%**（`insufficient-data` 单列，不判负） |
+| 重启 | 0 次 | 允许；每次重启要有归因（`host-restart`/`host-down`），重启落在两次采样之间会提示核对 coredump |
+| 崩溃 | `startedAt` 变化即判负 | `startedAt` 变化视为重启；**core dump 不在样本数据里**，需 `coredumpctl list natter` 人工核对 |
+| 发送失败 | `sendFailures = 0` | 同左 |
+| 断连归因 | 新载荷无原因即 FAIL | 同左（沿用 OBS-019 逻辑；legacy 静默只统计） |
+| 适用环境 | 稳定供电、可连续跑 | **每晚断电 / 频繁重启 / 打断是常态** |
+
+### 3.1.3 为什么断电不影响要抓的风险
+
+断电打断的是**墙钟连续性**，而这些风险都发生在**清醒运行期间**、并且靠累计样本就能暴露：
+
+| 要抓的风险 | 断电是否掩盖它 | 依据 |
+| --- | --- | --- |
+| 内存泄漏 | 不会 | 漂移按**每段首末** `rssBytes` 算，取最差段；短窗口也能看到斜率 |
+| 重连风暴 | 不会 | `reconnectCount` 增量按事件统计，跨重启也不会漏 |
+| `sendFailures` | 不会 | 每行样本都带，累计统计 |
+| 进程崩溃 | 部分不会 | 崩溃导致 `startedAt` 变化 → 变成段断点并需归因；core dump 仍需人工核对 |
+| 重复投递 / 数据损坏 | 不会 | 需要 DB integrity + 消息计数，与采样窗口连续与否无关 |
+| 长时间低速泄漏（如每 8h +5%） | **会削弱** | 正是新增 RSS 漂移分项的原因：单段太短时容易看不见，所以要求单段 ≥ 6h |
+
+所以护栏是成对的：**累计时长**负责「够久」，**单段最短 + RSS 漂移**负责「够实」。
+
+### 3.1.4 标准命令
+
+```bash
+# 现行验收（多天多个文件一起算）
+python3 scripts/soak-report.py /var/log/natter/soak-*.jsonl \
+  --mode cumulative --target-hours 24 --min-segment-hours 6 \
+  --interval 300
+```
+
+可选参数（默认值即验收线）：
+
+| 参数 | 默认 | 含义 |
+| --- | --- | --- |
+| `--target-hours` | 24 | 有效运行目标 |
+| `--min-segment-hours` | 6 | 最长单段下限 |
+| `--max-unexplained-percent` | 2 | 未归因缺口时长占比上限 |
+| `--max-rss-drift-percent` | 20 | 最差段 RSS 增长上限 |
+
+### 3.1.5 示例输出（真实历史数据，缺 `bootId` 的老样本）
+
+```text
+$ python3 scripts/soak-report.py artifacts/ops/tier1-run1/var/log/natter/soak-wake-2026-11-17.jsonl --interval 300 --mode cumulative
+mode            : cumulative (effective runtime; gaps attributed, not fatal by themselves)
+effective       : 2.25h / target 24.0h   [SHORT]  (8100s)
+window          : 29 samples, 13.99h wall clock, interval 300s, tolerance 450s
+segments        : 3   longest 1.92h (required 6.0h)   restarts 2
+gaps            : 2   host-down=0 host-restart=0 suspend-or-stall=2 unknown=0
+   2026-11-17T14:58:29Z -> 2026-11-18T02:01:50Z  39800s  suspend-or-stall  (bootId missing; startedAt unchanged, ...)
+   2026-11-18T03:06:50Z -> 2026-11-18T03:52:58Z  2767s   suspend-or-stall  (bootId missing; startedAt unchanged, ...)
+unexplained     : 0.0% (allowed 2.0%), 0s of excess gap time
+worst RSS drift : insufficient-data (allowed 20%)
+disconnects     : attributed=0 silent-new=0 silent-legacy=3 rate=0.0%
+sendFailures    : max 0
+host crashes    : 0  (core dumps are outside the sample data; verify with `coredumpctl list natter`)
+result          : FAIL
+  - effective runtime 2.25h < target 24.0h
+  - longest continuous segment 1.92h < required minimum 6.0h
+  note: 3 legacy disconnect(s) have no reason field (pre-OBS-019 payload) — counted for information, not as a failure
+  note: 2 restart(s) happened between samples (no gap to attribute); a host crash would look like this, so check `coredumpctl list natter` for core dumps
+```
+
+读法：
+
+- 这份老数据没有 `bootId`/`rssBytes` → 缺口退回 `startedAt` 判定（`suspend-or-stall`，并标注 `bootId missing`），RSS 分项标 `insufficient-data`，**不抛异常**；
+- 时长自然不够（2.25h），所以 FAIL——新口径不会把老数据"洗白"；
+- `--json` 输出含 `mode / effectiveSeconds / effectiveHours / segments[] / gapAttribution / unexplainedPercent / worstRssDriftPercent / verdictReasons[]`，可直接进验收报告。
+
+### 3.1.6 缺口归因规则（只看样本自身，不依赖 journal）
+
+| 两端的证据 | 归因 | 含义 |
+| --- | --- | --- |
+| `bootId` 不同 | `host-down` | 机器重启/断电 |
+| `bootId` 相同、`startedAt` 不同 | `host-restart` | 服务重启（部署、崩溃拉起） |
+| `bootId`、`startedAt` 都相同，`delta > 1.5×interval` | `suspend-or-stall` | 机器休眠或采样器卡住 |
+| 缺 `bootId`（老样本） | 退回 `startedAt` 判定，标 `bootIdMissing` | 无法区分断电与服务重启 |
+| 两端都缺 `bootId` 且无 `startedAt` | `unknown` | 计入未解释占比 |
+
+### 3.1.7 何时仍用 wallclock
+
+- 目标机有稳定供电（服务器/机房/带 UPS），能连续跑满 24h；
+- 想验证「一次不间断的长跑」而不是「累计够久」；
+- CI 与日常巡检（`deploy-verify.yml` 的自检）继续用默认 `--mode wallclock`，行为与退出码不变。
+
+```bash
+# 稳定供电环境的严格口径
+python3 scripts/soak-report.py /var/log/natter/soak-*.jsonl --interval 300   # 默认 wallclock
+```
+
+---
+
+### 3.2 验收口径 · `--mode wallclock`（连续墙钟；适用于稳定供电环境）
 
 | 项 | 通过标准 |
 | --- | --- |
@@ -113,6 +245,15 @@ dingtalk: lastError="The remote party closed the WebSocket connection without co
 result: FAIL（覆盖 17.3% + 两个超容差缺口 + 2 次重启）
 ```
 
+按累计口径复核同一份数据（`--mode cumulative`）：
+
+```text
+effective 2.25h / target 24h | segments 3, longest 1.92h | gaps 2 → suspend-or-stall ×2
+worst RSS drift: insufficient-data | verdict: FAIL (effective runtime + longest segment)
+```
+
+即：**在两种口径下这份数据都不通过**，且新口径能自动指出"有效 2.25h、最长段 1.92h、两个缺口都是休眠/卡顿（缺 bootId 无法进一步区分）"。老样本缺 `bootId`/`rssBytes`，工具按设计降级而不是报错。
+
 **结论：24h 被动 soak 至今没有完整达成。** 原因清楚且可修复：
 
 1. 机器休眠直接制造 11 小时缺口（不是服务问题）；
@@ -123,7 +264,9 @@ result: FAIL（覆盖 17.3% + 两个超容差缺口 + 2 次重启）
 
 ---
 
-## 5. 补齐 24h 的操作单（在目标机器上执行）
+## 5. 补齐 24h 的操作单（连续墙钟做法；稳定供电时使用）
+
+> 如果部署机每晚断电（本机就是），先看 [§3.1](#31-验收口径连续墙钟-vs-累计有效运行)：那里是**现行验收口径**（累计有效运行），不需要 mask 睡眠也不需要连续跑满。下面的操作单只适用于能连续供电的机器。
 
 ```bash
 # 0) 前置：服务以 systemd 运行，jq 已安装

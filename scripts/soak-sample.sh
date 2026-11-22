@@ -14,6 +14,13 @@
 #   {"sampledAt":"...Z","sampledWallClock":"...+08:00","source":"loopback","status":"healthy",...}
 #   {"sampledAt":"...Z","source":"loopback","error":"unreachable","httpCode":"000"}
 #
+# Best-effort extras (omitted when unavailable, never fail a sample):
+#   bootId   /proc/sys/kernel/random/boot_id — lets soak-report --mode cumulative attribute gaps
+#            to a host power cycle vs a service restart.
+#   rssBytes systemctl show $NATTER_UNIT -p MemoryCurrent, else /proc/<MainPID>/status VmRSS — feeds
+#            the cumulative-mode memory-drift check.
+#   Override the unit with NATTER_UNIT (default: natter.service).
+#
 # Exit codes: 0 = loop finished, 2 = bad usage, 3 = output path not writable.
 set -euo pipefail
 
@@ -63,6 +70,46 @@ mkdir -p "$(dirname "$OUT")" 2>/dev/null || { echo "cannot create $(dirname "$OU
 [[ -w "$(dirname "$OUT")" ]] || { echo "not writable: $(dirname "$OUT")" >&2; exit 3; }
 chmod 600 "$OUT" 2>/dev/null || true
 
+# Best-effort: empty output means "omit the field", never an error.
+collect_boot_id() {
+  local boot=""
+  if [[ -r /proc/sys/kernel/random/boot_id ]]; then
+    boot="$(head -n 1 /proc/sys/kernel/random/boot_id 2>/dev/null | tr -d '[:space:]')"
+  fi
+  printf '%s' "$boot"
+}
+
+collect_rss_bytes() {
+  local unit="${NATTER_UNIT:-natter.service}"
+  local value="" pid="" kb=""
+
+  if command -v systemctl >/dev/null 2>&1; then
+    value="$(systemctl show "$unit" -p MemoryCurrent --value 2>/dev/null | tr -d '[:space:]')"
+    # systemd prints "[not set]" when the accounting counter is unavailable.
+    [[ "$value" =~ ^[0-9]+$ ]] || value=""
+  fi
+
+  if [[ -z "$value" ]] && command -v systemctl >/dev/null 2>&1; then
+    pid="$(systemctl show "$unit" -p MainPID --value 2>/dev/null | tr -d '[:space:]')"
+    [[ "$pid" =~ ^[0-9]+$ ]] || pid=""
+    [[ "$pid" == "0" ]] && pid=""
+  fi
+
+  # Fallback for non-systemd deployments: newest natter serve process of this user.
+  if [[ -z "$value" && -z "$pid" ]] && command -v pgrep >/dev/null 2>&1; then
+    pid="$(pgrep -n -f 'natter.*serve' 2>/dev/null || true)"
+  fi
+
+  if [[ -z "$value" && -n "$pid" && -r "/proc/$pid/status" ]]; then
+    kb="$(awk '/^VmRSS:/ {print $2}' "/proc/$pid/status" 2>/dev/null)"
+    if [[ "$kb" =~ ^[0-9]+$ ]]; then
+      value="$(( kb * 1024 ))"
+    fi
+  fi
+
+  printf '%s' "$value"
+}
+
 iso_utc() { date -u +%Y-%m-%dT%H:%M:%S.%3NZ; }
 iso_local() { date +%Y-%m-%dT%H:%M:%S%:z; }
 log() { [[ "$QUIET" == "1" ]] || echo "$*" >&2; }
@@ -94,6 +141,12 @@ while [[ "$stop_requested" == "0" ]]; do
 
   sampled_utc="$(iso_utc)"
   sampled_local="$(iso_local)"
+  boot_id="$(collect_boot_id)"
+  rss_bytes="$(collect_rss_bytes)"
+  boot_suffix=""
+  if [[ -n "$boot_id" ]]; then
+    boot_suffix=",\"bootId\":\"$boot_id\""
+  fi
 
   body=""
   http_code="000"
@@ -107,9 +160,12 @@ while [[ "$stop_requested" == "0" ]]; do
     if command -v jq >/dev/null 2>&1; then
       printf '%s\n' "$body" | jq -c \
         --arg ts "$sampled_utc" --arg wall "$sampled_local" \
-        '. + {sampledAt:$ts, sampledWallClock:$wall, source:"loopback"}' >>"$OUT" 2>/dev/null \
-        || printf '{"sampledAt":"%s","sampledWallClock":"%s","source":"loopback","error":"parse"}\n' \
-             "$sampled_utc" "$sampled_local" >>"$OUT"
+        --arg boot "$boot_id" --arg rss "$rss_bytes" \
+        '. + {sampledAt:$ts, sampledWallClock:$wall, source:"loopback"}
+           + (if $boot != "" then {bootId:$boot} else {} end)
+           + (if $rss != "" then {rssBytes:($rss | tonumber)} else {} end)' >>"$OUT" 2>/dev/null \
+        || printf '{"sampledAt":"%s","sampledWallClock":"%s","source":"loopback","error":"parse","bootId":"%s"}\n' \
+             "$sampled_utc" "$sampled_local" "$boot_id" >>"$OUT"
     else
       # No jq: keep the raw body but wrap the sample metadata as a separate prefix-free line.
       printf '%s\n' "$body" >>"$OUT"
@@ -119,15 +175,18 @@ while [[ "$stop_requested" == "0" ]]; do
       if command -v jq >/dev/null 2>&1; then
         printf '%s\n' "$offline" | jq -c \
           --arg ts "$sampled_utc" --arg wall "$sampled_local" \
-          '. + {sampledAt:$ts, sampledWallClock:$wall, source:"offline"}' >>"$OUT" 2>/dev/null || true
+          --arg boot "$boot_id" --arg rss "$rss_bytes" \
+          '. + {sampledAt:$ts, sampledWallClock:$wall, source:"offline"}
+             + (if $boot != "" then {bootId:$boot} else {} end)
+             + (if $rss != "" then {rssBytes:($rss | tonumber)} else {} end)' >>"$OUT" 2>/dev/null || true
       fi
     else
-      printf '{"sampledAt":"%s","sampledWallClock":"%s","source":"offline","error":"unreachable","httpCode":"%s"}\n' \
-        "$sampled_utc" "$sampled_local" "$http_code" >>"$OUT"
+      printf '{"sampledAt":"%s","sampledWallClock":"%s","source":"offline","error":"unreachable","httpCode":"%s"%s}\n' \
+        "$sampled_utc" "$sampled_local" "$http_code" "${boot_suffix}" >>"$OUT"
     fi
   else
-    printf '{"sampledAt":"%s","sampledWallClock":"%s","source":"loopback","error":"unreachable","httpCode":"%s"}\n' \
-      "$sampled_utc" "$sampled_local" "$http_code" >>"$OUT"
+    printf '{"sampledAt":"%s","sampledWallClock":"%s","source":"loopback","error":"unreachable","httpCode":"%s"%s}\n' \
+      "$sampled_utc" "$sampled_local" "$http_code" "${boot_suffix}" >>"$OUT"
   fi
 
   if [[ "$ONCE" == "1" ]]; then
