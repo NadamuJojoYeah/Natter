@@ -1,6 +1,6 @@
 using System.Net;
 using System.Text;
-using System.Text.Json;
+using Natter.Cli.Core.Rendering;
 
 namespace Natter.Cli.Core.Commands;
 
@@ -11,10 +11,14 @@ public sealed class HealthHttpServer : IDisposable
     private readonly Func<ValueTask<object>> _snapshot;
     private readonly CancellationTokenSource _cts = new();
     private Task? _loop;
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-    };
+
+    /// <summary>
+    /// S2-E9: bound the number of concurrent requests. Without a limit a local misbehaving client
+    /// could start an unbounded number of handler tasks (and snapshot builds) per second.
+    /// </summary>
+    private const int MaxConcurrentRequests = 4;
+
+    private readonly SemaphoreSlim _requestSlots = new(MaxConcurrentRequests, MaxConcurrentRequests);
 
     public HealthHttpServer(int port, Func<ValueTask<object>> snapshot)
     {
@@ -36,6 +40,7 @@ public sealed class HealthHttpServer : IDisposable
         _listener.Close();
         try { _loop?.Wait(TimeSpan.FromSeconds(2)); } catch { }
         _cts.Dispose();
+        _requestSlots.Dispose();
     }
 
     private async Task AcceptLoopAsync()
@@ -52,7 +57,35 @@ public sealed class HealthHttpServer : IDisposable
                 return;
             }
 
-            _ = HandleAsync(context);
+            _ = HandleWithSlotAsync(context);
+        }
+    }
+
+    private async Task HandleWithSlotAsync(HttpListenerContext context)
+    {
+        // Reject instead of queueing: a health probe that cannot be served promptly should fail fast.
+        if (!await _requestSlots.WaitAsync(TimeSpan.FromSeconds(2), _cts.Token).ConfigureAwait(false))
+        {
+            try
+            {
+                context.Response.StatusCode = 503;
+                context.Response.Close();
+            }
+            catch
+            {
+                // Response may already be gone; nothing else to do.
+            }
+
+            return;
+        }
+
+        try
+        {
+            await HandleAsync(context).ConfigureAwait(false);
+        }
+        finally
+        {
+            _requestSlots.Release();
         }
     }
 
@@ -67,7 +100,7 @@ public sealed class HealthHttpServer : IDisposable
                 return;
             }
 
-            var body = JsonSerializer.Serialize(await _snapshot().ConfigureAwait(false), JsonOptions);
+            var body = JsonOutput.SerializeCompact(await _snapshot().ConfigureAwait(false));
             var bytes = Encoding.UTF8.GetBytes(body);
             context.Response.StatusCode = 200;
             context.Response.ContentType = "application/json";

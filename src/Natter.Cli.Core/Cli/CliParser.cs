@@ -52,11 +52,9 @@ public static class CliParser
 
                 if (option is null)
                 {
-                    if (value is null && index + 1 < tokens.Count && !tokens[index + 1].StartsWith('-'))
-                        value = tokens[++index];
-
-                    options[name] = value ?? "true";
-                    continue;
+                    // S2-E5: an undeclared option used to be accepted (and it swallowed the next
+                    // positional argument), so a typo changed behaviour silently.
+                    return Failure($"Unknown option '--{name}' for command '{command.Name}'.");
                 }
 
                 if (option.TakesValue && value is null)

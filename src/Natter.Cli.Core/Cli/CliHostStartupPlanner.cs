@@ -12,6 +12,9 @@ public static class CliHostStartupCodes
     /// tell "the host is busy" apart from "the command failed".
     /// </summary>
     public const int HostBusy = 3;
+
+    /// <summary>The state directory cannot be created/opened (permissions, read-only rootfs, bad path).</summary>
+    public const int StateDirectoryUnusable = 5;
 }
 
 /// <summary>The startup decision for one invocation.</summary>

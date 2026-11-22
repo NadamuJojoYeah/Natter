@@ -5,6 +5,13 @@ using Natter.Chat;
 
 namespace Natter.Cli.Core.Commands;
 
+/// <summary>Exit codes specific to health probes (S2-E3: automation must not read degraded as OK).</summary>
+public static class CliHealthExitCodes
+{
+    /// <summary>Snapshot is `degraded` (or plugins failed): the host answers, but is not healthy.</summary>
+    public const int Degraded = 4;
+}
+
 /// <summary>Single health snapshot builder shared by `natter health` and `/health`.</summary>
 public static class RuntimeHealth
 {
@@ -58,17 +65,22 @@ public static class RuntimeHealth
                         value.LastConnectedAt,
                         value.LastDisconnectAt,
                         value.ReconnectCount,
-                        value.LastError,
+                        Sanitize(value.LastError),
                         value.SendFailures,
-                        value.LastSendError,
-                        value.LastDisconnectError is null ? null : Sanitize(value.LastDisconnectError),
+                        Sanitize(value.LastSendError),
+                        Sanitize(value.LastDisconnectError),
                         value.LastDisconnectCode);
                 }
                 return new RuntimeHealthUpstream(upstream.Source.Key, upstream.IsConnected);
             })
             .ToArray();
 
-        var tier1Unavailable = providers.Any(provider => provider.SupportTier == 1 && !provider.Available);
+        // A Tier 1 provider only counts as "unavailable" when plugins were actually activated.
+        // With no activated plugin the profile merely references an unloaded plugin (for example
+        // `--no-plugins` or `health --offline`), which must not read as a runtime degradation.
+        var anyPluginActivated = plugins.Plugins.Any(plugin => plugin.State == PluginState.Activated);
+        var tier1Unavailable = anyPluginActivated
+                               && providers.Any(provider => provider.SupportTier == 1 && !provider.Available);
         var status = upstreamSnapshots.Length == 0
             ? "unknown"
             : upstreamSnapshots.Any(upstream => !upstream.Connected)
@@ -105,7 +117,12 @@ public sealed record RuntimeHealthSnapshot(
     IReadOnlyList<RuntimeHealthUpstream> Upstreams,
     IReadOnlyList<RuntimeHealthProvider> Providers,
     RuntimeHealthPlugins Plugins,
-    TaskMetricsSnapshot Tasks);
+    TaskMetricsSnapshot Tasks,
+    /// <summary>
+    /// "activated" when the host ran and activated plugins, "not-activated" for `health --offline`.
+    /// An offline snapshot must not look like a disconnected runtime (S2-E2).
+    /// </summary>
+    string? PluginActivation = null);
 
 public sealed record RuntimeHealthUpstream(
     string Source,

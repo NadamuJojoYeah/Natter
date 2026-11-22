@@ -2,17 +2,13 @@ using System.Text.Json;
 using Natter.Application.Chat;
 using Natter.Chat;
 using Natter.Cli.Abstractions;
+using Natter.Cli.Core.Rendering;
 
 namespace Natter.Cli.Core.Commands;
 
 /// <summary>Explicit, user-confirmed memory. No model inference is performed here.</summary>
 public sealed class RememberCommand(IProfileMemoryStoreResolver resolver) : ICliCommandHandler
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        WriteIndented = false,
-    };
 
     public async ValueTask<int> ExecuteAsync(CliInvocation invocation, CancellationToken cancellationToken = default)
     {
@@ -39,7 +35,7 @@ public sealed class RememberCommand(IProfileMemoryStoreResolver resolver) : ICli
             cancellationToken).ConfigureAwait(false);
 
         if (invocation.HasFlag("json"))
-            invocation.Console.Out.WriteLine(JsonSerializer.Serialize(item, JsonOptions));
+            invocation.Console.Out.WriteLine(JsonSerializer.Serialize(item, JsonOutput.CompactOptions));
         else
             invocation.Console.Out.WriteLine($"remembered {item.MemoryId} scope={item.ScopeType.ToString().ToLowerInvariant()}");
 
@@ -91,11 +87,6 @@ public sealed class ForgetCommand(IProfileMemoryStoreResolver resolver, ISummary
 
 public sealed class MemoryListCommand(IProfileMemoryStoreResolver resolver) : ICliCommandHandler
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        WriteIndented = false,
-    };
 
     public async ValueTask<int> ExecuteAsync(CliInvocation invocation, CancellationToken cancellationToken = default)
     {
@@ -112,7 +103,7 @@ public sealed class MemoryListCommand(IProfileMemoryStoreResolver resolver) : IC
 
         if (invocation.HasFlag("json"))
         {
-            invocation.Console.Out.WriteLine(JsonSerializer.Serialize(items, JsonOptions));
+            invocation.Console.Out.WriteLine(JsonSerializer.Serialize(items, JsonOutput.CompactOptions));
             return CliExitCodes.Success;
         }
 
@@ -152,12 +143,6 @@ internal sealed record MemoryCommandContext(Source Source, Conversation Conversa
 /// <summary>Exports visible memory as a versioned envelope (memory only, no summary text).</summary>
 public sealed class MemoryExportCommand(IProfileMemoryStoreResolver resolver) : ICliCommandHandler
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        WriteIndented = true,
-        Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() },
-    };
 
     public async ValueTask<int> ExecuteAsync(CliInvocation invocation, CancellationToken cancellationToken = default)
     {
@@ -166,7 +151,7 @@ public sealed class MemoryExportCommand(IProfileMemoryStoreResolver resolver) : 
         var export = await selectedStore.ExportAsync(
             new MemoryExportRequest(context.Source, context.Conversation, context.User),
             cancellationToken).ConfigureAwait(false);
-        var json = JsonSerializer.Serialize(export, JsonOptions);
+        var json = JsonSerializer.Serialize(export, JsonOutput.CompactOptions);
         var output = invocation.GetOption("output");
         if (!string.IsNullOrWhiteSpace(output))
         {
@@ -190,12 +175,6 @@ public sealed class MemoryExportCommand(IProfileMemoryStoreResolver resolver) : 
 /// <summary>Imports a memory envelope; only current scope/source/actor-visible items are accepted.</summary>
 public sealed class MemoryImportCommand(IProfileMemoryStoreResolver resolver) : ICliCommandHandler
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        PropertyNameCaseInsensitive = true,
-        Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() },
-    };
 
     public async ValueTask<int> ExecuteAsync(CliInvocation invocation, CancellationToken cancellationToken = default)
     {
@@ -209,7 +188,7 @@ public sealed class MemoryImportCommand(IProfileMemoryStoreResolver resolver) : 
         MemoryExport? export;
         try
         {
-            export = JsonSerializer.Deserialize<MemoryExport>(await File.ReadAllTextAsync(file, cancellationToken), JsonOptions);
+            export = JsonSerializer.Deserialize<MemoryExport>(await File.ReadAllTextAsync(file, cancellationToken), JsonOutput.CompactOptions);
         }
         catch (JsonException ex)
         {

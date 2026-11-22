@@ -21,6 +21,14 @@ public static class NatterCli
         CancellationToken cancellationToken = default)
     {
         var options = NatterCliOptions.Parse(args);
+        if (options.ParseError is { } parseError)
+        {
+            // S2-E4: report the problem instead of silently dropping the argument.
+            console.Error.WriteLine($"error: {parseError}");
+            console.Error.WriteLine("Run 'natter help' for usage.");
+            return Task.FromResult(CliExitCodes.Usage);
+        }
+
         return RunAsync(options.CommandArgs, console, options, configure, cancellationToken);
     }
 
@@ -44,6 +52,16 @@ public static class NatterCli
             : null;
         commandBudget?.CancelAfter(TimeSpan.FromSeconds(durationSeconds));
         var runToken = commandBudget?.Token ?? cancellationToken;
+
+        // S2-E7: prove the state directory is usable *before* the composition root opens the stores,
+        // otherwise a read-only/permission problem surfaces as an unhandled exception.
+        if (!StateDirectoryLock.Probe(options.StateDirectory, out var stateDirectoryError))
+        {
+            console.Error.WriteLine(
+                $"error: HL-CLI-STATE-DIR-UNUSABLE: cannot use state directory "
+                + $"'{options.StateDirectory}': {stateDirectoryError}");
+            return CliHostStartupCodes.StateDirectoryUnusable;
+        }
 
         var builder = NatterApplicationBuilder.Create()
             .AddNatterFramework()
@@ -104,9 +122,17 @@ public static class NatterCli
         FileStream? instanceLock = null;
         if (plan.TakeInstanceLock)
         {
-            instanceLock = StateDirectoryLock.TryAcquire(options, console, quiet: true);
+            instanceLock = StateDirectoryLock.TryAcquire(options, console, quiet: true, out var lockFailure);
             if (instanceLock is null && !string.IsNullOrWhiteSpace(options.StateDirectory))
             {
+                if (lockFailure == StateDirectoryLock.LockFailure.Unusable)
+                {
+                    console.Error.WriteLine(
+                        $"error: HL-CLI-STATE-DIR-UNUSABLE: the state directory '{options.StateDirectory}' "
+                        + "cannot be used (permissions or read-only filesystem).");
+                    return CliHostStartupCodes.StateDirectoryUnusable;
+                }
+
                 CliHostStartupPlanner.WriteHostBusyMessage(
                     console, plan, Path.GetFullPath(options.StateDirectory));
                 return CliHostStartupCodes.HostBusy;

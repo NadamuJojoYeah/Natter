@@ -8,7 +8,6 @@
 # Never prints secrets.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUN_DIR="${1:?usage: p2-collect.sh <run-dir> [health-port]}"
 PORT="${2:-5096}"
 STAMP="$(date +%H%M%S)"
@@ -35,8 +34,11 @@ if [[ -f "$HOME/.config/natter/live.env" ]]; then
   # shellcheck disable=SC1090
   set -a && source "$HOME/.config/natter/live.env" && set +a
   if [[ -n "${DISCORD_BOT_TOKEN:-}" && -n "${DISCORD_TEST_CHANNEL_ID:-}" ]]; then
-    curl -s -m 10 "https://discord.com/api/v10/channels/$DISCORD_TEST_CHANNEL_ID/messages?limit=10" \
-      -H "Authorization: Bot $DISCORD_BOT_TOKEN" -o "$OUT/discord-tail.json" || true
+    # S2-E10: never pass the token as an argument — argv is world-readable via ps and
+    # /proc/<pid>/cmdline. curl reads its config from stdin (`-K -`), so only the URL is visible.
+    printf 'header = "Authorization: Bot %s"\n' "$DISCORD_BOT_TOKEN" \
+      | curl -s -m 10 -K - -o "$OUT/discord-tail.json" \
+          "https://discord.com/api/v10/channels/$DISCORD_TEST_CHANNEL_ID/messages?limit=10" || true
   fi
 fi
 

@@ -3,6 +3,7 @@ using Natter.Abstractions.Plugins;
 using Natter.Application.Chat;
 using Natter.Chat;
 using Natter.Cli.Abstractions;
+using Natter.Cli.Core.Rendering;
 
 namespace Natter.Cli.Core.Commands;
 
@@ -16,11 +17,6 @@ public sealed class ServeCommand(
     HostRuntimeClock clock,
     TaskMetrics taskMetrics) : ICliCommandHandler
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        WriteIndented = false,
-    };
 
     public async ValueTask<int> ExecuteAsync(CliInvocation invocation, CancellationToken cancellationToken = default)
     {
@@ -60,7 +56,7 @@ public sealed class ServeCommand(
         };
 
         if (invocation.HasFlag("json"))
-            invocation.Console.Out.WriteLine(JsonSerializer.Serialize(summary, JsonOptions));
+            invocation.Console.Out.WriteLine(JsonSerializer.Serialize(summary, JsonOutput.CompactOptions));
         else
         {
             invocation.Console.Out.WriteLine(
@@ -127,11 +123,6 @@ public sealed class HealthCommand(
     HostRuntimeClock clock,
     TaskMetrics taskMetrics) : ICliCommandHandler
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        WriteIndented = false,
-    };
 
     public async ValueTask<int> ExecuteAsync(CliInvocation invocation, CancellationToken cancellationToken = default)
     {
@@ -145,17 +136,25 @@ public sealed class HealthCommand(
             taskMetrics,
             cancellationToken).ConfigureAwait(false);
         if (invocation.HasFlag("offline"))
-            snapshot = snapshot with { Status = "offline" };
+        {
+            // Offline means "the host never ran": say so explicitly instead of reporting upstreams
+            // as disconnected (S2-E2).
+            snapshot = snapshot with { Status = "offline", PluginActivation = "not-activated" };
+        }
 
         if (invocation.HasFlag("json"))
         {
-            invocation.Console.Out.WriteLine(JsonSerializer.Serialize(snapshot, JsonOptions));
-            return CliExitCodes.Success;
+            invocation.Console.Out.WriteLine(JsonOutput.SerializeCompact(snapshot));
+            return ExitCodeFor(snapshot);
         }
 
         invocation.Console.Out.WriteLine($"status: {snapshot.Status}");
         if (invocation.HasFlag("offline"))
-            invocation.Console.Out.WriteLine("mode: offline (upstreams not started)");
+        {
+            invocation.Console.Out.WriteLine("mode: offline (host not started, plugins not activated)");
+            invocation.Console.Out.WriteLine(
+                "pluginActivation: not-activated — upstream/provider rows below are static config, not live state");
+        }
         invocation.Console.Out.WriteLine($"uptimeSeconds: {snapshot.UptimeSeconds}");
         invocation.Console.Out.WriteLine($"startedAt: {snapshot.StartedAt:O}");
         invocation.Console.Out.WriteLine($"sampledAt: {snapshot.SampledAt:O}");
@@ -170,6 +169,12 @@ public sealed class HealthCommand(
         foreach (var failure in snapshot.Plugins.Failures)
             invocation.Console.Out.WriteLine(
                 $"plugin failed {failure.Id} phase={failure.Phase} code={failure.Code}: {failure.Message}");
-        return CliExitCodes.Success;
+        return ExitCodeFor(snapshot);
     }
+
+    /// <summary>S2-E3: `degraded` must not exit 0, otherwise CI/automation reads it as healthy.</summary>
+    private static int ExitCodeFor(RuntimeHealthSnapshot snapshot)
+        => string.Equals(snapshot.Status, "degraded", StringComparison.OrdinalIgnoreCase)
+            ? CliHealthExitCodes.Degraded
+            : CliExitCodes.Success;
 }
