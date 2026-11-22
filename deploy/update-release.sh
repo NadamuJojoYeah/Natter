@@ -1,0 +1,180 @@
+#!/usr/bin/env bash
+# Replace the running Natter release under the install root and restart the service.
+#
+# Why this exists: `dotnet publish -o /opt/natter` fails with MSB3191 because /opt needs root,
+# and `sudo dotnet publish` would write obj/bin/NuGet cache as root. So publishing always happens
+# in the workspace, and this script does the privileged copy step.
+#
+# It never touches configuration:
+#   * /etc/natter (profiles, plugin config, secrets) is outside the install root;
+#   * scripts/ and docs/ that the installer put under the root are preserved (copy, not mirror);
+#   * the WebConsole audit directory is recreated so the systemd ReadWritePaths drop-in stays valid.
+#
+# Usage:
+#   sudo deploy/update-release.sh --release artifacts/publish/rel-2026-11-22
+#   sudo deploy/update-release.sh --release artifacts/publish/rel-2026-11-22 --no-restart
+#   sudo deploy/update-release.sh --release ... --dry-run
+#   sudo deploy/update-release.sh --release ... --target /srv/natter --unit natter.service
+#
+# Exit codes: 0 ok, 2 usage, 3 release dir invalid, 4 backup failed, 5 deploy failed, 6 verify failed.
+set -euo pipefail
+
+RELEASE=""
+TARGET="/opt/natter"
+UNIT="natter.service"
+BACKUP_ROOT="/var/backups/natter"
+RESTART=1
+DRY_RUN=0
+HEALTH_PORT="${NATTER_HEALTH_PORT:-5099}"
+
+usage() {
+  sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  exit "${1:-2}"
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --release) RELEASE="${2:-}"; shift 2 ;;
+    --target) TARGET="${2:-}"; shift 2 ;;
+    --unit) UNIT="${2:-}"; shift 2 ;;
+    --backup-root) BACKUP_ROOT="${2:-}"; shift 2 ;;
+    --no-restart) RESTART=0; shift ;;
+    --dry-run) DRY_RUN=1; shift ;;
+    -h|--help) usage 0 ;;
+    *) echo "unknown argument: $1" >&2; usage 2 ;;
+  esac
+done
+
+run() {
+  if [[ $DRY_RUN -eq 1 ]]; then
+    printf '[dry-run] %s\n' "$*"
+  else
+    "$@"
+  fi
+}
+
+die() { echo "error: $*" >&2; exit "${2:-1}"; }
+
+[[ -n "$RELEASE" ]] || die "--release is required" 2
+[[ -d "$RELEASE" ]] || die "release directory not found: $RELEASE" 3
+[[ -x "$RELEASE/natter" ]] || die "release has no executable 'natter': $RELEASE" 3
+[[ -d "$RELEASE/plugins" ]] || die "release has no plugins directory: $RELEASE" 3
+
+# Refuse a mixed build: every staged plugin must link host assemblies from this same release.
+if [[ -f "$RELEASE/plugins/staging-manifest.json" ]]; then
+  python3 - "$RELEASE/plugins/staging-manifest.json" <<'PY' || die "staging manifest reports host/plugin mismatch" 3
+import json, sys
+m = json.load(open(sys.argv[1]))
+hp = m.get("hostParity") or {}
+if not hp.get("checked"):
+    print("warning: staging manifest has no hostParity check", file=sys.stderr)
+elif hp.get("mismatches"):
+    print(f"error: hostParity.mismatches={hp['mismatches']}", file=sys.stderr)
+    sys.exit(1)
+print(f"hostParity: compared={hp.get('comparedFiles')} mismatches={hp.get('mismatches')}")
+PY
+else
+  echo "warning: no staging-manifest.json; cannot prove host/plugin parity" >&2
+fi
+
+if [[ $DRY_RUN -eq 0 ]] && [[ "$(id -u)" -ne 0 ]]; then
+  die "must run as root (use sudo)" 2
+fi
+
+STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+BACKUP_DIR="$BACKUP_ROOT/$STAMP"
+
+if [[ -d "$TARGET" ]]; then
+  echo "backup: $TARGET -> $BACKUP_DIR"
+  run install -d -m 0700 "$BACKUP_DIR" || die "cannot create backup dir" 4
+  run tar -C "$(dirname "$TARGET")" -czf "$BACKUP_DIR/$(basename "$TARGET").tar.gz" "$(basename "$TARGET")" \
+    || die "backup failed" 4
+  echo "backup written: $BACKUP_DIR/$(basename "$TARGET").tar.gz"
+else
+  echo "note: $TARGET does not exist yet; skipping backup"
+fi
+
+# Preserve things the installer owns that are not part of the publish output.
+KEEP_DIRS=()
+for d in scripts docs; do
+  if [[ -d "$TARGET/$d" ]]; then
+    KEEP_DIRS+=("$d")
+  fi
+done
+TMP_KEEP=""
+if [[ ${#KEEP_DIRS[@]} -gt 0 ]]; then
+  TMP_KEEP="$(mktemp -d)"
+  for d in "${KEEP_DIRS[@]}"; do
+    run cp -a "$TARGET/$d" "$TMP_KEEP/"
+  done
+fi
+
+echo "deploy: $RELEASE -> $TARGET"
+run install -d -m 0755 "$TARGET" || die "cannot create target" 5
+# Copy the release on top; do not delete unknown files (config, audit, local state may live here).
+run cp -a "$RELEASE/." "$TARGET/" || die "copy failed" 5
+
+if [[ -n "$TMP_KEEP" ]]; then
+  for d in "${KEEP_DIRS[@]}"; do
+    run cp -a "$TMP_KEEP/$d/." "$TARGET/$d/"
+  done
+  rm -rf "$TMP_KEEP"
+fi
+
+# The WebConsole audit drop-in may still point inside the install root; keep it valid.
+AUDIT_DIR="$TARGET/plugins/natter.plugin.webconsole/audit"
+if [[ -d "$TARGET/plugins/natter.plugin.webconsole" ]]; then
+  run install -d -m 0755 "$AUDIT_DIR" || true
+fi
+
+# Plugins are read by the service user; a stray 0600 plugin.json breaks activation.
+# Normalise ownership too: cp -a keeps the publisher's uid, which is not what the unit expects.
+run chown -R root:root "$TARGET" || die "chown failed" 5
+run chmod -R a+rX "$TARGET" || die "chmod failed" 5
+
+echo "verify: release marker files"
+[[ $DRY_RUN -eq 1 ]] || {
+  "$TARGET/natter" version >/dev/null 2>&1 || die "release binary does not run" 6
+  WC_DLL="$TARGET/plugins/natter.plugin.webconsole/lib/Natter.Plugin.WebConsole.dll"
+  if [[ -f "$WC_DLL" ]]; then
+    strings "$WC_DLL" | grep -q DiffOmitted || die "WebConsole artifact is stale (no DiffOmitted marker)" 6
+    echo "  webconsole: DiffOmitted marker present"
+  fi
+  DC_DLL="$TARGET/plugins/discord/lib/Natter.Chat.Discord.dll"
+  if [[ -f "$DC_DLL" ]]; then
+    strings "$DC_DLL" | grep -q "gateway watchdog" || die "Discord artifact is stale (no watchdog marker)" 6
+    echo "  discord: watchdog marker present"
+  fi
+}
+
+if [[ $RESTART -eq 1 ]]; then
+  echo "restart: $UNIT"
+  run systemctl restart "$UNIT" || die "restart failed" 5
+  if [[ $DRY_RUN -eq 0 ]]; then
+    sleep 12
+    if command -v curl >/dev/null 2>&1; then
+      BODY="$(curl -s --max-time 8 "http://127.0.0.1:$HEALTH_PORT/health" || true)"
+      if [[ -z "$BODY" ]]; then
+        die "health endpoint did not answer after restart" 6
+      fi
+      printf '%s' "$BODY" | python3 -c '
+import json,sys
+d=json.load(sys.stdin)
+p=d.get("plugins") or {}
+print("  status=", d.get("status"), "uptime=", d.get("uptimeSeconds"), "plugins=", p.get("activated"), "/", p.get("failed"), "failed")
+for u in d.get("upstreams") or []:
+    print("  upstream", u.get("source"), "connected=", u.get("connected"))
+sys.exit(0 if d.get("status") == "healthy" else 1)
+' || die "health check not healthy after restart" 6
+    fi
+  fi
+else
+  echo "restart skipped (--no-restart)"
+fi
+
+echo "done."
+echo "  release : $RELEASE"
+echo "  target  : $TARGET"
+if [[ -n "$BACKUP_DIR" && -d "$BACKUP_DIR" ]]; then
+  echo "  rollback: sudo tar -C $(dirname "$TARGET") -xzf $BACKUP_DIR/$(basename "$TARGET").tar.gz"
+fi
