@@ -182,7 +182,10 @@ public sealed class HostContextPipeline(
                     fallback ?? "assembler:" + ex.GetType().Name,
                     prompt.PlanHash,
                     prompt.PluginFragmentCount,
-                    prompt.PluginFragmentProviderCount));
+                    prompt.PluginFragmentProviderCount,
+                    prompt.PluginFragmentElapsedMilliseconds,
+                    prompt.FragmentDiagnostics,
+                    prompt.DisabledFragmentDiagnostics));
         }
     }
 }

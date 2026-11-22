@@ -5,8 +5,8 @@ namespace Natter.Application.Chat;
 /// <summary>
 /// Host-owned Prompt Compiler. Resolves a preset (profile → locale → default → builtin fallback),
 /// merges inheritance, applies enable/disable precedence, orders fragments deterministically,
-/// substitutes whitelisted variables, enforces budgets, appends the host mandatory safety block
-/// last and hashes the resulting recipe. The composer is stateless and deterministic.
+/// substitutes whitelisted variables, enforces budgets and hashes the resulting recipe. The
+/// composer injects nothing: safety is an ordinary fragment in the preset. Stateless/deterministic.
 /// </summary>
 public sealed class PromptComposer : IPromptComposer
 {
@@ -79,14 +79,24 @@ public sealed class PromptComposer : IPromptComposer
             disabled,
             hash,
             allWarnings,
-            pluginFragmentCount);
+            pluginFragmentCount)
+        {
+            FragmentDiagnostics = kept
+                .Select(fragment => new PromptFragmentDiagnostic(fragment.Id, fragment.Source, fragment.Order))
+                .ToArray(),
+            DisabledFragmentDiagnostics = disabled
+                .Select(fragment => new PromptFragmentDiagnostic(fragment.Id, fragment.Source, fragment.Order))
+                .ToArray(),
+            PluginFragmentProviderCount = Math.Max(0, request.PluginFragmentProviderCount),
+            PluginFragmentElapsedMilliseconds = Math.Max(0, request.PluginFragmentElapsedMilliseconds),
+        };
     }
 
     public PromptBundle ToBundle(PromptPlan plan)
     {
         ArgumentNullException.ThrowIfNull(plan);
 
-        var text = string.Join(HostPromptSafety.Separator, plan.Fragments.Select(fragment => fragment.Text));
+        var text = string.Join(PromptCompilerDefaults.FragmentSeparator, plan.Fragments.Select(fragment => fragment.Text));
         var sections = plan.Fragments
             .Select(fragment => new PromptSection(fragment.Id, fragment.Text, fragment.Order))
             .ToArray();
@@ -95,13 +105,17 @@ public sealed class PromptComposer : IPromptComposer
         {
             PlanHash = plan.Hash,
             Plan = plan,
-            SafetyAppended = true,
+            PluginFragmentCount = plan.PluginFragmentCount,
+            PluginFragmentProviderCount = plan.PluginFragmentProviderCount,
+            PluginFragmentElapsedMilliseconds = plan.PluginFragmentElapsedMilliseconds,
+            FragmentDiagnostics = plan.FragmentDiagnostics,
+            DisabledFragmentDiagnostics = plan.DisabledFragmentDiagnostics,
         };
     }
 
     private static List<PromptFragment> PrepareFragments(PromptComposeRequest request, List<string> warnings)
     {
-        var hostFragments = new List<PromptFragment>();
+        var fragments = new List<PromptFragment>();
 
         foreach (var fragment in request.Fragments ?? [])
         {
@@ -115,36 +129,25 @@ public sealed class PromptComposer : IPromptComposer
                     PromptCompilerCodes.FragmentInvalid,
                     $"Fragment '{fragment.Id}' has no text.");
 
-            if (fragment.Source is PromptFragmentSource.HostBuiltin)
-                throw new PromptCompilationException(
-                    PromptCompilerCodes.FragmentSourceForbidden,
-                    $"Fragment '{fragment.Id}' claims hostBuiltin source; host fragments are injected by the composer.");
-
-            if (fragment.Source is PromptFragmentSource.Plugin && fragment.Mandatory)
-                throw new PromptCompilationException(
-                    PromptCompilerCodes.PluginMandatoryForbidden,
-                    $"Plugin fragment '{fragment.Id}' declares mandatory=true; only the host may do that.");
-
             if (fragment.MaxCharacters > PromptCompilerDefaults.FragmentMaxCharacters
-                && fragment.Source is PromptFragmentSource.Plugin or PromptFragmentSource.File)
+                && fragment.Source is PromptFragmentSource.File)
             {
                 warnings.Add($"{PromptCompilerCodes.FragmentTruncated}:{fragment.Id}");
-                hostFragments.Add(fragment with { MaxCharacters = PromptCompilerDefaults.FragmentMaxCharacters });
+                fragments.Add(fragment with { MaxCharacters = PromptCompilerDefaults.FragmentMaxCharacters });
                 continue;
             }
 
-            hostFragments.Add(fragment);
+            fragments.Add(fragment);
         }
 
-        var hostIds = new HashSet<string>(
-            hostFragments.Select(fragment => fragment.Id)
-                .Concat(HostPromptSafety.Fragments.Select(fragment => fragment.Id)),
-            StringComparer.Ordinal);
+        var hostIds = fragments
+            .Select(fragment => fragment.Id)
+            .ToHashSet(StringComparer.Ordinal);
 
-        // Plugin fragments arrive cleaned from HostPromptFragmentSource; the composer stays
-        // strict about the rules so a direct host caller cannot smuggle a malformed fragment in.
-        // A collision with a host id is defensive only (aggregator already dropped known ones):
-        // drop the guest fragment instead of failing the whole prompt.
+        // Plugin fragments arrive namespaced (owner#local) from HostPromptFragmentSource. The
+        // composer stays strict so a direct caller cannot smuggle malformed guest data in, but a
+        // defensive host-id collision drops only the guest fragment: a plugin must never fail the
+        // whole prompt. HostBuiltin stays reserved for the host.
         var pluginFragments = new List<PromptFragment>();
         foreach (var fragment in request.PluginFragments ?? [])
         {
@@ -153,20 +156,15 @@ public sealed class PromptComposer : IPromptComposer
                     PromptCompilerCodes.FragmentInvalid,
                     "A plugin fragment entry is null.");
 
-            if (fragment.Mandatory)
-                throw new PromptCompilationException(
-                    PromptCompilerCodes.PluginMandatoryForbidden,
-                    $"Plugin fragment '{fragment.Id}' declares mandatory=true; only the host may do that.");
-
             if (fragment.Source is PromptFragmentSource.HostBuiltin)
                 throw new PromptCompilationException(
                     PromptCompilerCodes.FragmentSourceForbidden,
                     $"Plugin fragment '{fragment.Id}' claims hostBuiltin source.");
 
-            if (!PromptPluginFragmentRules.IsValidId(fragment.Id))
+            if (!PromptPluginFragmentRules.IsValidNamespacedId(fragment.Id))
                 throw new PromptCompilationException(
                     PromptCompilerCodes.FragmentIdRejected,
-                    $"Plugin fragment id '{fragment.Id}' must match {PromptPluginFragmentRules.IdPattern}.");
+                    $"Plugin fragment id '{fragment.Id}' must match {PromptPluginFragmentRules.NamespacedIdPattern}.");
 
             if (string.IsNullOrWhiteSpace(fragment.Text))
                 throw new PromptCompilationException(
@@ -188,8 +186,6 @@ public sealed class PromptComposer : IPromptComposer
             {
                 Source = PromptFragmentSource.Plugin,
                 Order = PromptPluginFragmentRules.NormalizeOrder(fragment.Order),
-                CanDisable = true,
-                Mandatory = false,
                 MaxCharacters = fragment.MaxCharacters <= 0
                     ? PromptCompilerDefaults.FragmentMaxCharacters
                     : Math.Min(fragment.MaxCharacters, PromptCompilerDefaults.FragmentMaxCharacters),
@@ -201,19 +197,7 @@ public sealed class PromptComposer : IPromptComposer
                 PromptCompilerCodes.PluginFragmentLimit,
                 $"Plugin fragments exceed the host limit of {PromptCompilerDefaults.PluginMaxFragments}.");
 
-        var fragments = new List<PromptFragment>(hostFragments.Count + pluginFragments.Count + 1);
-        fragments.AddRange(hostFragments);
         fragments.AddRange(pluginFragments);
-
-        foreach (var mandatory in HostPromptSafety.Fragments)
-        {
-            if (fragments.Any(fragment => string.Equals(fragment.Id, mandatory.Id, StringComparison.Ordinal)))
-                throw new PromptCompilationException(
-                    PromptCompilerCodes.FragmentReserved,
-                    $"Fragment id '{mandatory.Id}' is reserved for host safety.");
-
-            fragments.Add(mandatory);
-        }
 
         var duplicate = fragments
             .GroupBy(fragment => fragment.Id, StringComparer.Ordinal)
@@ -273,7 +257,6 @@ public sealed class PromptComposer : IPromptComposer
             PromptCompilerDefaults.FallbackPresetId,
             "fallback",
             fragments
-                .Where(fragment => !fragment.Mandatory)
                 .OrderBy(fragment => fragment.Order)
                 .ThenBy(fragment => fragment.Id, StringComparer.Ordinal)
                 .Select(fragment => new PromptSectionRef(fragment.Id, fragment.Order))
@@ -392,42 +375,15 @@ public sealed class PromptComposer : IPromptComposer
                 warnings.Add($"{PromptCompilerCodes.SourceMismatch}:{fragment.Id}");
             }
 
-            var text = fragment.Text;
-            if (section.OverrideText is not null)
-            {
-                if (fragment.Mandatory)
-                {
-                    warnings.Add($"{PromptCompilerCodes.MandatoryIgnored}:{fragment.Id}");
-                }
-                else
-                {
-                    text = section.OverrideText;
-                }
-            }
+            var text = section.OverrideText ?? fragment.Text;
 
             var order = section.Order ?? fragment.Order;
             var disabledReason = NormalizeReason(section.Reason);
             var explicitlyDisabled = section.Enabled == false;
             var profileDisabled = IsDisabledByProfile(request, fragment.Id);
 
-            if (fragment.Mandatory)
-            {
-                if (explicitlyDisabled || profileDisabled)
-                    warnings.Add($"{PromptCompilerCodes.MandatoryIgnored}:{fragment.Id}");
-
-                candidates.Add(new Candidate(fragment, text, order));
-                continue;
-            }
-
             if (explicitlyDisabled || profileDisabled)
-            {
-                if (!fragment.CanDisable)
-                    throw new PromptCompilationException(
-                        PromptCompilerCodes.FragmentNotDisableable,
-                        $"Fragment '{fragment.Id}' cannot be disabled.");
-
                 continue;
-            }
 
             if (section.Enabled == true)
             {
@@ -461,22 +417,8 @@ public sealed class PromptComposer : IPromptComposer
             candidates.Add(new Candidate(plugin, plugin.Text, plugin.Order));
         }
 
-        // Host mandatory fragments are appended even when the preset does not reference them.
-        foreach (var mandatory in HostPromptSafety.Fragments)
-        {
-            if (!referenced.Add(mandatory.Id))
-                continue;
-
-            var profileDisabled = IsDisabledByProfile(request, mandatory.Id);
-            if (profileDisabled)
-                warnings.Add($"{PromptCompilerCodes.MandatoryIgnored}:{mandatory.Id}");
-
-            candidates.Add(new Candidate(mandatory, mandatory.Text, mandatory.Order));
-        }
-
         return candidates
-            .OrderBy(candidate => candidate.Fragment.Mandatory ? 1 : 0)
-            .ThenBy(candidate => candidate.Order)
+            .OrderBy(candidate => candidate.Order)
             .ThenBy(candidate => candidate.Fragment.Id, StringComparer.Ordinal)
             .ToList();
     }
@@ -499,9 +441,6 @@ public sealed class PromptComposer : IPromptComposer
             if (!byId.TryGetValue(section.FragmentId, out var fragment))
                 continue;
 
-            if (fragment.Mandatory)
-                continue;
-
             var explicitlyDisabled = section.Enabled == false;
             var profileDisabled = IsDisabledByProfile(request, fragment.Id);
             if (!explicitlyDisabled && !profileDisabled && section.Enabled.HasValue)
@@ -521,7 +460,8 @@ public sealed class PromptComposer : IPromptComposer
                     fragment.Id,
                     fragment.Source,
                     reason,
-                    PromptHasher.ShortHash(fragment.Text)));
+                    PromptHasher.ShortHash(fragment.Text),
+                    fragment.Order));
         }
 
         // Unreferenced plugin fragments: profile disable wins, otherwise a fragment that opted out
@@ -544,7 +484,8 @@ public sealed class PromptComposer : IPromptComposer
                     plugin.Id,
                     plugin.Source,
                     profileDisabled ? "profile" : "default",
-                    PromptHasher.ShortHash(plugin.Text)));
+                    PromptHasher.ShortHash(plugin.Text),
+                    plugin.Order));
         }
 
         return records;
@@ -636,59 +577,24 @@ public sealed class PromptComposer : IPromptComposer
     {
         var max = (long)Math.Max(1, budget.MaxCharacters);
         var fragmentLimit = Math.Max(1, budget.MaxFragmentCharacters);
-
-        var mandatory = candidates.Where(candidate => candidate.Fragment.Mandatory).ToList();
-        var optional = candidates.Where(candidate => !candidate.Fragment.Mandatory).ToList();
-
-        var mandatoryTexts = mandatory
-            .Select(candidate => Truncate(candidate, fragmentLimit, warnings))
-            .ToList();
-        var mandatoryCost = mandatoryTexts.Sum(text => (long)text.Length)
-                            + (mandatoryTexts.Count > 1 ? 2L * (mandatoryTexts.Count - 1) : 0);
-        var optionalBudget = Math.Max(0, max - mandatoryCost);
-        if (mandatoryTexts.Count > 0 && optional.Count > 0)
-            optionalBudget = Math.Max(0, optionalBudget - 2);
-
         var kept = new List<PromptFragment>(candidates.Count);
         long used = 0;
 
-        foreach (var candidate in optional)
+        foreach (var candidate in candidates)
         {
             var text = Truncate(candidate, fragmentLimit, warnings);
             var separator = kept.Count > 0 ? 2 : 0;
-            var cost = text.Length + separator;
+            var room = max - used - separator;
 
-            if (used + cost > optionalBudget)
+            if (room <= 0)
             {
-                var room = optionalBudget - used - separator;
-                if (room <= 0)
-                {
-                    warnings.Add($"{PromptCompilerCodes.BudgetExceeded}:{candidate.Fragment.Id}");
-                    continue;
-                }
-
-                text = text[..(int)room];
                 warnings.Add($"{PromptCompilerCodes.BudgetExceeded}:{candidate.Fragment.Id}");
-                cost = text.Length + separator;
+                continue;
             }
 
-            kept.Add(candidate.Fragment with { Text = text });
-            used += cost;
-        }
-
-        for (var index = 0; index < mandatory.Count; index++)
-        {
-            var candidate = mandatory[index];
-            var text = mandatoryTexts[index];
-            var separator = kept.Count > 0 ? 2 : 0;
-
-            if (used + separator + text.Length > max)
+            if (text.Length > room)
             {
-                var room = max - used - separator;
-                if (room < 0)
-                    room = 0;
-
-                text = text.Length > room ? text[..(int)room] : text;
+                text = text[..(int)room];
                 warnings.Add($"{PromptCompilerCodes.BudgetExceeded}:{candidate.Fragment.Id}");
             }
 

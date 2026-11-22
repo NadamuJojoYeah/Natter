@@ -16,8 +16,8 @@ public sealed record PromptSection(string Id, string Text, int Order);
 
 /// <summary>
 /// Legacy provider output kept for compatibility. <see cref="PlanHash"/> / <see cref="Plan"/> are
-/// filled by the Prompt Compiler; <see cref="SafetyAppended"/> tells the context assembler that the
-/// host mandatory safety block is already part of <see cref="SystemPrompt"/>.
+/// filled by the Prompt Compiler. Safety is an ordinary fragment in the compiled prompt; there is
+/// no host-appended suffix any more.
 /// </summary>
 public sealed record PromptBundle(
     string SystemPrompt,
@@ -29,13 +29,20 @@ public sealed record PromptBundle(
 
     public PromptPlan? Plan { get; init; }
 
-    public bool SafetyAppended { get; init; }
-
     /// <summary>Plugin fragments that reached the compiled plan (diagnostics only).</summary>
     public int PluginFragmentCount { get; init; }
 
     /// <summary>Number of <c>prompt.fragment</c> providers consulted for this prompt.</summary>
     public int PluginFragmentProviderCount { get; init; }
+
+    /// <summary>Time spent aggregating plugin fragments (diagnostics only).</summary>
+    public long PluginFragmentElapsedMilliseconds { get; init; }
+
+    /// <summary>Enabled fragment metadata (id/source/order), never fragment text.</summary>
+    public IReadOnlyList<PromptFragmentDiagnostic> FragmentDiagnostics { get; init; } = [];
+
+    /// <summary>Disabled fragment metadata (id/source/order), never fragment text.</summary>
+    public IReadOnlyList<PromptFragmentDiagnostic> DisabledFragmentDiagnostics { get; init; } = [];
 }
 
 public interface IPromptProvider
@@ -70,7 +77,10 @@ public sealed record ContextDiagnostics(
     string? FallbackReason = null,
     string? PromptPlanHash = null,
     int PluginFragmentCount = 0,
-    int PluginFragmentProviderCount = 0);
+    int PluginFragmentProviderCount = 0,
+    long PluginFragmentElapsedMilliseconds = 0,
+    IReadOnlyList<PromptFragmentDiagnostic>? PromptFragments = null,
+    IReadOnlyList<PromptFragmentDiagnostic>? DisabledPromptFragments = null);
 
 public sealed record ContextBundle(
     IReadOnlyList<ChatMessage> Messages,

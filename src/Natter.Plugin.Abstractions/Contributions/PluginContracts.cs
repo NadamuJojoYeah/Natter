@@ -120,8 +120,8 @@ public interface IContributionRegistry
         where TProvider : class, IPromptProvider;
 
     /// <summary>
-    /// Contributes additional prompt fragments. The host aggregates/cleans them and always keeps
-    /// the mandatory host safety fragment last; a fragment cannot be mandatory or host-builtin.
+    /// Contributes additional prompt fragments. The host aggregates/cleans them, namespaces plugin
+    /// ids under the owning plugin, and rejects HostBuiltin impersonation.
     /// </summary>
     void AddPromptFragmentProvider<TProvider>(string id)
         where TProvider : class, IPromptFragmentProvider

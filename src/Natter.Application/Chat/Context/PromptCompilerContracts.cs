@@ -4,7 +4,7 @@ using Natter.Chat;
 namespace Natter.Application.Chat;
 
 /// <summary>
-/// Prompt Compiler P1/P2 contracts (docs/PROMPT_COMPILER.md). A prompt is a recipe of
+/// Prompt Compiler contracts (docs/PROMPT_COMPILER.md). A prompt is a recipe of
 /// fragments + a preset, compiled by the host into a <see cref="PromptPlan"/> and a
 /// <see cref="PromptBundle"/>. Fragments stay in the source (config/file/plugin) even when a
 /// preset disables them, so disabling is always reversible and never deletes text.
@@ -21,11 +21,20 @@ public static class PromptCompilerDefaults
 
     public const int TotalMaxCharacters = 12000;
 
-    /// <summary>Upper bound on fragments a single plugin/library may contribute.</summary>
+    /// <summary>Global hard cap on plugin-contributed fragments (all providers together).</summary>
     public const int PluginMaxFragments = 64;
 
-    /// <summary>Upper bound on the combined text contributed by plugin fragment providers.</summary>
+    /// <summary>Global hard cap on the combined text contributed by plugin fragment providers.</summary>
     public const int PluginTotalMaxCharacters = 32000;
+
+    /// <summary>Fair per-provider quota: one plugin cannot starve the others.</summary>
+    public const int PluginFragmentsPerProvider = 16;
+
+    /// <summary>Fair per-provider text quota.</summary>
+    public const int PluginCharactersPerProvider = 8000;
+
+    /// <summary>Fragment separator used when materializing the system prompt.</summary>
+    public const string FragmentSeparator = "\n\n";
 
     /// <summary>Default per-provider timeout used by the host fragment aggregator.</summary>
     public const int PluginFragmentTimeoutMilliseconds = 2000;
@@ -51,8 +60,6 @@ public sealed record PromptFragment(
     PromptFragmentSource Source,
     int Order,
     bool EnabledByDefault = true,
-    bool CanDisable = true,
-    bool Mandatory = false,
     int MaxCharacters = PromptCompilerDefaults.FragmentMaxCharacters,
     string? Version = null,
     IReadOnlyList<string>? Tags = null);
@@ -80,7 +87,8 @@ public sealed record DisabledPromptFragment(
     string Id,
     PromptFragmentSource Source,
     string Reason,
-    string Hash);
+    string Hash,
+    int Order = 0);
 
 /// <summary>Compiled prompt recipe. <see cref="Fragments"/> is the final, ordered, enabled list.</summary>
 public sealed record PromptPlan(
@@ -92,11 +100,25 @@ public sealed record PromptPlan(
     IReadOnlyList<string> Warnings,
     int PluginFragmentCount = 0)
 {
+    /// <summary>Per-fragment diagnostics: id/source/order only, never the text.</summary>
+    public IReadOnlyList<PromptFragmentDiagnostic> FragmentDiagnostics { get; init; } = [];
+
+    /// <summary>Disabled fragments (id/source/reason/hash only).</summary>
+    public IReadOnlyList<PromptFragmentDiagnostic> DisabledFragmentDiagnostics { get; init; } = [];
+
+    public int PluginFragmentProviderCount { get; init; }
+
+    public long PluginFragmentElapsedMilliseconds { get; init; }
+
     /// <summary>One-line diagnostic; contains ids/counts/hash only, never prompt text or variable values.</summary>
     public string Explain
         => $"preset={PresetId} v={PresetVersion} fragments={Fragments.Count} "
-           + $"pluginFragments={PluginFragmentCount} disabled={Disabled.Count} hash={Hash}";
+           + $"pluginFragments={PluginFragmentCount} providers={PluginFragmentProviderCount} "
+           + $"elapsedMs={PluginFragmentElapsedMilliseconds} disabled={Disabled.Count} hash={Hash}";
 }
+
+/// <summary>Text-free fragment metadata exposed by plan/context diagnostics.</summary>
+public sealed record PromptFragmentDiagnostic(string Id, PromptFragmentSource Source, int Order);
 
 /// <summary>Compilation failure. <see cref="Code"/> is a stable <c>prompt.*</c> code.</summary>
 public sealed class PromptCompilationException(string code, string message)
@@ -111,11 +133,10 @@ public static class PromptCompilerCodes
     public const string FragmentInvalid = "prompt.fragment_invalid";
     public const string FragmentDuplicate = "prompt.fragment_duplicate";
     public const string FragmentMissing = "prompt.fragment_missing";
-    public const string FragmentReserved = "prompt.fragment_reserved";
     public const string FragmentSourceForbidden = "prompt.fragment_source_forbidden";
-    public const string FragmentNotDisableable = "prompt.fragment_not_disableable";
-    public const string PluginMandatoryForbidden = "prompt.fragment_mandatory_forbidden";
     public const string PluginFragmentLimit = "prompt.fragment_limit";
+    public const string PluginFragmentProviderLimit = "prompt.fragment_provider_limit";
+    public const string PluginFragmentProviderBudget = "prompt.fragment_provider_budget";
     public const string PresetInvalid = "prompt.preset_invalid";
     public const string PresetDuplicate = "prompt.preset_duplicate";
     public const string PresetMissing = "prompt.preset_missing";
@@ -123,7 +144,6 @@ public static class PromptCompilerCodes
     public const string VariableMissing = "prompt.variable_missing";
     public const string VariableNotAllowed = "prompt.variable_not_allowed";
 
-    public const string MandatoryIgnored = "prompt.mandatory_ignored";
     public const string FragmentTruncated = "prompt.fragment_truncated";
     public const string BudgetExceeded = "prompt.budget_exceeded";
     public const string SourceMismatch = "prompt.fragment_source_mismatch";
@@ -131,7 +151,6 @@ public static class PromptCompilerCodes
     // Aggregator warnings (plugin fragments are dropped, the prompt still compiles).
     public const string FragmentTimeout = "prompt.fragment_timeout";
     public const string FragmentFailed = "prompt.fragment_failed";
-    public const string FragmentMandatoryRejected = "prompt.fragment_mandatory_rejected";
     public const string FragmentSourceRejected = "prompt.fragment_source_rejected";
     public const string FragmentIdRejected = "prompt.fragment_id_rejected";
     public const string FragmentTextRejected = "prompt.fragment_text_rejected";
@@ -156,8 +175,8 @@ public sealed record PromptBudget(
 }
 
 /// <summary>
-/// Input to the host composer. Callers only provide data (presets/fragments); the composer always
-/// injects the host mandatory safety fragment, so a plugin cannot remove or replace it.
+/// Input to the host composer. Callers only provide data (presets/fragments); the composer injects
+/// nothing: safety is an ordinary fragment in the preset and can be disabled like any other.
 /// </summary>
 public sealed record PromptComposeRequest(
     RuntimeProfile Profile,
@@ -174,7 +193,9 @@ public sealed record PromptComposeRequest(
     IReadOnlyList<string>? DisabledFragmentIds = null,
     PromptMissingVariableBehavior MissingVariables = PromptMissingVariableBehavior.Warning,
     IReadOnlyList<PromptFragment>? PluginFragments = null,
-    IReadOnlyList<string>? PluginFragmentWarnings = null)
+    IReadOnlyList<string>? PluginFragmentWarnings = null,
+    int PluginFragmentProviderCount = 0,
+    long PluginFragmentElapsedMilliseconds = 0)
 {
     /// <summary>Builds a host request from an <see cref="IPromptProvider"/> call.</summary>
     public static PromptComposeRequest FromPromptRequest(
