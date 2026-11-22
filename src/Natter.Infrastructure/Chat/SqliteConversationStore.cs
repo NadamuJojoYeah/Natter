@@ -168,35 +168,8 @@ public sealed class SqliteConversationStore : IConversationStore
     {
         using var connection = new SqliteConnection(_connectionString);
         connection.Open();
-        using var command = connection.CreateCommand();
-        command.CommandText = """
-            PRAGMA journal_mode = WAL;
-            PRAGMA foreign_keys = ON;
-            CREATE TABLE IF NOT EXISTS sessions (
-                session_id      TEXT PRIMARY KEY,
-                source_key      TEXT NOT NULL,
-                protocol        TEXT NOT NULL,
-                platform        TEXT NOT NULL,
-                conversation_id TEXT NOT NULL,
-                guild_id        TEXT NULL,
-                actor_id        TEXT NULL,
-                created_at      TEXT NOT NULL,
-                updated_at      TEXT NOT NULL,
-                version         INTEGER NOT NULL DEFAULT 0,
-                UNIQUE(source_key, conversation_id, guild_id, actor_id)
-            );
-            CREATE TABLE IF NOT EXISTS messages (
-                message_id      INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id      TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
-                role            TEXT NOT NULL,
-                text            TEXT NOT NULL,
-                source_event_id TEXT NULL,
-                created_at      TEXT NOT NULL,
-                UNIQUE(session_id, source_event_id)
-            );
-            CREATE INDEX IF NOT EXISTS ix_messages_session ON messages(session_id, message_id);
-            """;
-        command.ExecuteNonQuery();
+        // S2-B5: one migration owner for the shared natter.db schema.
+        SqliteSchema.Migrate(connection);
         SecureFiles();
     }
 
@@ -223,9 +196,7 @@ public sealed class SqliteConversationStore : IConversationStore
         var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
         SecureFiles();
-        await using var pragma = connection.CreateCommand();
-        pragma.CommandText = "PRAGMA foreign_keys = ON;";
-        await pragma.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        SqliteSchema.Prepare(connection);
         return connection;
     }
 

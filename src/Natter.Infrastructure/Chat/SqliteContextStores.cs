@@ -30,6 +30,8 @@ internal sealed class SqliteContextDatabase
     {
         var connection = new SqliteConnection(ConnectionString);
         await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+        // S2-B5: foreign_keys + busy_timeout are set by the single schema owner for every store.
+        SqliteSchema.Prepare(connection);
         SecureFiles();
         return connection;
     }
@@ -55,112 +57,10 @@ internal sealed class SqliteContextDatabase
     {
         using var connection = new SqliteConnection(ConnectionString);
         connection.Open();
-        using var version = connection.CreateCommand();
-        version.CommandText = "PRAGMA user_version;";
-        var current = Convert.ToInt32(version.ExecuteScalar());
-
-        if (current < 1)
-        {
-            Execute(connection, """
-                CREATE TABLE IF NOT EXISTS sessions (
-                    session_id      TEXT PRIMARY KEY,
-                    source_key      TEXT NOT NULL,
-                    protocol        TEXT NOT NULL,
-                    platform        TEXT NOT NULL,
-                    conversation_id TEXT NOT NULL,
-                    guild_id        TEXT NULL,
-                    actor_id        TEXT NULL,
-                    created_at      TEXT NOT NULL,
-                    updated_at      TEXT NOT NULL,
-                    version         INTEGER NOT NULL DEFAULT 0,
-                    UNIQUE(source_key, conversation_id, guild_id, actor_id)
-                );
-                CREATE TABLE IF NOT EXISTS summaries (
-                    summary_id      TEXT PRIMARY KEY,
-                    session_id      TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
-                    from_message_id INTEGER NOT NULL,
-                    to_message_id   INTEGER NOT NULL,
-                    text            TEXT NOT NULL,
-                    version         INTEGER NOT NULL,
-                    prompt_version  TEXT NOT NULL,
-                    created_at      TEXT NOT NULL
-                );
-                CREATE INDEX IF NOT EXISTS ix_summaries_session ON summaries(session_id, version DESC);
-                """);
-            current = 1;
-        }
-
-        if (current < 2)
-        {
-            Execute(connection, """
-                CREATE TABLE IF NOT EXISTS memory_items (
-                    memory_id       TEXT PRIMARY KEY,
-                    scope_type      TEXT NOT NULL,
-                    scope_id        TEXT NOT NULL,
-                    subject_id      TEXT NULL,
-                    kind            TEXT NOT NULL,
-                    text            TEXT NOT NULL,
-                    data_json       TEXT NULL,
-                    confidence      REAL NOT NULL,
-                    sensitivity     TEXT NOT NULL,
-                    user_confirmed  INTEGER NOT NULL,
-                    source_message_ids_json TEXT NULL,
-                    created_at      TEXT NOT NULL,
-                    updated_at      TEXT NOT NULL,
-                    expires_at      TEXT NULL,
-                    version         INTEGER NOT NULL
-                );
-                CREATE INDEX IF NOT EXISTS ix_memory_scope ON memory_items(scope_type, scope_id, updated_at DESC);
-                """);
-            current = 2;
-        }
-
-        if (current < 3)
-        {
-            Execute(connection, """
-                CREATE TABLE IF NOT EXISTS agent_tasks (
-                    task_id         TEXT PRIMARY KEY,
-                    session_id      TEXT NOT NULL,
-                    source_key      TEXT NOT NULL,
-                    conversation_id TEXT NOT NULL,
-                    guild_id        TEXT NULL,
-                    actor_id        TEXT NULL,
-                    prompt          TEXT NOT NULL,
-                    status          TEXT NOT NULL,
-                    lease_owner     TEXT NULL,
-                    lease_expires_at TEXT NULL,
-                    result_text     TEXT NULL,
-                    error_code      TEXT NULL,
-                    error_message   TEXT NULL,
-                    created_at      TEXT NOT NULL,
-                    updated_at      TEXT NOT NULL,
-                    version         INTEGER NOT NULL
-                );
-                CREATE INDEX IF NOT EXISTS ix_agent_tasks_session ON agent_tasks(session_id, status);
-                CREATE TABLE IF NOT EXISTS task_events (
-                    task_id     TEXT NOT NULL,
-                    seq         INTEGER NOT NULL,
-                    kind        TEXT NOT NULL,
-                    payload_json TEXT NULL,
-                    created_at  TEXT NOT NULL,
-                    PRIMARY KEY(task_id, seq)
-                );
-                """);
-            current = 3;
-        }
-
-        using var setVersion = connection.CreateCommand();
-        setVersion.CommandText = $"PRAGMA user_version = {current};";
-        setVersion.ExecuteNonQuery();
+        SqliteSchema.Migrate(connection);
         SecureFiles();
     }
 
-    private static void Execute(SqliteConnection connection, string sql)
-    {
-        using var command = connection.CreateCommand();
-        command.CommandText = sql;
-        command.ExecuteNonQuery();
-    }
 }
 
 public sealed class SqliteMemoryStore : IMemoryStore

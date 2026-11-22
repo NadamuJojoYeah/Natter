@@ -18,9 +18,11 @@ public sealed class SqliteTaskStore : ITaskStore
         await using var command = connection.CreateCommand();
         command.CommandText = """
             INSERT INTO agent_tasks
-                (task_id, session_id, source_key, conversation_id, guild_id, actor_id, prompt, status,
+                (task_id, session_id, source_key, source_protocol, source_platform, source_self_id,
+                 conversation_id, guild_id, actor_id, prompt, status,
                  lease_owner, lease_expires_at, result_text, error_code, error_message, created_at, updated_at, version)
-            VALUES ($id, $session, $source, $conversation, $guild, $actor, $prompt, $status,
+            VALUES ($id, $session, $source, $source_protocol, $source_platform, $source_self_id,
+                    $conversation, $guild, $actor, $prompt, $status,
                     $lease_owner, $lease_expires, $result, $error_code, $error_message, $created, $updated, $version);
             """;
         AddParameters(command, task);
@@ -187,20 +189,44 @@ public sealed class SqliteTaskStore : ITaskStore
         string? payloadJson,
         CancellationToken cancellationToken)
     {
-        await using var command = connection.CreateCommand();
-        command.CommandText = "INSERT INTO task_events (task_id, seq, kind, payload_json, created_at) VALUES ($id, (SELECT COALESCE(MAX(seq),0)+1 FROM task_events WHERE task_id=$id), $kind, $payload, $now);";
-        command.Parameters.AddWithValue("$id", taskId);
-        command.Parameters.AddWithValue("$kind", kind);
-        command.Parameters.AddWithValue("$payload", (object?)payloadJson ?? DBNull.Value);
-        command.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture));
-        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        // S2-B3: seq is allocated with MAX(seq)+1 inside a write transaction. Concurrent writers
+        // can still lose the race (SQLITE_BUSY / primary key), so the allocation is retried; no
+        // event may be dropped and no version conflict may leak into TransitionAsync.
+        const int maxAttempts = 5;
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+                await using var command = connection.CreateCommand();
+                command.Transaction = transaction;
+                command.CommandText = "INSERT INTO task_events (task_id, seq, kind, payload_json, created_at) VALUES ($id, (SELECT COALESCE(MAX(seq),0)+1 FROM task_events WHERE task_id=$id), $kind, $payload, $now);";
+                command.Parameters.AddWithValue("$id", taskId);
+                command.Parameters.AddWithValue("$kind", kind);
+                command.Parameters.AddWithValue("$payload", (object?)payloadJson ?? DBNull.Value);
+                command.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture));
+                await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+                await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+                return;
+            }
+            catch (SqliteException ex) when (attempt < maxAttempts && IsRetryableEventWrite(ex))
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(10 * attempt), cancellationToken).ConfigureAwait(false);
+            }
+        }
     }
+
+    private static bool IsRetryableEventWrite(SqliteException exception)
+        => exception.SqliteErrorCode is 5 or 6 or 19 || exception.SqliteExtendedErrorCode == 517;
 
     private static void AddParameters(SqliteCommand command, AgentTask task)
     {
         command.Parameters.AddWithValue("$id", task.TaskId);
         command.Parameters.AddWithValue("$session", task.SessionId);
         command.Parameters.AddWithValue("$source", task.Source.Key);
+        command.Parameters.AddWithValue("$source_protocol", task.Source.Protocol);
+        command.Parameters.AddWithValue("$source_platform", task.Source.Platform);
+        command.Parameters.AddWithValue("$source_self_id", task.Source.SelfId);
         command.Parameters.AddWithValue("$conversation", task.ConversationId);
         command.Parameters.AddWithValue("$guild", (object?)task.GuildId ?? DBNull.Value);
         command.Parameters.AddWithValue("$actor", (object?)task.ActorId ?? DBNull.Value);
@@ -218,27 +244,48 @@ public sealed class SqliteTaskStore : ITaskStore
 
     private static AgentTask Read(SqliteDataReader reader)
     {
-        var sourceKey = reader.GetString(2);
-        var parts = sourceKey.Split(':', 3);
-        var source = Source.Create(parts.Length > 0 ? parts[0] : "unknown", parts.Length > 1 ? parts[1] : "unknown", parts.Length > 2 ? parts[2] : "unknown");
+        // S2-B4: reconstruct Source from its structured columns; source_key is only a legacy
+        // fallback for rows created before schema v4 (never split fields that may contain ':').
+        var sourceKey = reader.GetString(reader.GetOrdinal("source_key"));
+        var protocol = ReadNullable(reader, "source_protocol");
+        var platform = ReadNullable(reader, "source_platform");
+        var selfId = ReadNullable(reader, "source_self_id");
+        Source source;
+        if (!string.IsNullOrEmpty(protocol) && !string.IsNullOrEmpty(platform) && !string.IsNullOrEmpty(selfId))
+        {
+            source = new Source(protocol, platform, selfId);
+        }
+        else
+        {
+            var parts = sourceKey.Split(':', 3);
+            source = Source.Create(parts.Length > 0 ? parts[0] : "unknown", parts.Length > 1 ? parts[1] : "unknown", parts.Length > 2 ? parts[2] : "unknown");
+        }
         return new AgentTask
         {
-            TaskId = reader.GetString(0),
-            SessionId = reader.GetString(1),
+            TaskId = reader.GetString(reader.GetOrdinal("task_id")),
+            SessionId = reader.GetString(reader.GetOrdinal("session_id")),
             Source = source,
-            ConversationId = reader.GetString(3),
-            GuildId = reader.IsDBNull(4) ? null : reader.GetString(4),
-            ActorId = reader.IsDBNull(5) ? null : reader.GetString(5),
-            Prompt = reader.GetString(6),
-            Status = Enum.Parse<AgentTaskStatus>(reader.GetString(7)),
-            LeaseOwner = reader.IsDBNull(8) ? null : reader.GetString(8),
-            LeaseExpiresAt = reader.IsDBNull(9) ? null : DateTimeOffset.Parse(reader.GetString(9), CultureInfo.InvariantCulture),
-            ResultText = reader.IsDBNull(10) ? null : reader.GetString(10),
-            ErrorCode = reader.IsDBNull(11) ? null : reader.GetString(11),
-            ErrorMessage = reader.IsDBNull(12) ? null : reader.GetString(12),
-            CreatedAt = DateTimeOffset.Parse(reader.GetString(13), CultureInfo.InvariantCulture),
-            UpdatedAt = DateTimeOffset.Parse(reader.GetString(14), CultureInfo.InvariantCulture),
-            Version = reader.GetInt32(15),
+            ConversationId = reader.GetString(reader.GetOrdinal("conversation_id")),
+            GuildId = ReadNullable(reader, "guild_id"),
+            ActorId = ReadNullable(reader, "actor_id"),
+            Prompt = reader.GetString(reader.GetOrdinal("prompt")),
+            Status = Enum.Parse<AgentTaskStatus>(reader.GetString(reader.GetOrdinal("status"))),
+            LeaseOwner = ReadNullable(reader, "lease_owner"),
+            LeaseExpiresAt = reader.IsDBNull(reader.GetOrdinal("lease_expires_at"))
+                ? null
+                : DateTimeOffset.Parse(reader.GetString(reader.GetOrdinal("lease_expires_at")), CultureInfo.InvariantCulture),
+            ResultText = ReadNullable(reader, "result_text"),
+            ErrorCode = ReadNullable(reader, "error_code"),
+            ErrorMessage = ReadNullable(reader, "error_message"),
+            CreatedAt = DateTimeOffset.Parse(reader.GetString(reader.GetOrdinal("created_at")), CultureInfo.InvariantCulture),
+            UpdatedAt = DateTimeOffset.Parse(reader.GetString(reader.GetOrdinal("updated_at")), CultureInfo.InvariantCulture),
+            Version = reader.GetInt32(reader.GetOrdinal("version")),
         };
+    }
+
+    private static string? ReadNullable(SqliteDataReader reader, string column)
+    {
+        var ordinal = reader.GetOrdinal(column);
+        return reader.IsDBNull(ordinal) ? null : reader.GetString(ordinal);
     }
 }

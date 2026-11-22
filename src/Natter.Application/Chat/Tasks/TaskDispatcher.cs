@@ -16,18 +16,28 @@ public sealed class TaskDispatcher(
     TaskMetrics? metrics = null,
     ILogger<TaskDispatcher>? logger = null,
     int resultSendAttempts = 3,
-    TimeSpan? resultRetryInterval = null) : ITaskDispatcher, IAsyncDisposable
+    TimeSpan? resultRetryInterval = null,
+    TimeSpan? shutdownTimeout = null,
+    int maxSentResults = 4096,
+    int maxPendingResults = 1024) : ITaskDispatcher, IAsyncDisposable
 {
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _cancellations = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, byte> _tracked = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, byte> _resultsSent = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, byte> _pendingResults = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, Task> _running = new(StringComparer.Ordinal);
+    private readonly ConcurrentQueue<string> _resultsSentOrder = new();
+    private readonly ConcurrentQueue<string> _pendingOrder = new();
     private readonly CancellationTokenSource _retryCancellation = new();
     private readonly TimeSpan _retryInterval = resultRetryInterval ?? TimeSpan.FromSeconds(15);
     private readonly int _sendAttempts = Math.Max(1, resultSendAttempts);
     private readonly string _owner = $"host:{Environment.ProcessId}";
     private int _retryLoopStarted;
     private long _skippedResults;
+    private long _abandonedOnDispose;
+    private readonly int _maxSentResults = Math.Max(1, maxSentResults);
+    private readonly int _maxPendingResults = Math.Max(1, maxPendingResults);
+    private readonly TimeSpan _shutdownTimeout = shutdownTimeout ?? TimeSpan.FromSeconds(5);
     // Lease must cover the worker timeout; a 2m lease would let the watchdog expire a
     // legitimate 5m task before it can finish.
     private static readonly TimeSpan TaskTimeout = TimeSpan.FromMinutes(5);
@@ -41,6 +51,15 @@ public sealed class TaskDispatcher(
 
     /// <summary>Results delivered successfully at least once.</summary>
     public int SentResultCount => _resultsSent.Count;
+
+    /// <summary>Tasks currently tracked as active by this dispatcher (bounded by running tasks).</summary>
+    public int TrackedCount => _tracked.Count;
+
+    /// <summary>Worker executions currently in flight.</summary>
+    public int RunningWorkerCount => _running.Count;
+
+    /// <summary>Workers still running after the shutdown drain timeout.</summary>
+    public long AbandonedOnDispose => Interlocked.Read(ref _abandonedOnDispose);
 
     /// <summary>
     /// Idempotent by task id: a task that is already queued/running (or already terminal in the
@@ -69,7 +88,8 @@ public sealed class TaskDispatcher(
         // exactly once when this dispatcher observes/finishes the task.
         _tracked[task.TaskId] = 0;
         metrics?.Created();
-        _ = Task.Run(() => ExecuteAsync(current, cts.Token), CancellationToken.None);
+        var run = Task.Run(() => ExecuteAsync(current, cts.Token), CancellationToken.None);
+        _running[task.TaskId] = run;
         return task.TaskId;
     }
 
@@ -116,6 +136,27 @@ public sealed class TaskDispatcher(
             cts.Dispose();
         }
         _cancellations.Clear();
+
+        // S2-B9: shutdown must not drop in-flight results. Wait for running workers with a bound;
+        // anything still running afterwards is counted and logged, never silently ignored.
+        var running = _running.Values.ToArray();
+        if (running.Length > 0)
+        {
+            try
+            {
+                await Task.WhenAll(running).WaitAsync(_shutdownTimeout, CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+                var abandoned = _running.Count;
+                Interlocked.Add(ref _abandonedOnDispose, abandoned);
+                logger?.LogWarning(
+                    "Task dispatcher disposed with {Abandoned} worker(s) still running after {Timeout}.",
+                    abandoned,
+                    _shutdownTimeout);
+            }
+        }
+
         try
         {
             _retryCancellation.Cancel();
@@ -125,7 +166,6 @@ public sealed class TaskDispatcher(
         }
 
         _retryCancellation.Dispose();
-        await ValueTask.CompletedTask;
     }
 
     private async Task ExecuteAsync(AgentTask created, CancellationToken cancellationToken)
@@ -260,6 +300,7 @@ public sealed class TaskDispatcher(
                 logger?.LogDebug("Task {TaskId} did not reach a terminal state here; result send skipped.", task.TaskId);
             }
 
+            _running.TryRemove(task.TaskId, out _);
             if (_cancellations.TryRemove(task.TaskId, out var cts))
                 cts.Dispose();
         }
@@ -336,12 +377,12 @@ public sealed class TaskDispatcher(
         // queued for the background compensation loop instead (OBS-P5F-2).
         if (await TryDeliverResultAsync(task.TaskId, _sendAttempts, CancellationToken.None).ConfigureAwait(false))
         {
-            _resultsSent[task.TaskId] = 0;
+            MarkResultSent(task.TaskId);
             _pendingResults.TryRemove(task.TaskId, out _);
             return;
         }
 
-        _pendingResults[task.TaskId] = 0;
+        MarkResultPending(task.TaskId);
         EnsureResultRetryLoop();
     }
 
@@ -397,6 +438,30 @@ public sealed class TaskDispatcher(
         return false;
     }
 
+    private void MarkResultSent(string taskId)
+    {
+        _resultsSent[taskId] = 0;
+        _resultsSentOrder.Enqueue(taskId);
+        // S2-B8: keep the dedupe set bounded; the platform idempotency key still protects a
+        // replay after eviction.
+        while (_resultsSentOrder.Count > _maxSentResults && _resultsSentOrder.TryDequeue(out var oldest))
+            _resultsSent.TryRemove(oldest, out _);
+    }
+
+    private void MarkResultPending(string taskId)
+    {
+        _pendingResults[taskId] = 0;
+        _pendingOrder.Enqueue(taskId);
+        while (_pendingOrder.Count > _maxPendingResults && _pendingOrder.TryDequeue(out var oldest))
+        {
+            _pendingResults.TryRemove(oldest, out _);
+            logger?.LogWarning(
+                "Task dispatcher pending-result capacity ({Capacity}) reached; dropping result for {TaskId}.",
+                _maxPendingResults,
+                oldest);
+        }
+    }
+
     private void EnsureResultRetryLoop()
     {
         if (Interlocked.Exchange(ref _retryLoopStarted, 1) == 1)
@@ -415,7 +480,7 @@ public sealed class TaskDispatcher(
                         if (await TryDeliverResultAsync(taskId, 1, token).ConfigureAwait(false))
                         {
                             _pendingResults.TryRemove(taskId, out _);
-                            _resultsSent[taskId] = 0;
+                            MarkResultSent(taskId);
                         }
                     }
                 }

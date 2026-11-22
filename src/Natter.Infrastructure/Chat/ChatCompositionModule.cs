@@ -169,7 +169,13 @@ public sealed class ChatCompositionModule : ICompositionModule
                 : new SqliteTaskStore(Path.Combine(Path.GetFullPath(context.Options.StateDirectory), "natter.db")));
         services.AddSingleton<Natter.Application.Chat.ITool, Natter.Application.Chat.ClockTool>();
         services.AddSingleton<Natter.Application.Chat.ITool, Natter.Application.Chat.TextTransformTool>();
-        services.AddSingleton<HttpClient>(_ => new HttpClient { Timeout = TimeSpan.FromSeconds(20) });
+        // A21: configurable handler/factory instead of a bare singleton HttpClient. Pooled
+        // connections are recycled so DNS changes are picked up, and proxy/timeout settings are
+        // explicit (the S1-02 fetch handler keeps UseProxy=false for its own hardened client).
+        services.AddSingleton(new Natter.Infrastructure.Chat.NatterHttpClientOptions());
+        services.AddSingleton<HttpClient>(provider =>
+            Natter.Infrastructure.Chat.NatterHttpClientFactory.CreateClient(
+                provider.GetRequiredService<Natter.Infrastructure.Chat.NatterHttpClientOptions>()));
         services.AddSingleton<Natter.Application.Chat.ITool>(provider =>
         {
             var hosts = (Environment.GetEnvironmentVariable("NATTER_HTTP_FETCH_HOSTS") ?? string.Empty)
@@ -223,7 +229,10 @@ public sealed class ChatCompositionModule : ICompositionModule
                 provider.GetRequiredService<Natter.Application.Chat.IContextComponentCatalog>(),
                 provider.GetRequiredService<Natter.Application.Chat.IProfileMemoryStoreResolver>(),
                 provider.GetRequiredService<Natter.Application.Chat.ITaskStore>(),
-                provider.GetRequiredService<Natter.Application.Chat.ITaskDispatcher>()));
+                provider.GetRequiredService<Natter.Application.Chat.ITaskDispatcher>(),
+                // S2-B6: the same ToolLoopOptions instance the worker uses, so /status and /tasks
+                // report the actual tool budget instead of a default.
+                provider.GetRequiredService<Natter.Application.Chat.ToolLoopOptions>()));
         services.AddSingleton<Natter.Application.Chat.IChatResponder>(provider =>
             new Natter.Application.Chat.ProfileAwareChatResponder(
                 provider.GetRequiredService<Natter.Application.Chat.IChatResponderRegistry>(),

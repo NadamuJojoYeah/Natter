@@ -108,6 +108,10 @@ public sealed class HostContextPipeline(
                     IncludePrivate: conversation.Kind is ConversationKind.Direct or ConversationKind.Group),
                 cancellationToken).ConfigureAwait(false);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
             fallback = "memory:" + ex.GetType().Name;
@@ -132,6 +136,10 @@ public sealed class HostContextPipeline(
                 }
             }
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
             fallback ??= "summary:" + ex.GetType().Name;
@@ -144,6 +152,10 @@ public sealed class HostContextPipeline(
                 new PromptRequest(profile, source, conversation, user, null, variables ?? new Dictionary<string, string>()),
                 cancellationToken).ConfigureAwait(false);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
             fallback ??= "prompt:" + ex.GetType().Name;
@@ -155,6 +167,10 @@ public sealed class HostContextPipeline(
             return await contextAssembler.AssembleAsync(
                 new ContextRequest(profile, prompt, source, conversation, user, userText, recent, memoryItems, summary, budget),
                 cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {

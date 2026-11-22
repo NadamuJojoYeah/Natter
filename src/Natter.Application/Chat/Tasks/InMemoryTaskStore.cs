@@ -29,7 +29,8 @@ public sealed class InMemoryTaskStore : ITaskStore
     {
         lock (_gate)
             return ValueTask.FromResult<IReadOnlyList<AgentTask>>(_tasks.Values
-                .Where(task => task.SessionId == sessionId && task.Status is AgentTaskStatus.Pending or AgentTaskStatus.Running)
+                .Where(task => task.SessionId == sessionId
+                    && task.Status is AgentTaskStatus.Pending or AgentTaskStatus.Running or AgentTaskStatus.WaitingForInput)
                 .OrderBy(task => task.CreatedAt)
                 .ToArray());
     }
