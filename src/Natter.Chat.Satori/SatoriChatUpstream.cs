@@ -1,4 +1,5 @@
 using System.Reactive.Subjects;
+using Microsoft.Extensions.Logging;
 using Natter.Abstractions.Ports;
 using Natter.Chat;
 using Natter.Chat.Safety;
@@ -37,6 +38,7 @@ public sealed class SatoriChatUpstream : IChatUpstream, IDisposable
 {
     private readonly ISatoriTransport _transport;
     private readonly IClock _clock;
+    private readonly ILogger<SatoriChatUpstream>? _logger;
     private readonly SatoriEventMapper _mapper;
     private readonly SatoriCommandMapper _commandMapper = new();
     private readonly SatoriSnTracker _snTracker = new();
@@ -57,13 +59,15 @@ public sealed class SatoriChatUpstream : IChatUpstream, IDisposable
         IClock clock,
         SatoriMappingOptions? mappingOptions = null,
         SatoriCapabilityOptions? capabilityOptions = null,
-        ChatOutboundPolicy? outboundPolicy = null)
+        ChatOutboundPolicy? outboundPolicy = null,
+        ILogger<SatoriChatUpstream>? logger = null)
     {
         Source = source ?? throw new ArgumentNullException(nameof(source));
         _transport = transport ?? throw new ArgumentNullException(nameof(transport));
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
         _capabilityOptions = capabilityOptions;
         _outboundPolicy = outboundPolicy ?? ChatOutboundPolicy.Default;
+        _logger = logger;
         _mapper = new SatoriEventMapper(clock, mappingOptions);
         _capabilities = SatoriCapabilityMapper.Map(null, capabilityOptions);
         _events = Subject.Synchronize(_subject);
@@ -220,6 +224,7 @@ public sealed class SatoriChatUpstream : IChatUpstream, IDisposable
             return;
 
         _disposed = true;
+        _connected = false;
 
         lock (_gate)
         {
@@ -227,7 +232,33 @@ public sealed class SatoriChatUpstream : IChatUpstream, IDisposable
             _subscription = null;
         }
 
-        _connected = false;
+        // Dispose owns the transport lifecycle: disconnect first (best effort) and release it.
+        try
+        {
+            _transport.DisconnectAsync(CancellationToken.None).GetAwaiter().GetResult();
+        }
+        catch
+        {
+            // Shutdown is best effort; a failed disconnect must not block disposal.
+        }
+
+        try
+        {
+            switch (_transport)
+            {
+                case IDisposable disposable:
+                    disposable.Dispose();
+                    break;
+                case IAsyncDisposable asyncDisposable:
+                    asyncDisposable.DisposeAsync().AsTask().GetAwaiter().GetResult();
+                    break;
+            }
+        }
+        catch
+        {
+            // Shutdown is best effort.
+        }
+
         _subject.Dispose();
     }
 
@@ -238,19 +269,37 @@ public sealed class SatoriChatUpstream : IChatUpstream, IDisposable
             if (satoriEvent.Login?.Features is { Count: > 0 } features)
                 _capabilities = SatoriCapabilityMapper.Map(features, _capabilityOptions);
 
-            // Advance sn for every frame, including ones NLMP ignores: a reconnect must not
-            // process an ignored frame again.
-            if (satoriEvent.Sn is { } sn && !_snTracker.TryAdvance(sn))
+            // Replayed/older frames are skipped before mapping. The sequence is committed only
+            // after a successful mapping: a mapping failure must not silently advance past the
+            // event (otherwise a reconnect can never replay it).
+            if (satoriEvent.Sn is { } incomingSn && !_snTracker.ShouldProcess(incomingSn))
                 return;
 
             var chatEvent = _mapper.Map(satoriEvent);
-            if (chatEvent is not null)
-                _events.OnNext(chatEvent);
+            if (chatEvent is null)
+            {
+                LastError = $"Satori event mapping failed (type={satoriEvent.Type}, sn={satoriEvent.Sn}); sn not advanced.";
+                _logger?.LogWarning(
+                    "Satori event mapping failed type={Type} sn={Sn}; sn not advanced",
+                    satoriEvent.Type,
+                    satoriEvent.Sn);
+                return;
+            }
+
+            if (satoriEvent.Sn is { } committedSn)
+                _snTracker.Commit(committedSn);
+
+            _events.OnNext(chatEvent);
         }
         catch (Exception exception)
         {
-            // Mapping must never terminate the transport's event stream.
+            // Mapping must never terminate the transport's event stream. The sequence is not
+            // committed when processing throws, so a reconnect can replay the frame.
             LastError = exception.Message;
+            _logger?.LogWarning(
+                "Satori event processing failed type={Type} sn={Sn}; sn not advanced",
+                satoriEvent.Type,
+                satoriEvent.Sn);
         }
     }
 

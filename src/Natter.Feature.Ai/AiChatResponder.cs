@@ -24,6 +24,8 @@ public sealed partial class AiChatResponder : IChatResponder
     private readonly IPluginLog _log;
     private readonly ConcurrentDictionary<string, byte> _inflight = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, byte> _completed = new(StringComparer.Ordinal);
+    private long _failureCount;
+    private string? _lastFailureCode;
 
     public AiChatResponder(
         IChatClient chatClient,
@@ -46,6 +48,12 @@ public sealed partial class AiChatResponder : IChatResponder
         _contextPipeline = contextPipeline;
         ProtocolCapabilities = toolProtocols ?? Natter.Application.Chat.ToolProtocolCapabilities.TextOnly;
     }
+
+    /// <summary>Number of provider/generation failures surfaced by this responder.</summary>
+    public long FailureCount => Interlocked.Read(ref _failureCount);
+
+    /// <summary>Last failure code (for diagnostics; never contains provider payloads).</summary>
+    public string? LastFailureCode => Volatile.Read(ref _lastFailureCode);
 
     public async ValueTask<ChatCommand?> RespondAsync(
         ChatEvent chatEvent,
@@ -107,11 +115,21 @@ public sealed partial class AiChatResponder : IChatResponder
             return null;
 
         var reply = generated.Text;
-        await _history.AppendTurnAsync(key, text, reply, chatEvent.Id, cancellationToken).ConfigureAwait(false);
-        _log.Information(
-            "ai replied conversation={ConversationId} replyChars={ReplyChars}",
-            message.Conversation.Id,
-            reply.Length);
+        if (!generated.Failed)
+        {
+            await _history.AppendTurnAsync(key, text, reply, chatEvent.Id, cancellationToken).ConfigureAwait(false);
+            _log.Information(
+                "ai replied conversation={ConversationId} replyChars={ReplyChars}",
+                message.Conversation.Id,
+                reply.Length);
+        }
+        else
+        {
+            _log.Warning(
+                "ai failure surfaced conversation={ConversationId} code={Code}",
+                message.Conversation.Id,
+                generated.ErrorCode);
+        }
 
         return _commands.Send(
             chatEvent.Source,
@@ -153,7 +171,11 @@ public sealed partial class AiChatResponder : IChatResponder
             return null;
 
         var reply = generated.Text;
-        await _history.AppendTurnAsync(key, prompt, reply, chatEvent.Id, cancellationToken).ConfigureAwait(false);
+        if (!generated.Failed)
+            await _history.AppendTurnAsync(key, prompt, reply, chatEvent.Id, cancellationToken).ConfigureAwait(false);
+        else
+            _log.Warning("ai failure surfaced conversation={ConversationId} code={Code}", interaction.Conversation.Id, generated.ErrorCode);
+
         return _commands.Respond(
             chatEvent.Source,
             interaction,
@@ -224,22 +246,37 @@ public sealed partial class AiChatResponder : IChatResponder
             var options = string.IsNullOrWhiteSpace(profile?.Ai.Model)
                 ? null
                 : new ChatOptions { ModelId = profile.Ai.Model };
-            var text = await CallAsync(messages, options, cancellationToken).ConfigureAwait(false);
-            if (IsClipped(text))
+
+            var maxRetries = Math.Clamp(_options.MaxClipRetries, 0, 3);
+            ChatCallResult call;
+            for (var attempt = 0; ; attempt++)
             {
-                _log.Warning("AI provider returned a clipped response; retrying once.");
-                text = await CallAsync(messages, options, cancellationToken).ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
+                call = await CallAsync(messages, options, cancellationToken).ConfigureAwait(false);
+                if (!call.Clipped)
+                    break;
+
+                if (attempt >= maxRetries)
+                {
+                    _log.Warning("AI provider still returned a clipped response; using fallback text.");
+                    RecordFailure("ai.clipped");
+                    return new GenerationResult(FallbackText(), "ai.clipped");
+                }
+
+                _log.Warning(
+                    "AI provider returned a clipped response; retry {Attempt}/{Max} after backoff",
+                    attempt + 1,
+                    maxRetries);
+                var delayMilliseconds = Math.Max(0, _options.ClipRetryDelayMilliseconds) * (attempt + 1);
+                if (delayMilliseconds > 0)
+                    await Task.Delay(TimeSpan.FromMilliseconds(delayMilliseconds), cancellationToken).ConfigureAwait(false);
             }
 
-            if (IsClipped(text))
-            {
-                _log.Warning("AI provider still returned a clipped response; using fallback text.");
-                return new GenerationResult(FallbackText());
-            }
+            cancellationToken.ThrowIfCancellationRequested();
 
             // Provider wrapper tags are an output-boundary artifact; strip them only here, after
             // clipped detection, so the clipped retry/fallback path keeps seeing the raw markers.
-            var cleaned = StripResponseEnvelope(text);
+            var cleaned = StripResponseEnvelope(call.Text);
             if (string.IsNullOrWhiteSpace(cleaned))
                 return new GenerationResult(
                     string.IsNullOrWhiteSpace(_options.EmptyResponseText) ? null : _options.EmptyResponseText);
@@ -248,13 +285,15 @@ public sealed partial class AiChatResponder : IChatResponder
         }
         catch (Exception ex) when (ex is IAiProviderException provider)
         {
+            var code = FailureCode(provider.Kind);
+            RecordFailure(code);
             _log.Warning("ai request failed: kind={Kind} status={Status} code={Code}", provider.Kind, provider.StatusCode, provider.ErrorCode);
             return provider.Kind is AiErrorKind.Timeout
                 or AiErrorKind.Unavailable
                 or AiErrorKind.ContentFilter
                 or AiErrorKind.Unknown
-                ? new GenerationResult(FallbackText())
-                : new GenerationResult(null);
+                ? new GenerationResult(FallbackText(), code)
+                : new GenerationResult(FailureText(code), code, Failed: true);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -262,19 +301,51 @@ public sealed partial class AiChatResponder : IChatResponder
         }
         catch (Exception ex)
         {
+            RecordFailure("ai.exception");
             _log.Error(ex, "ai responder failed");
-            return new GenerationResult(FallbackText());
+            return new GenerationResult(FallbackText(), "ai.exception");
         }
     }
 
-    private async ValueTask<string?> CallAsync(
+    private async ValueTask<ChatCallResult> CallAsync(
         IReadOnlyList<ChatMessage> messages,
         ChatOptions? options,
         CancellationToken cancellationToken)
     {
         var response = await _chatClient.GetResponseAsync(messages, options, cancellationToken)
             .ConfigureAwait(false);
-        return response.Text?.Trim();
+        var text = response.Text?.Trim();
+        var structuredClipped = response.FinishReason is { } finishReason
+                                && (finishReason == ChatFinishReason.Length
+                                    || string.Equals(finishReason.Value, "length", StringComparison.OrdinalIgnoreCase)
+                                    || string.Equals(finishReason.Value, "max_tokens", StringComparison.OrdinalIgnoreCase));
+        return new ChatCallResult(text, structuredClipped || IsClipped(text));
+    }
+
+    private void RecordFailure(string code)
+    {
+        Interlocked.Increment(ref _failureCount);
+        Volatile.Write(ref _lastFailureCode, code);
+    }
+
+    private static string FailureCode(AiErrorKind kind) => kind switch
+    {
+        AiErrorKind.Authentication => "ai.authentication",
+        AiErrorKind.InsufficientBalance => "ai.insufficient_balance",
+        AiErrorKind.RateLimited => "ai.rate_limited",
+        AiErrorKind.Timeout => "ai.timeout",
+        AiErrorKind.Unavailable => "ai.unavailable",
+        AiErrorKind.InvalidRequest => "ai.invalid_request",
+        AiErrorKind.ContentFilter => "ai.content_filter",
+        _ => "ai.unknown",
+    };
+
+    private string FailureText(string code)
+    {
+        var fallback = FallbackText();
+        return string.IsNullOrWhiteSpace(fallback)
+            ? $"AI request failed ({code})."
+            : $"{fallback} ({code})";
     }
 
     private static readonly Regex LeadingResponseTag = new(
@@ -333,7 +404,9 @@ public sealed partial class AiChatResponder : IChatResponder
         return value?.Trim();
     }
 
-    private sealed record GenerationResult(string? Text);
+    private sealed record GenerationResult(string? Text, string? ErrorCode = null, bool Failed = false);
+
+    private sealed record ChatCallResult(string? Text, bool Clipped);
 
     private void TrimCompleted()
     {

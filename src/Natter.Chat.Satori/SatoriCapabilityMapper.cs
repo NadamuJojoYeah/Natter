@@ -83,6 +83,10 @@ public static class SatoriCapabilityMapper
     {
         var kinds = new List<ConversationKind>();
 
+        // Satori always delivers direct messages, independent of login features. Advertise it so
+        // the dispatcher accepts outbound DMs; this is a known platform capability, not a guess.
+        kinds.Add(ConversationKind.Direct);
+
         // §8.3: guild.plain adjusts conversation kinds; nothing else is assumed.
         if (features.Contains("guild.plain"))
             kinds.Add(ConversationKind.Guild);
