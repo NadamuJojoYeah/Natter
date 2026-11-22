@@ -709,7 +709,37 @@ v1 已实现 `bundled` / `signed` / `local` / `untrusted` 四档（信任判定�
   `AddPluginDirectory(new PluginTrustRegistration(dir, signature, signerKeyId, pluginId, detail))`。
   CLI 开关留给 CLI 层按需接入（本版本未提供命令行参数）。
 
-#### 9.4.2 已知边界
+#### 9.4.2 签名格式、校验上限与兼容策略
+
+安装期校验（`PluginPackageValidator`）的确定性规则：
+
+| 项 | 规则 |
+| --- | --- |
+| 解压上限 | 条目数/单条目/总量/压缩比在**实际写入**时逐字节计数，超限立即中止提取（声明长度只用于快速预检） |
+| `package.sig` | 硬上限 **64 KiB**，超限 `signature-too-large`；按长度读取，不做无界 `ReadAllBytes` |
+| 哈希比较 | `CryptographicOperations.FixedTimeEquals`，大小写归一 |
+| 原生镜像 | 按 magic 识别 ELF / Mach-O / PE-without-CLI，**不看扩展名**；`AllowNativeLibraries=false` 时一律 `native-library` |
+| entry 路径 | 必须位于包内（`GetFullPath` + 前缀校验）；拒绝控制字符（含换行）、`..`、绝对路径、符号链接 |
+
+**Canonical 文本 v2**（新签名使用）：
+
+```text
+nps-hash-v2
+<文件数>
+<路径字节长度>:<URL 转义路径>
+<sha256>
+…
+```
+
+长度前缀 + 转义消除了"`hash + 两空格 + 路径 + 换行`"拼接的边界歧义；配合入口拒绝控制字符，路径不可能再影响签名覆盖范围。
+
+**兼容策略——默认兼容，可升级为严格**：
+
+- 用旧（v1）canonical 文本签名的包**默认仍然通过校验**，但会产出 `signature-legacy-format` **warning**（进入 `PluginStore.Warnings`），提示发布方用 v2 重签；
+- 需要强约束的部署设 `PluginStoreOptions.RejectLegacySignatureFormat = true`，同一包直接失败并返回 `signature-legacy-format`；
+- 这样既不因格式升级让既有已签名包停摆，也不把旧格式静默当成新格式。
+
+#### 9.4.3 已知边界
 
 - 启动期能复验**内容完整性**，不能复验签名（无公钥）；签名只在安装时生效。
 - `.staging` 目录中的尚未完成的安装不在候选列表中。
