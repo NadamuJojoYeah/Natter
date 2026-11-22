@@ -18,6 +18,12 @@ internal sealed class NpsPluginCandidate
 
     public PluginTrustLevel Trust { get; init; }
 
+    /// <summary>Descriptor label for the trust decision (signed / local(unverified) / …).</summary>
+    public string? TrustLabel { get; set; }
+
+    /// <summary>True only when the package's signature/hash manifest was verified at startup.</summary>
+    public bool SignatureVerified { get; set; }
+
     public PluginManifestReadResult? ReadResult { get; init; }
 
     public PluginLoadContext? LoadContext { get; set; }
@@ -134,7 +140,7 @@ internal sealed class NpsPluginCandidate
             IsDynamic: IsEmbedded,
             Kind: Manifest.Kind.ToString().ToLowerInvariant(),
             HostApi: Manifest.HostApi,
-            Trust: Trust.ToString().ToLowerInvariant(),
+            Trust: TrustLabel ?? Trust.ToString().ToLowerInvariant(),
             Dependencies: (Manifest.DependsOn ?? [])
                 .Select(dependency => dependency.Id)
                 .Concat((Manifest.OptionalDependsOn ?? []).Select(dependency => dependency.Id))

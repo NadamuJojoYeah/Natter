@@ -63,8 +63,40 @@ internal static class AndroidPluginHost
         if (store is not null)
         {
             cliOptions.LoadPlugins = true;
-            foreach (var directory in store.GetActivePluginDirectories())
-                cliOptions.PluginDirectories.Add(directory);
+
+            // Release builds only accept signed packages at install time, so activation enforces the
+            // same rule; Debug keeps the development escape hatch.
+            builder.ConfigurePluginTrust(trust =>
+            {
+#if DEBUG
+                trust.RequireSignedPlugins = false;
+#else
+                trust.RequireSignedPlugins = true;
+#endif
+            });
+
+            // S1-12: carry the installer's trust verdict and the startup integrity result with the
+            // directory. A dynamic host cannot re-verify the signature itself, so anything that is
+            // not a verified, integrity-clean signed package is explicitly registered as unverified
+            // (and rejected when the trust policy requires signatures).
+            var candidates = store.GetActivePluginCandidates();
+            foreach (var candidate in candidates)
+            {
+                builder.AddPluginDirectory(new PluginTrustRegistration(
+                    candidate.Directory,
+                    Signature: candidate.Integrity switch
+                    {
+                        InstalledPluginIntegrity.Tampered => PluginSignatureState.Tampered,
+                        InstalledPluginIntegrity.Verified when candidate.Signed => PluginSignatureState.Verified,
+                        _ => PluginSignatureState.Unverified,
+                    },
+                    SignerKeyId: candidate.SignerKeyId,
+                    PluginId: candidate.PluginId,
+                    Detail: candidate.IntegrityDetail ?? candidate.IntegrityCode));
+
+                if (!cliOptions.PluginDirectories.Contains(candidate.Directory, StringComparer.OrdinalIgnoreCase))
+                    cliOptions.PluginDirectories.Add(candidate.Directory);
+            }
 
             builder.ConfigureOptions(options =>
                 options.PluginConfigDirectory = store.ConfigDirectory);

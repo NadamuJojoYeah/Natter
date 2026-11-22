@@ -79,21 +79,34 @@ public sealed class PluginStore
         }
     }
 
-    /// <summary>Filesystem roots for enabled plugins; pass these to the NPS file loader.</summary>
+    /// <summary>
+    /// Filesystem roots for enabled plugins (compatibility view). Prefer
+    /// <see cref="GetActivePluginCandidates"/>: a bare directory string loses the stored trust and
+    /// the startup integrity result, which is exactly how S1-12 happened.
+    /// </summary>
     public IReadOnlyList<string> GetActivePluginDirectories()
+        => GetActivePluginCandidates().Select(candidate => candidate.Directory).ToArray();
+
+    /// <summary>
+    /// Activation candidates with the trust decision recorded at install time and a fresh integrity
+    /// check (re-hashed against <c>package.sha256</c>). The host policy consumes the trust/integrity
+    /// fields; a tampered directory is reported as <see cref="InstalledPluginIntegrity.Tampered"/>.
+    /// </summary>
+    public IReadOnlyList<InstalledPluginCandidate> GetActivePluginCandidates()
     {
         _gate.Wait();
         try
         {
             var state = ReadState();
-            var directories = new List<string>();
+            var candidates = new List<InstalledPluginCandidate>();
 
             foreach (var record in state.Plugins.Where(plugin => plugin.Enabled))
             {
                 var active = Path.Combine(RootDirectory, record.Id, record.ActiveVersion);
                 if (Directory.Exists(active))
                 {
-                    directories.Add(active);
+                    candidates.Add(InstalledPluginIntegrityCodes.Candidate(
+                        record.Id, record.ActiveVersion, active, record.Trust, record.SignerKeyId));
                     continue;
                 }
 
@@ -101,11 +114,14 @@ public sealed class PluginStore
                 {
                     var previous = Path.Combine(RootDirectory, record.Id, record.PreviousVersion);
                     if (Directory.Exists(previous))
-                        directories.Add(previous);
+                    {
+                        candidates.Add(InstalledPluginIntegrityCodes.Candidate(
+                            record.Id, record.PreviousVersion!, previous, record.Trust, record.SignerKeyId));
+                    }
                 }
             }
 
-            return directories;
+            return candidates;
         }
         finally
         {
