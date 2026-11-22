@@ -89,6 +89,30 @@
       "maximum": 100,
       "description": "Default 10. After this many failed rebuilds the watchdog stops and flags manual intervention."
     },
+    "interactionCacheCapacity": {
+      "type": "integer",
+      "minimum": 16,
+      "maximum": 100000,
+      "description": "Default 500. Bounded cache for interaction/channel lookups; older entries are evicted."
+    },
+    "sendRetryMaxAttempts": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 10,
+      "description": "Default 3. Attempts for a rate-limited (429) send before giving up."
+    },
+    "sendRetryBaseDelayMs": {
+      "type": "integer",
+      "minimum": 50,
+      "maximum": 10000,
+      "description": "Default 250. Base delay for send retries; honours retryAfter when Discord provides it."
+    },
+    "sendRetryMaxDelayMs": {
+      "type": "integer",
+      "minimum": 100,
+      "maximum": 60000,
+      "description": "Default 5000. Upper bound for a single send retry delay."
+    },
     "devGuildId": { "type": "string", "pattern": "^[0-9]+$" }
   }
 }

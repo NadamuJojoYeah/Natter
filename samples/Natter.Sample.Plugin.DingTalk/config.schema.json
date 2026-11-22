@@ -20,6 +20,30 @@
     "requireMention": { "type": "boolean" },
     "conversations": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
     "users": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
-    "maxMessageLength": { "type": "integer", "minimum": 1, "maximum": 20000 }
+    "maxMessageLength": { "type": "integer", "minimum": 1, "maximum": 20000 },
+    "streamIdleTimeoutMs": {
+      "type": "integer",
+      "minimum": 10000,
+      "maximum": 600000,
+      "description": "Default 90000. No inbound frame for this long means the stream is half-open and gets reconnected."
+    },
+    "streamPongTimeoutMs": {
+      "type": "integer",
+      "minimum": 5000,
+      "maximum": 300000,
+      "description": "Default 30000. Allowed gap after an ack before the stream is considered silent."
+    },
+    "streamCallbackDedupCapacity": {
+      "type": "integer",
+      "minimum": 16,
+      "maximum": 100000,
+      "description": "Default 2048. Bounded set of recently acknowledged callback ids."
+    },
+    "streamCallbackDedupTtlMs": {
+      "type": "integer",
+      "minimum": 60000,
+      "maximum": 3600000,
+      "description": "Default 600000. How long a callback id stays deduplicated (platform replay window is 60 min)."
+    }
   }
 }
