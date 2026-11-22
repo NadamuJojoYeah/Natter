@@ -107,8 +107,11 @@ public static class MemoryScoring
         var relevance = (double)matches / queryTokens.Count;
 
         var ageDays = Math.Max(0, (now - updatedAt).TotalDays);
-        var halfLifeDays = Math.Max(1e-6, halfLife.TotalDays);
-        var decay = Math.Exp(-ageDays / halfLifeDays);
+        // v1 live path keeps its historical exponential decay so this release does not change recall
+        // behaviour (§5.1's power law is the v2 shape). Single implementation per mode lives in
+        // MemoryDecay: LegacyRetention for v1, Retention for v2. Retired with v1 at P6.7.
+        var stabilityDays = halfLife.TotalDays > 0 ? halfLife.TotalDays : 30d;
+        var decay = MemoryDecay.LegacyRetention(ageDays, stabilityDays);
         return relevance * decay;
     }
 }

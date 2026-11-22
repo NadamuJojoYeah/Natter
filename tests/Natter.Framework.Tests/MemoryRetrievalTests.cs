@@ -358,6 +358,84 @@ public sealed class MemoryRetrievalTests
             sqliteHits.Select(item => item.Text).OrderBy(text => text).ToArray());
     }
 
+    [Fact]
+    public void Repeat_reinforcement_chain_matches_the_documented_series()
+    {
+        // docs/P6_MEMORY_SYSTEM.md §6.1 (corrected in 74af1bb): five cross-session repeats from
+        // S0(Preference)=14. The old "≈2300 days" figure was a 10× arithmetic error; the real series
+        // is 14 → 24.59 → 42.52 → 72.42 → 121.59 → 201.38. Asserting it means a re-introduced flat
+        // multiplier (e.g. the old S × 1.6) fails loudly instead of silently inflating stability.
+        var stability = MemoryStability.InitialDays(MemoryType.Preference);
+        Assert.Equal(14d, stability, 1e-9);
+
+        foreach (var expected in new[] { 24.59d, 42.52d, 72.42d, 121.59d, 201.38d })
+        {
+            stability = MemoryStability.Reinforce(stability);
+            Assert.InRange(stability, expected - 0.02d, expected + 0.02d);
+        }
+
+        // The 5-repeat result must stay in the interval the corrected doc states.
+        Assert.InRange(stability, 190d, 215d);
+    }
+
+    [Theory]
+    [InlineData(0d, 30d)]
+    [InlineData(1d, 30d)]
+    [InlineData(30d, 30d)]
+    [InlineData(365d, 30d)]
+    [InlineData(10d, 7d)]
+    public void Legacy_retention_reproduces_the_old_exponential_exactly(double ageDays, double stabilityDays)
+    {
+        // Proof that routing the v1 live path through MemoryDecay.LegacyRetention left its numerics
+        // byte-identical to the previous inline Math.Exp(-age/S). If this ever drifts, v1 recall
+        // ordering changed silently — which is exactly what this release must not do.
+        Assert.Equal(Math.Exp(-ageDays / stabilityDays), MemoryDecay.LegacyRetention(ageDays, stabilityDays), 1e-12);
+    }
+
+    [Fact]
+    public void V1_and_v2_decay_differently_during_the_transition()
+    {
+        // TRANSITION STATE, NOT A BUG. v1 (IMemoryStore, the live path) still uses the exponential
+        // half-life; v2 (memory_entries) uses the power law (§5.1). They are deliberately different
+        // until natter memory eval has data justifying a change to live behaviour (P6.7).
+        // Delete together with MemoryDecay.LegacyRetention.
+        const double stabilityDays = 30d;
+
+        Assert.Equal(0.367879d, MemoryDecay.LegacyRetention(30d, stabilityDays), 1e-6); // exp(-1)
+        Assert.Equal(0.9d, MemoryDecay.Retention(30d, stabilityDays, MemoryDecay.DefaultDecay), 1e-9);
+        Assert.Equal(0.049787d, MemoryDecay.LegacyRetention(90d, stabilityDays), 1e-6);  // exp(-3)
+        Assert.Equal(0.8094d, MemoryDecay.Retention(90d, stabilityDays, MemoryDecay.DefaultDecay), 1e-4);
+
+        // The gap is 2.4× at one interval and 16× at three: large enough that silently swapping the
+        // v1 curve would be a real behaviour change, not a fix.
+        Assert.True(
+            MemoryDecay.Retention(90d, stabilityDays, MemoryDecay.DefaultDecay)
+            > MemoryDecay.LegacyRetention(90d, stabilityDays) * 16,
+            "power law should retain far more than the exponential at 3× the interval");
+    }
+
+    [Fact]
+    public void Live_recall_path_still_uses_the_v1_contract()
+    {
+        // SCOPE GATE (docs/P6_MEMORY_SYSTEM.md §13 P6.5): memory_entries is not on the live path
+        // until P6.7. HostContextPipeline must keep depending on IMemoryStore (memory_items), and no
+        // production type may depend on IMemoryEntryStore; otherwise reads and writes split across
+        // two tables with different liveness semantics (expires_at vs archived).
+        // DELETE this assertion in the same change that switches the write path.
+        var constructors = typeof(HostContextPipeline).GetConstructors();
+        var pipelineParameters = constructors.SelectMany(constructor => constructor.GetParameters()).ToArray();
+        Assert.Contains(pipelineParameters, parameter => parameter.ParameterType == typeof(IMemoryStore));
+        Assert.DoesNotContain(pipelineParameters, parameter => parameter.ParameterType == typeof(IMemoryEntryStore));
+
+        var consumers = typeof(HostContextPipeline).Assembly.GetTypes()
+            .Concat(typeof(SqliteMemoryEntryStore).Assembly.GetTypes())
+            .Where(type => type.GetConstructors().Any(constructor => constructor.GetParameters()
+                .Any(parameter => parameter.ParameterType == typeof(IMemoryEntryStore))))
+            .Select(type => type.FullName)
+            .ToArray();
+        Assert.Empty(consumers);
+    }
+
     // ------------------------------------------------------------------ helpers
 
     private static RuntimeProfile Profile(IReadOnlyList<string>? disabled = null)
@@ -423,6 +501,363 @@ public sealed class MemoryRetrievalTests
         public TempDirectory()
         {
             Path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "natter-p6-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(Path);
+        }
+
+        public string Path { get; }
+
+        public string Combine(params string[] parts) => System.IO.Path.Combine([Path, .. parts]);
+
+        public void Dispose()
+        {
+            try
+            {
+                Directory.Delete(Path, recursive: true);
+            }
+            catch
+            {
+            }
+        }
+    }
+}
+
+/// <summary>
+/// P6.5 layered memory contract (docs/P6_MEMORY_SYSTEM.md §11): five types, stability fields,
+/// legacy migration, repeat reinforcement, archival instead of deletion and export versioning.
+/// </summary>
+public sealed class MemoryContractTests
+{
+    private static readonly Source Discord = Source.Create("discord", "discord", "bot");
+    private static readonly Conversation Direct = new("c1", ConversationKind.Direct);
+    private static readonly User Alice = new("alice", "Alice");
+    private static readonly User Bob = new("bob", "Bob");
+
+    [Theory]
+    [InlineData("policy", MemoryType.Policy, 30d)]
+    [InlineData("preference", MemoryType.Preference, 14d)]
+    [InlineData("fact", MemoryType.Fact, 20d)]
+    [InlineData("episodic", MemoryType.Episodic, 5d)]
+    [InlineData("trace", MemoryType.Trace, 2.3d)]
+    public void Legacy_kind_maps_to_the_matching_type(string kind, MemoryType expected, double stability)
+    {
+        Assert.Equal(expected, MemoryEntryMapping.FromLegacyKind(kind));
+        Assert.Equal(stability, MemoryStability.InitialDays(expected));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("note")]
+    [InlineData("misc")]
+    public void Unknown_legacy_kinds_fall_back_to_fact(string? kind)
+        => Assert.Equal(MemoryType.Fact, MemoryEntryMapping.FromLegacyKind(kind));
+
+    [Fact]
+    public void Only_trace_is_excluded_from_active_injection()
+    {
+        Assert.False(MemoryStability.IsActivelyInjectable(MemoryType.Trace));
+        foreach (var type in new[] { MemoryType.Policy, MemoryType.Preference, MemoryType.Fact, MemoryType.Episodic })
+            Assert.True(MemoryStability.IsActivelyInjectable(type));
+    }
+
+    [Fact]
+    public void Legacy_rows_are_migrated_with_ids_preserved_and_expiry_archived()
+    {
+        using var temp = new TempDirectory();
+        var path = temp.Combine("natter.db");
+        CreateVersionSixDatabaseWithLegacyRows(path);
+
+        var store = new SqliteMemoryEntryStore(path);
+        var entries = Search(store, Alice, query: null, includeArchived: true).GetAwaiter().GetResult();
+
+        Assert.Equal(3, entries.Count);
+
+        var kept = Assert.Single(entries, entry => entry.Id == "mem_keep");
+        Assert.Equal(MemoryType.Fact, kept.Type);          // kind "note" is not one of the five
+        Assert.Equal(20d, kept.StabilityDays);
+        Assert.False(kept.Archived);
+
+        var preference = Assert.Single(entries, entry => entry.Id == "mem_pref");
+        Assert.Equal(MemoryType.Preference, preference.Type);
+        Assert.Equal(14d, preference.StabilityDays);
+
+        // v1 hard-expired rows must survive as archived, not vanish (§5.3 never deletes).
+        var expired = Assert.Single(entries, entry => entry.Id == "mem_expired");
+        Assert.True(expired.Archived);
+
+        // Archived rows are excluded unless explicitly requested.
+        var active = Search(store, Alice, query: null, includeArchived: false).GetAwaiter().GetResult();
+        Assert.DoesNotContain(active, entry => entry.Id == "mem_expired");
+    }
+
+    [Fact]
+    public void Repeat_write_reinforces_instead_of_creating_a_rival_copy()
+    {
+        using var temp = new TempDirectory();
+        var store = new SqliteMemoryEntryStore(temp.Combine("natter.db"));
+
+        var first = Write(store, Alice, MemoryType.Preference, "我喜欢吃苹果").GetAwaiter().GetResult();
+        var second = Write(store, Alice, MemoryType.Preference, "  我喜欢吃苹果  ").GetAwaiter().GetResult();
+
+        Assert.Equal(first.Id, second.Id);
+        Assert.Equal(1, second.ReinforceCount);
+        // §6.1: S × (1 + α·S^-0.0658), α = 0.9.
+        // S0(Preference)=14 → 14^-0.0658 = 0.84059 → SInc = 1.75653 (the doc's "1.75" is rounded).
+        var growth = second.StabilityDays / first.StabilityDays;
+        Assert.Equal(1.75653d, growth, 0.0005d);
+        Assert.Equal(24.5915d, second.StabilityDays, 0.001d);
+
+        var entries = Search(store, Alice, query: null, includeArchived: false).GetAwaiter().GetResult();
+        Assert.Single(entries);
+    }
+
+    [Fact]
+    public void Same_content_in_a_different_type_is_a_separate_memory()
+    {
+        using var temp = new TempDirectory();
+        var store = new SqliteMemoryEntryStore(temp.Combine("natter.db"));
+
+        var preference = Write(store, Alice, MemoryType.Preference, "杭州").GetAwaiter().GetResult();
+        var fact = Write(store, Alice, MemoryType.Fact, "杭州").GetAwaiter().GetResult();
+
+        Assert.NotEqual(preference.Id, fact.Id);
+    }
+
+    [Fact]
+    public void Chinese_two_character_queries_match_on_the_layered_store()
+    {
+        using var temp = new TempDirectory();
+        var store = new SqliteMemoryEntryStore(temp.Combine("natter.db"));
+        Write(store, Alice, MemoryType.Fact, "我住在杭州西湖区").GetAwaiter().GetResult();
+        Write(store, Alice, MemoryType.Preference, "我喜欢吃苹果").GetAwaiter().GetResult();
+
+        var byHangzhou = Search(store, Alice, query: "杭州", includeArchived: false).GetAwaiter().GetResult();
+        Assert.Contains(byHangzhou, entry => entry.Content.Contains("杭州", StringComparison.Ordinal));
+
+        var byApple = Search(store, Alice, query: "苹果", includeArchived: false).GetAwaiter().GetResult();
+        Assert.Contains(byApple, entry => entry.Content.Contains("苹果", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Actor_scope_isolates_entries_between_users()
+    {
+        using var temp = new TempDirectory();
+        var store = new SqliteMemoryEntryStore(temp.Combine("natter.db"));
+        Write(store, Alice, MemoryType.Fact, "我住在杭州").GetAwaiter().GetResult();
+
+        var bobEntries = Search(store, Bob, query: "杭州", includeArchived: true).GetAwaiter().GetResult();
+        Assert.Empty(bobEntries);
+    }
+
+    [Fact]
+    public void Type_filter_limits_the_result_set()
+    {
+        using var temp = new TempDirectory();
+        var store = new SqliteMemoryEntryStore(temp.Combine("natter.db"));
+        Write(store, Alice, MemoryType.Fact, "我住在杭州").GetAwaiter().GetResult();
+        Write(store, Alice, MemoryType.Episodic, "上周讨论过迁移").GetAwaiter().GetResult();
+
+        var episodic = store.SearchAsync(
+            new MemoryEntryQuery(Discord, Direct, Alice) { Types = [MemoryType.Episodic] }).GetAwaiter().GetResult();
+
+        var entry = Assert.Single(episodic);
+        Assert.Equal(MemoryType.Episodic, entry.Type);
+    }
+
+    [Fact]
+    public void Archive_keeps_the_row_and_hides_it_from_default_queries()
+    {
+        using var temp = new TempDirectory();
+        var store = new SqliteMemoryEntryStore(temp.Combine("natter.db"));
+        var entry = Write(store, Alice, MemoryType.Fact, "我住在杭州").GetAwaiter().GetResult();
+
+        Assert.True(store.ArchiveAsync(Discord, Direct, Alice, entry.Id).GetAwaiter().GetResult());
+        Assert.Empty(Search(store, Alice, query: null, includeArchived: false).GetAwaiter().GetResult());
+        Assert.Single(Search(store, Alice, query: null, includeArchived: true).GetAwaiter().GetResult());
+    }
+
+    [Fact]
+    public void Export_declares_the_current_version_and_refuses_a_newer_one()
+    {
+        using var temp = new TempDirectory();
+        var store = new SqliteMemoryEntryStore(temp.Combine("natter.db"));
+        Write(store, Alice, MemoryType.Fact, "我住在杭州").GetAwaiter().GetResult();
+
+        var export = store.ExportAsync(Discord, Direct, Alice, includePrivate: true).GetAwaiter().GetResult();
+        Assert.Equal(MemoryExportVersions.Current, export.SchemaVersion);
+        Assert.Single(export.Items);
+
+        // Reading an envelope one version back is supported, a newer one is refused loudly.
+        Assert.True(MemoryExportVersions.IsReadable(MemoryExportVersions.MinimumReadable));
+        Assert.False(MemoryExportVersions.IsTooNew(MemoryExportVersions.Current));
+
+        var tooNew = new MemoryEntryExport(MemoryExportVersions.Current + 1, DateTimeOffset.UtcNow, export.Items);
+        Assert.True(MemoryExportVersions.IsTooNew(tooNew.SchemaVersion));
+        var error = Assert.Throws<MemoryExportVersionException>(() => tooNew.EnsureReadable());
+        Assert.Equal(MemoryExportVersions.TooNewCode, error.Code);
+        Assert.Equal(MemoryExportVersions.Current + 1, error.ExportVersion);
+    }
+
+    [Fact]
+    public void Legacy_v1_export_upgrades_to_the_current_envelope()
+    {
+        var legacy = new MemoryExport(
+            1,
+            DateTimeOffset.UtcNow,
+            [
+                new MemoryItem(
+                    "mem_a", MemoryScopeType.User, "discord:discord:bot|user|alice", "alice",
+                    "preference", "我喜欢吃苹果", null, 0.9, "normal", true, null,
+                    DateTimeOffset.UtcNow.AddDays(-10), DateTimeOffset.UtcNow.AddDays(-10),
+                    null, 1),
+                new MemoryItem(
+                    "mem_b", MemoryScopeType.User, "discord:discord:bot|user|alice", "alice",
+                    "policy", "以后都用中文", null, 1.0, "normal", true, null,
+                    DateTimeOffset.UtcNow.AddDays(-20), DateTimeOffset.UtcNow.AddDays(-20),
+                    DateTimeOffset.UtcNow.AddDays(-1), 1),
+            ]);
+
+        var upgraded = MemoryExportBridge.Upgrade(legacy);
+
+        Assert.Equal(MemoryExportVersions.Current, upgraded.SchemaVersion);
+        Assert.Equal(2, upgraded.Items.Count);
+
+        var preference = Assert.Single(upgraded.Items, item => item.Id == "mem_a");
+        Assert.Equal(MemoryType.Preference, preference.Type);
+        Assert.Equal(14d, preference.StabilityDays);
+        Assert.False(preference.Archived);
+
+        // The expired policy is archived, never dropped.
+        var policy = Assert.Single(upgraded.Items, item => item.Id == "mem_b");
+        Assert.Equal(MemoryType.Policy, policy.Type);
+        Assert.True(policy.Archived);
+    }
+
+    [Fact]
+    public void Upgrading_from_a_future_version_is_refused()
+    {
+        var legacy = new MemoryExport(MemoryExportVersions.Current + 1, DateTimeOffset.UtcNow, []);
+        Assert.Throws<MemoryExportVersionException>(() => MemoryExportBridge.Upgrade(legacy));
+    }
+
+    [Fact]
+    public void Trace_index_backfills_messages_once_and_indexes_chinese_bigrams()
+    {
+        using var temp = new TempDirectory();
+        var path = temp.Combine("natter.db");
+        CreateVersionSixDatabaseWithLegacyRows(path);
+        SeedSessionAndMessages(path);
+
+        var store = new SqliteMemoryEntryStore(path);
+        var first = store.IndexUnindexedTurnsAsync().GetAwaiter().GetResult();
+        Assert.Equal(2, first);
+
+        // Idempotent: a second pass finds nothing new.
+        Assert.Equal(0, store.IndexUnindexedTurnsAsync().GetAwaiter().GetResult());
+
+        using var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={path}");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT count(*) FROM memory_turns_fts WHERE memory_turns_fts MATCH '\"苹果\"';";
+        Assert.Equal(1L, Convert.ToInt64(command.ExecuteScalar()));
+    }
+
+    // ------------------------------------------------------------------ helpers
+
+    private static async Task<MemoryEntry> Write(IMemoryEntryStore store, User user, MemoryType type, string content)
+        => await store.WriteAsync(new MemoryEntryWriteRequest(Discord, Direct, user, type, content));
+
+    private static async Task<IReadOnlyList<MemoryEntry>> Search(
+        IMemoryEntryStore store,
+        User user,
+        string? query,
+        bool includeArchived)
+        => await store.SearchAsync(new MemoryEntryQuery(Discord, Direct, user)
+        {
+            Query = query,
+            IncludeArchived = includeArchived,
+        });
+
+    /// <summary>Builds a v6 database (v2 memory_items schema) so the v7 migration has real input.</summary>
+    private static void CreateVersionSixDatabaseWithLegacyRows(string path)
+    {
+        using var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={path}");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            PRAGMA journal_mode = WAL;
+            CREATE TABLE IF NOT EXISTS memory_items (
+                memory_id       TEXT PRIMARY KEY,
+                scope_type      TEXT NOT NULL,
+                scope_id        TEXT NOT NULL,
+                subject_id      TEXT NULL,
+                kind            TEXT NOT NULL,
+                text            TEXT NOT NULL,
+                data_json       TEXT NULL,
+                confidence      REAL NOT NULL,
+                sensitivity     TEXT NOT NULL,
+                user_confirmed  INTEGER NOT NULL,
+                source_message_ids_json TEXT NULL,
+                created_at      TEXT NOT NULL,
+                updated_at      TEXT NOT NULL,
+                expires_at      TEXT NULL,
+                version         INTEGER NOT NULL
+            );
+            INSERT INTO memory_items VALUES
+                ('mem_keep','user','discord:discord:bot|user|alice','alice','note','我住在杭州',NULL,1.0,'normal',1,NULL,
+                 '2026-11-01T00:00:00.0000000+00:00','2026-11-01T00:00:00.0000000+00:00',NULL,1),
+                ('mem_pref','user','discord:discord:bot|user|alice','alice','preference','我喜欢吃苹果',NULL,0.9,'normal',1,NULL,
+                 '2026-11-02T00:00:00.0000000+00:00','2026-11-02T00:00:00.0000000+00:00',NULL,1),
+                ('mem_expired','user','discord:discord:bot|user|alice','alice','fact','我搬到上海了',NULL,1.0,'normal',1,NULL,
+                 '2026-10-01T00:00:00.0000000+00:00','2026-10-01T00:00:00.0000000+00:00',
+                 '2026-10-02T00:00:00.0000000+00:00',1);
+            CREATE INDEX IF NOT EXISTS ix_memory_scope ON memory_items(scope_type, scope_id, updated_at DESC);
+            PRAGMA user_version = 6;
+            """;
+        command.ExecuteNonQuery();
+    }
+
+    private static void SeedSessionAndMessages(string path)
+    {
+        using var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={path}");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            CREATE TABLE IF NOT EXISTS sessions (
+                session_id      TEXT PRIMARY KEY,
+                source_key      TEXT NOT NULL,
+                protocol        TEXT NOT NULL,
+                platform        TEXT NOT NULL,
+                conversation_id TEXT NOT NULL,
+                guild_id        TEXT NULL,
+                actor_id        TEXT NULL,
+                created_at      TEXT NOT NULL,
+                updated_at      TEXT NOT NULL,
+                version         INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE IF NOT EXISTS messages (
+                message_id      INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id      TEXT NOT NULL,
+                role            TEXT NOT NULL,
+                text            TEXT NOT NULL,
+                source_event_id TEXT NULL,
+                created_at      TEXT NOT NULL
+            );
+            INSERT INTO sessions VALUES
+                ('s1','discord:discord:bot','discord','discord','c1',NULL,'alice',
+                 '2026-11-01T00:00:00.0000000+00:00','2026-11-01T00:00:00.0000000+00:00',0);
+            INSERT INTO messages VALUES
+                (1,'s1','user','我喜欢吃苹果','e1','2026-11-01T00:00:00.0000000+00:00'),
+                (2,'s1','assistant','好的，明白了','e2','2026-11-01T00:00:01.0000000+00:00');
+            """;
+        command.ExecuteNonQuery();
+    }
+
+    private sealed class TempDirectory : IDisposable
+    {
+        public TempDirectory()
+        {
+            Path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "natter-p65-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(Path);
         }
 

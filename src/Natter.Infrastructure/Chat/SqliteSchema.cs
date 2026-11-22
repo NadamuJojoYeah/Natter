@@ -9,7 +9,7 @@ namespace Natter.Infrastructure.Chat;
 /// </summary>
 internal static class SqliteSchema
 {
-    public const int CurrentVersion = 6;
+    public const int CurrentVersion = 7;
 
     /// <summary>Tokenizer actually used by memory_fts (trigram when the runtime supports it).</summary>
     public static string FtsTokenizer { get; private set; } = "trigram";
@@ -217,6 +217,11 @@ internal static class SqliteSchema
             current = UpgradeToPretokenizedFts(connection);
         }
 
+        if (current < 7)
+        {
+            current = UpgradeToLayeredMemory(connection);
+        }
+
         using var setVersion = connection.CreateCommand();
         setVersion.CommandText = $"PRAGMA user_version = {current};";
         setVersion.ExecuteNonQuery();
@@ -318,6 +323,201 @@ internal static class SqliteSchema
             }
 
             return 6;
+        }
+    }
+
+    /// <summary>
+    /// P6.5 (docs/P6_MEMORY_SYSTEM.md §11): layered memory tables. The legacy <c>memory_items</c>
+    /// table is deliberately left in place — its rows are copied into <c>memory_entries</c> and it
+    /// stays readable for one release so a rollback is a single DROP.
+    /// </summary>
+    private static int UpgradeToLayeredMemory(SqliteConnection connection)
+    {
+        Execute(connection, """
+            CREATE TABLE IF NOT EXISTS memory_entries (
+                entry_id        TEXT PRIMARY KEY,
+                type            TEXT NOT NULL,
+                scope_type      TEXT NOT NULL,
+                scope_id        TEXT NOT NULL,
+                content         TEXT NOT NULL,
+                content_hash    TEXT NOT NULL,
+                text_index      TEXT NULL,
+                stability_days  REAL NOT NULL,
+                reinforce_count INTEGER NOT NULL DEFAULT 0,
+                confidence      REAL NOT NULL,
+                archived        INTEGER NOT NULL DEFAULT 0,
+                supersedes_id   TEXT NULL,
+                sensitivity     TEXT NOT NULL,
+                source_message_ids_json TEXT NULL,
+                created_at      TEXT NOT NULL,
+                updated_at      TEXT NOT NULL,
+                last_recalled_at TEXT NULL
+            );
+            CREATE INDEX IF NOT EXISTS ix_memory_entries_scope
+                ON memory_entries(scope_type, scope_id, archived, updated_at DESC);
+            CREATE INDEX IF NOT EXISTS ix_memory_entries_type
+                ON memory_entries(type, archived, updated_at DESC);
+            -- Repeat detection (§6.2): the same normalized content in the same scope and type is
+            -- the same memory. UNIQUE lets the writer do find-or-reinforce in one round trip.
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_memory_entries_repeat
+                ON memory_entries(scope_id, type, content_hash);
+
+            -- Trace: indexes the existing messages table, it does not duplicate it (§4, §11).
+            -- text_index is populated by the application because FTS cannot tokenize CJK in SQL.
+            CREATE TABLE IF NOT EXISTS memory_turns (
+                message_id  INTEGER PRIMARY KEY,
+                session_id  TEXT NOT NULL,
+                scope_key   TEXT NOT NULL,
+                text_index  TEXT NOT NULL,
+                created_at  TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS ix_memory_turns_scope ON memory_turns(scope_key, message_id DESC);
+
+            CREATE TABLE IF NOT EXISTS memory_profiles (
+                scope_key   TEXT PRIMARY KEY,
+                version     INTEGER NOT NULL,
+                summary     TEXT NOT NULL,
+                updated_at  TEXT NOT NULL
+            );
+
+            -- Guarantees extraction is incremental and restartable (§11).
+            CREATE TABLE IF NOT EXISTS memory_extraction_state (
+                scope_key                  TEXT PRIMARY KEY,
+                last_extracted_message_id  INTEGER NOT NULL,
+                last_attempt_at            TEXT NULL,
+                failure_count              INTEGER NOT NULL DEFAULT 0
+            );
+            """);
+
+        // Pre-tokenized FTS. unicode61 over the application-built index text is the primary path
+        // (v6 §Q8): trigram cannot match two-character Chinese words at all.
+        Execute(connection, """
+            DROP TRIGGER IF EXISTS memory_entries_fts_ai;
+            DROP TRIGGER IF EXISTS memory_entries_fts_au;
+            DROP TRIGGER IF EXISTS memory_entries_fts_ad;
+            DROP TABLE IF EXISTS memory_entries_fts;
+            CREATE VIRTUAL TABLE memory_entries_fts USING fts5(entry_id UNINDEXED, text_index, tokenize='unicode61');
+            CREATE TRIGGER memory_entries_fts_ai AFTER INSERT ON memory_entries BEGIN
+                INSERT INTO memory_entries_fts(entry_id, text_index) VALUES (new.entry_id, new.text_index);
+            END;
+            CREATE TRIGGER memory_entries_fts_au AFTER UPDATE OF text_index ON memory_entries BEGIN
+                DELETE FROM memory_entries_fts WHERE entry_id = old.entry_id;
+                INSERT INTO memory_entries_fts(entry_id, text_index) VALUES (new.entry_id, new.text_index);
+            END;
+            CREATE TRIGGER memory_entries_fts_ad AFTER DELETE ON memory_entries BEGIN
+                DELETE FROM memory_entries_fts WHERE entry_id = old.entry_id;
+            END;
+
+            DROP TABLE IF EXISTS memory_turns_fts;
+            CREATE VIRTUAL TABLE memory_turns_fts USING fts5(message_id UNINDEXED, text_index, tokenize='unicode61');
+            """);
+
+        MigrateLegacyMemoryItems(connection);
+
+        return 7;
+    }
+
+    /// <summary>
+    /// Copies v1 <c>memory_items</c> rows into <c>memory_entries</c> as the mapped type. The legacy
+    /// id is preserved so exports and cross references stay valid; <c>expires_at</c> in the past
+    /// becomes <c>archived</c> because v2 never deletes (§5.3).
+    /// </summary>
+    private static void MigrateLegacyMemoryItems(SqliteConnection connection)
+    {
+        using var select = connection.CreateCommand();
+        select.CommandText = """
+            SELECT memory_id, scope_type, scope_id, kind, text, confidence, sensitivity,
+                   source_message_ids_json, created_at, updated_at, expires_at
+            FROM memory_items;
+            """;
+
+        var rows = new List<(
+            string Id,
+            string ScopeType,
+            string ScopeId,
+            string Kind,
+            string Text,
+            double Confidence,
+            string Sensitivity,
+            string? Sources,
+            string CreatedAt,
+            string UpdatedAt,
+            string? ExpiresAt)>();
+
+        using (var reader = select.ExecuteReader())
+        {
+            while (reader.Read())
+            {
+                rows.Add((
+                    reader.GetString(0),
+                    reader.GetString(1),
+                    reader.GetString(2),
+                    reader.GetString(3),
+                    reader.GetString(4),
+                    reader.GetDouble(5),
+                    reader.GetString(6),
+                    reader.IsDBNull(7) ? null : reader.GetString(7),
+                    reader.GetString(8),
+                    reader.GetString(9),
+                    reader.IsDBNull(10) ? null : reader.GetString(10)));
+            }
+        }
+
+        if (rows.Count == 0)
+            return;
+
+        var now = DateTimeOffset.UtcNow;
+        using var insert = connection.CreateCommand();
+        insert.CommandText = """
+            INSERT OR IGNORE INTO memory_entries
+                (entry_id, type, scope_type, scope_id, content, content_hash, text_index,
+                 stability_days, reinforce_count, confidence, archived, supersedes_id,
+                 sensitivity, source_message_ids_json, created_at, updated_at, last_recalled_at)
+            VALUES ($id, $type, $scope_type, $scope, $content, $hash, $index,
+                    $stability, 0, $confidence, $archived, NULL,
+                    $sensitivity, $sources, $created, $updated, NULL);
+            """;
+        var idParameter = insert.Parameters.Add("$id", SqliteType.Text);
+        var typeParameter = insert.Parameters.Add("$type", SqliteType.Text);
+        var scopeTypeParameter = insert.Parameters.Add("$scope_type", SqliteType.Text);
+        var scopeParameter = insert.Parameters.Add("$scope", SqliteType.Text);
+        var contentParameter = insert.Parameters.Add("$content", SqliteType.Text);
+        var hashParameter = insert.Parameters.Add("$hash", SqliteType.Text);
+        var indexParameter = insert.Parameters.Add("$index", SqliteType.Text);
+        var stabilityParameter = insert.Parameters.Add("$stability", SqliteType.Real);
+        var confidenceParameter = insert.Parameters.Add("$confidence", SqliteType.Real);
+        var archivedParameter = insert.Parameters.Add("$archived", SqliteType.Integer);
+        var sensitivityParameter = insert.Parameters.Add("$sensitivity", SqliteType.Text);
+        var sourcesParameter = insert.Parameters.Add("$sources", SqliteType.Text);
+        var createdParameter = insert.Parameters.Add("$created", SqliteType.Text);
+        var updatedParameter = insert.Parameters.Add("$updated", SqliteType.Text);
+
+        foreach (var row in rows)
+        {
+            var type = MemoryEntryMapping.FromLegacyKind(row.Kind);
+            var archived = row.ExpiresAt is not null
+                           && DateTimeOffset.TryParse(
+                               row.ExpiresAt,
+                               System.Globalization.CultureInfo.InvariantCulture,
+                               System.Globalization.DateTimeStyles.RoundtripKind,
+                               out var expiresAt)
+                           && expiresAt <= now;
+
+            idParameter.Value = row.Id;
+            typeParameter.Value = MemoryEntryMapping.ToStorageValue(type);
+            scopeTypeParameter.Value = row.ScopeType;
+            scopeParameter.Value = row.ScopeId;
+            contentParameter.Value = row.Text;
+            hashParameter.Value = MemoryEntryMapping.Hash(type, row.ScopeId, row.Text);
+            indexParameter.Value = MemoryScoring.BuildIndexText(row.Text);
+            stabilityParameter.Value = MemoryStability.InitialDays(type);
+            confidenceParameter.Value = Math.Clamp(row.Confidence, 0, 1);
+            archivedParameter.Value = archived ? 1 : 0;
+            sensitivityParameter.Value = row.Sensitivity;
+            sourcesParameter.Value = (object?)row.Sources ?? DBNull.Value;
+            createdParameter.Value = row.CreatedAt;
+            updatedParameter.Value = row.UpdatedAt;
+            insert.ExecuteNonQuery();
         }
     }
 

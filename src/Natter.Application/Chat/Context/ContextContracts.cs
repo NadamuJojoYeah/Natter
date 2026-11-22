@@ -168,7 +168,20 @@ public sealed record MemoryQuery(
     /// </summary>
     public MemoryScopeType? Scope { get; init; }
 
-    /// <summary>Half-life for time decay; defaults to 30 days and only lowers the score.</summary>
+    /// <summary>
+    /// Time-decay parameter, default 30 days.
+    /// <para>
+    /// <b>Current semantics (v1, half-life):</b> the age at which retention halves
+    /// (<see cref="MemoryDecay.LegacyRetention"/>, <c>exp(-age/S)</c> → 0.368 at 30 days).
+    /// </para>
+    /// <para>
+    /// <b>Planned semantics (v2, calibration interval):</b> when the recall path moves to the power
+    /// law (P6.7) this becomes the stability interval where retention is
+    /// <see cref="MemoryDecay.TargetRetention"/> (0.9). The name is kept only because 61 call sites
+    /// reference it; it is a naming debt to fix when v1 retires. It only lowers the score — entries
+    /// are never deleted here.
+    /// </para>
+    /// </summary>
     public TimeSpan DecayHalfLife { get; init; } = TimeSpan.FromDays(30);
 }
 
