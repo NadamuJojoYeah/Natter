@@ -87,7 +87,20 @@ ActorId     平台用户 id                     跨会话的锚点
 
 per-actor 记忆会**进入所有该用户的会话**，但**绝不能进入其他用户**的 prompt。
 
-必须有一条硬断言：actor A 的记忆在 actor B 的检索里命中数为 0。
+必须**按作用域分别**断言，不能写成无条件承诺：
+
+| scope | 可见范围 | 断言 |
+| --- | --- | --- |
+| `User`（actor） | 同一 actor 的跨会话 | A 的记忆在 B 检索中命中 0 |
+| `Conversation` | 同一会话 | 跨会话命中 0 |
+| `Guild` | 同 guild 所有成员 | 同 guild 可见 / 跨 guild 为 0 |
+| `Global` | 该 source 下**所有用户** | 若允许写，必须显式告警 |
+
+`Global` 的 key 是 `{source.Key}|global`，**不含 `userId`**，所以它天然对所有用户可见。因此：
+
+- **默认禁止写 `Global`**（`DefaultWriteScope` 返回 actor）
+- profile 显式配置 `scope=global` 时，pipeline 启动时输出 warning
+- 早期版本曾写成「actor A 的记忆在 actor B 检索里命中数为 0」的无条件承诺，**那是过度承诺，已更正**
 
 ---
 
@@ -113,15 +126,40 @@ FTS5 虚表进 **`SqliteSchema`**，因为它是宿主 memory 的检索能力，
 
 FTS5 默认 `unicode61` 分词器对中文按**单字**切分，效果差。
 
-必须先核实可用方案，按优先级：
+### 实测结论：trigram 对中文不可用
+
+用 SQLite 3.54.1 实测（三字滑窗索引）：
 
 ```text
-1. FTS5 trigram tokenizer（SQLite 3.34+，对中文按三字滑窗，无需扩展）
-2. 预分词写入（应用层切词后存空格分隔副本列）
-3. 社区分词器扩展（需加载 native extension，systemd 下要额外处理）
+trigram  MATCH '苹果'(2字)   → 0     ← 中文最高频词长，零命中
+trigram  MATCH '喜欢'(2字)   → 0
+trigram  MATCH '杭州'(2字)   → 0
+trigram  MATCH '吃苹果'(3字) → 1
+trigram  MATCH '西湖区'(3字) → 1
 ```
 
-**推荐 trigram**：无需扩展、无部署负担，代价是索引体积与短查询精度。若实测不满意再退化到方案 2。
+中文常见的双字词**完全不在索引里**。而它**不报错**——查不到就回退 recency，所以「检索不抛异常」的验收会是绿的，功能却不可用。
+
+因此优先级反转：
+
+```text
+主路径   写入时预分词，存空格分隔副本列（text_index），用 unicode61 索引该列
+降级1    预分词或回填失败 → raw trigram + warning
+降级2    trigram 不可用   → raw unicode61 + warning
+```
+
+**预分词算法（零依赖、零词典）**：
+
+- 连续 CJK 字符：**bi-gram 滑窗 + 单字**
+- 非 CJK：按空白与标点切分并小写
+
+`我喜欢吃苹果` → `我喜 喜欢 欢吃 吃苹 苹果 我 喜 欢 吃 苹 果`
+
+bi-gram 保证任意双字词都能命中，单字保证短查询能命中。
+
+**实测索引膨胀**：50 条中文记忆 `SUM(LENGTH(text_index))/SUM(LENGTH(text))` = **4.39×**。
+
+**已知限制必须写成断言**，不能只写在文档里：trigram 路径下 `MATCH '苹果'` = 0 是固化对拍值，防止有人误以为它可用。
 
 ---
 
@@ -139,17 +177,46 @@ RRF 的好处：不需要把 BM25 分数和余弦相似度归一化到同一量�
 
 ### 5.2 框架选型
 
+### NuGet 核实结果（2026-11-22）
+
+| 项 | 结论 |
+| --- | --- |
+| `Microsoft.Extensions.VectorData.Abstractions` | 官方维护（Microsoft / `dotnet/extensions` / MIT），最新 11.0.1；与本项目对齐的线是 **10.11.1** |
+| **官方 SQLite 连接器** | **不存在**。Microsoft 只发布 Abstractions + ConformanceTests |
+| `CommunityToolkit.VectorData.Sqlite` | **不存在**（NuGet 404）。CommunityToolkit 有 Qdrant/PgVector/Redis/AzureAISearch/SqlServer/InMemory，就是没有 SQLite |
+| `Microsoft.SemanticKernel.Connectors.SqliteVec` | 存在但 26 个版本**全部 preview**，无 GA |
+| 唯一 GA 的 SQLite 侧 provider | `Qavren.Edge.VectorData` 1.0.1（第三方公司） |
+
+### 结论：v1 不引入 MEVD
+
+原文档把 MEVD 定为「抽象层选它」，**该结论已被推翻**。
+
+理由：
+
+1. 官方没有 SQLite provider，选 sqlite-vec 时 MEVD 只提供「接口形状」，**第一个 provider 仍要自己写**；
+2. 引入 10.11.1/11.0.1 会把 `Microsoft.Extensions.AI.Abstractions` 从 10.11.0 拉版本；项目开了 `CentralPackageTransitivePinningEnabled`，这是**全解决方案级变动**；
+3. NPS 插件在独立 ALC 中加载，`VectorStore` 这类 MEVD 类型**无法跨 ALC 边界传递**。
+
+改为：**插件内部用薄接口 `IVectorIndex`** 承担「可换后端」职责；等 Qdrant 需求真实出现（>50 万条 / 多实例共享 / 需要向量库级过滤）时再评估 MEVD。
+
 | 方案 | 依赖 | 适用 | 结论 |
 | --- | --- | --- | --- |
-| **`Microsoft.Extensions.VectorData`（MEVD）** | NuGet | 统一接口、后端可换 | **抽象层选它** |
-| sqlite-vec | SQLite 扩展 | 单机零外部服务 | **首选默认后端** |
-| Qdrant | 独立服务 | 多实例、向量量大 | 可选后端 |
-| pgvector | 已有 Postgres | 已用 PG 的部署 | 可选后端 |
-| Semantic Kernel 全家桶 | 很大 | — | **不用**，只取 VectorData |
+| sqlite-vec | SQLite 扩展 | 单机零外部服务 | **v1 默认** |
+| Qdrant | 独立服务 | 多实例、向量量大 | opt-in |
+| pgvector | 已有 Postgres | 已用 PG 的部署 | opt-in |
+| MEVD 抽象 | NuGet | 多后端统一 | **v1 不用** |
+| Semantic Kernel 全家桶 | 很大 | — | 不用；其 Kernel/Planner 与我们的插件模型重复 |
 
-**为什么不用 SK**：我们只需要「存向量 + 近似检索」。SK 的 Kernel/Planner/Plugin 体系与我们的插件模型重复。为了一个向量 API 引入整套框架，是拿架构换便利。
+### 部署代价（已实测）
 
-**必须先核实**：当前版本 MEVD 是否提供官方维护的 SQLite 连接器（记忆里 Qdrant/Redis/Azure 是官方的，SQLite 侧可能是社区包或 SK 连接器）。**先去 NuGet 核实再定，不要按印象写。**
+```text
+load_extension        → "not authorized"（函数存在但默认关闭）
+必须绕过方式          SQLitePCLRaw 原生调用 sqlite3_enable_load_extension
+systemd               MemoryDenyWriteExecute=yes 会阻止 dlopen，必须设 no
+.so 权限              只需读，放插件状态目录 0700/0600，不能放 /tmp
+```
+
+不提前处理这四条，实现完成后会在部署时卡住，且错误信息很容易被误判成权限配置错。
 
 ### 5.3 向量表结构（插件自己的库）
 
@@ -262,6 +329,24 @@ prompt 片段  走 PromptComposer，有 id/来源/顺序/hash/配额
 P6 要求：memory 也变成 fragment —— 可关闭、可排序、进 planHash、受 provider 配额约束。
 
 顺带的好处：memory 与 PromptLibrary、StateVitals 三者机制一致，用户可以用同一个「关掉某段」的操作管理它们。
+
+### 7.1 但 memory 不进 system message
+
+这是一条**与其他片段不同的硬边界**：
+
+| 来源 | 性质 | 能否进 system message |
+| --- | --- | --- |
+| plugin prompt fragment | 作者内容（人设、规则） | 可以 |
+| **memory** | **由用户输入派生** | **不可以** |
+
+原因：memory 的文本来自用户输入。若它进 system message，用户就等于通过「说一句让它记住」拿到了一条**指令注入通道**。
+
+因此 memory 片段：
+
+- **进 `PromptPlan`** —— 诊断、禁用、planHash 都可见；
+- **不进 system message** —— 仍由 assembler 作为独立的 untrusted-data 消息注入。
+
+这两件事同时成立，不矛盾：可见性走片段机制，投递走数据消息。
 
 ---
 
