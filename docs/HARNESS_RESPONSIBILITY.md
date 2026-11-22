@@ -1,6 +1,6 @@
 # Natter 作为 Harness 的责任边界
 
-> **状态**：已决策（2026-11-22）· 实施分阶段
+> **状态**：已决策（2026-11-22）· Prompt 层已迁移（2026-11-22）
 > **定位**：定义 Natter 对下游插件「负责什么、不负责什么」，并据此修订 Prompt Compiler 的 mandatory 语义。
 > **关联**：[Prompt Compiler](PROMPT_COMPILER.md)、[插件模型](PLUGIN_MODEL.md)、[Harness 架构](HARNESS_ARCHITECTURE.md)
 
@@ -117,7 +117,7 @@ harness 应该提供**默认实现**，而不是**不可变约束**。
 
 ## 6. Prompt Compiler 的迁移：mandatory → default-removable
 
-### 6.1 现状（P1 实现）
+### 6.1 迁移前（P1 历史实现，已移除）
 
 ```text
 composer 注入 host.safety.untrusted-data
@@ -148,7 +148,7 @@ composer 不再有 mandatory 特权
 
 ### 6.3 行为变更对照
 
-| 项 | 现状 | 目标 |
+| 项 | 迁移前（已移除） | 当前实现 |
 | --- | --- | --- |
 | safety 来源 | host 代码内嵌 | 默认 preset 的片段 |
 | 能否关闭 | 否（warning 后仍存在） | 是 |
@@ -246,16 +246,16 @@ planHash
 
 ## 10. 验收标准
 
-- [ ] `PromptFragment` 不再有 `Mandatory` / `CanDisable`；
-- [ ] composer 不再注入任何片段，不预留预算，不强制排序；
-- [ ] `host#static` 的 safety 片段可 `enabled: false`，关闭后 prompt 仍正常编译；
-- [ ] 关闭 safety 不产生 warning（属于正常配置）；
-- [ ] 重新启用后片段恢复、`planHash` 改变；
-- [ ] 插件 fragment id 自动带 owner 命名空间，不再存在「先到先得」仲裁；
-- [ ] 配额按 provider 公平分配，单插件超限不影响其他插件；
-- [ ] 诊断输出显示每个片段的来源与顺序，不显示正文；
-- [ ] 默认 profile 在未关闭 safety 时，输出与当前版本一致（可回归对比）；
-- [ ] 文档不再出现「host 强制安全策略不可移除」的表述。
+- [x] `PromptFragment` 不再有 `Mandatory` / `CanDisable`；
+- [x] composer 不再注入任何片段，不预留预算，不强制排序；
+- [x] `host#static` 的 safety 片段可 `enabled: false`，关闭后 prompt 仍正常编译；
+- [x] 关闭 safety 不产生 warning（属于正常配置）；
+- [x] 重新启用后片段恢复、`planHash` 改变；
+- [x] 插件 fragment id 自动带 owner 命名空间，不再存在「先到先得」仲裁；
+- [x] 配额按 provider 公平分配，单插件超限不影响其他插件（16 个 / 8000 字符每 provider，全局 64 / 32000 硬上限）；
+- [x] 诊断输出显示每个片段的来源与顺序，不显示正文（`PromptPlan.FragmentDiagnostics` / `PromptBundle` / `ContextDiagnostics`）；
+- [x] 默认 profile 在未关闭 safety 时，输出与迁移前固定基线逐字节一致；
+- [x] 文档不再出现「host 强制安全策略不可移除」的表述。
 
 ---
 
