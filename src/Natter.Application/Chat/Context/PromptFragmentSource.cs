@@ -6,28 +6,51 @@ using Natter.Chat;
 namespace Natter.Application.Chat;
 
 /// <summary>
-/// Rules for plugin-contributed prompt fragments. Plugins are guests: they may add fragments but
-/// never force them (no mandatory), never impersonate host builtins, and must use a narrow id
-/// format so host configuration cannot collide by accident.
+/// Rules for plugin-contributed prompt fragments. Plugin ids are namespaced with the contributing
+/// plugin (<c>owner#local</c>), so fragments from different plugins can never collide and the host
+/// no longer arbitrates "first wins". Plugins still may not impersonate host builtins.
 /// </summary>
 public static class PromptPluginFragmentRules
 {
-    public const string IdPattern = "^[a-z0-9][a-z0-9._-]{0,63}$";
+    public const string LocalIdPattern = "^[a-z0-9][a-z0-9._-]{0,63}$";
 
-    private static readonly Regex IdRegex = new(
-        IdPattern,
+    public const string NamespacedIdPattern = "^[a-z0-9][a-z0-9._-]{0,63}#[a-z0-9][a-z0-9._-]{0,63}$";
+
+    private static readonly Regex LocalIdRegex = new(
+        LocalIdPattern,
         RegexOptions.Compiled | RegexOptions.CultureInvariant,
         TimeSpan.FromSeconds(1));
 
-    private static readonly IReadOnlySet<string> HostReservedIds = new HashSet<string>(
-        HostPromptSafety.Fragments.Select(fragment => fragment.Id)
-            .Append(HostStaticPromptProvider.SystemFragmentId),
-        StringComparer.Ordinal);
+    private static readonly Regex NamespacedIdRegex = new(
+        NamespacedIdPattern,
+        RegexOptions.Compiled | RegexOptions.CultureInvariant,
+        TimeSpan.FromSeconds(1));
 
-    public static bool IsValidId(string? id)
-        => !string.IsNullOrEmpty(id) && IdRegex.IsMatch(id);
+    public static bool IsValidLocalId(string? id)
+        => !string.IsNullOrEmpty(id) && LocalIdRegex.IsMatch(id);
 
-    public static bool IsHostReservedId(string id) => HostReservedIds.Contains(id);
+    public static bool IsValidNamespacedId(string? id)
+        => !string.IsNullOrEmpty(id) && NamespacedIdRegex.IsMatch(id);
+
+    /// <summary>Extracts the owner part of a catalog reference (<c>owner#contribution</c>).</summary>
+    public static bool TryGetOwner(string reference, out string owner)
+    {
+        owner = string.Empty;
+        if (string.IsNullOrWhiteSpace(reference))
+            return false;
+
+        var separator = reference.IndexOf('#');
+        var candidate = separator > 0 ? reference[..separator] : reference;
+        if (!IsValidLocalId(candidate))
+            return false;
+
+        owner = candidate;
+        return true;
+    }
+
+    /// <summary>Applies the owner namespace to a plugin-local fragment id.</summary>
+    public static string Namespace(string reference, string localId)
+        => TryGetOwner(reference, out var owner) ? $"{owner}#{localId}" : localId;
 
     public static int NormalizeOrder(int order)
         => Math.Clamp(order, 0, PromptCompilerDefaults.PluginFragmentOrderMax);
@@ -38,7 +61,9 @@ public sealed record PromptFragmentSourceOptions(
     TimeSpan ProviderTimeout,
     int MaxFragments,
     int MaxFragmentCharacters,
-    int MaxTotalCharacters)
+    int MaxTotalCharacters,
+    int MaxFragmentsPerProvider = PromptCompilerDefaults.PluginFragmentsPerProvider,
+    int MaxCharactersPerProvider = PromptCompilerDefaults.PluginCharactersPerProvider)
 {
     public static PromptFragmentSourceOptions Default { get; } = new(
         TimeSpan.FromMilliseconds(PromptCompilerDefaults.PluginFragmentTimeoutMilliseconds),
@@ -52,9 +77,10 @@ public sealed record PromptFragmentSourceResult(
     IReadOnlyList<PromptFragment> Fragments,
     IReadOnlyList<string> Warnings,
     int ProviderCount,
-    int RejectedCount)
+    int RejectedCount,
+    long ElapsedMilliseconds = 0)
 {
-    public static PromptFragmentSourceResult Empty { get; } = new([], [], 0, 0);
+    public static PromptFragmentSourceResult Empty { get; } = new([], [], 0, 0, 0);
 }
 
 /// <summary>Host-side aggregation point for <c>prompt.fragment</c> providers.</summary>
@@ -91,9 +117,10 @@ public static class PromptFragmentContexts
 
 /// <summary>
 /// Calls every registered <see cref="IPromptFragmentProvider"/> in stable reference order. Fault
-/// tolerance lives here: a provider that throws/returns garbage/times out is dropped with a warning
-/// and never fails the prompt. Caller cancellation is always propagated. Logs contain only
-/// reference/id/code/elapsed/count — never fragment text or variable values.
+/// tolerance and fairness live here: each provider gets its own timeout and quota, and a provider
+/// that throws/returns garbage/times out only loses its own fragments. Caller cancellation is
+/// propagated untouched. Logs contain only reference/id/code/elapsed/count — never fragment text
+/// or variable values.
 /// </summary>
 public sealed class HostPromptFragmentSource : IPromptFragmentSource
 {
@@ -188,6 +215,11 @@ public sealed class HostPromptFragmentSource : IPromptFragmentSource
                 continue;
             }
 
+            var providerFragments = 0;
+            var providerCharacters = 0;
+            var providerLimitWarned = false;
+            var providerBudgetWarned = false;
+
             foreach (var fragment in fragments)
             {
                 if (fragment is null)
@@ -196,58 +228,83 @@ public sealed class HostPromptFragmentSource : IPromptFragmentSource
                     continue;
                 }
 
-                var id = fragment.Id ?? string.Empty;
-                if (fragment.Mandatory)
-                {
-                    Reject(reference, id, PromptCompilerCodes.FragmentMandatoryRejected);
-                    continue;
-                }
-
                 if (fragment.Source is PromptFragmentSource.HostBuiltin)
                 {
-                    Reject(reference, id, PromptCompilerCodes.FragmentSourceRejected);
+                    Reject(reference, fragment.Id, PromptCompilerCodes.FragmentSourceRejected);
                     continue;
                 }
 
-                if (!PromptPluginFragmentRules.IsValidId(id))
+                if (!PromptPluginFragmentRules.IsValidLocalId(fragment.Id)
+                    || !PromptPluginFragmentRules.TryGetOwner(reference, out var owner))
                 {
-                    Reject(reference, id, PromptCompilerCodes.FragmentIdRejected);
+                    Reject(reference, fragment.Id, PromptCompilerCodes.FragmentIdRejected);
                     continue;
                 }
 
                 if (string.IsNullOrWhiteSpace(fragment.Text))
                 {
-                    Reject(reference, id, PromptCompilerCodes.FragmentTextRejected);
+                    Reject(reference, fragment.Id, PromptCompilerCodes.FragmentTextRejected);
                     continue;
                 }
 
                 if (fragment.Text.Length > _options.MaxFragmentCharacters)
                 {
-                    Reject(reference, id, PromptCompilerCodes.FragmentTooLong);
+                    Reject(reference, fragment.Id, PromptCompilerCodes.FragmentTooLong);
                     continue;
                 }
 
-                if (PromptPluginFragmentRules.IsHostReservedId(id))
+                var namespacedId = $"{owner}#{fragment.Id}";
+
+                // Fair per-provider quotas: one plugin can only lose its own fragments.
+                if (providerFragments >= Math.Max(0, _options.MaxFragmentsPerProvider))
                 {
-                    Reject(reference, id, PromptCompilerCodes.FragmentConflict);
+                    rejected++;
+                    if (!providerLimitWarned)
+                    {
+                        providerLimitWarned = true;
+                        warnings.Add($"{PromptCompilerCodes.PluginFragmentProviderLimit}:{reference}");
+                        _logger?.LogWarning(
+                            "prompt fragment provider quota reference={Reference} code={Code} limit={Limit}",
+                            reference,
+                            PromptCompilerCodes.PluginFragmentProviderLimit,
+                            _options.MaxFragmentsPerProvider);
+                    }
+
                     continue;
                 }
 
-                if (seenIds.Contains(id))
+                if (providerCharacters + fragment.Text.Length > Math.Max(0, _options.MaxCharactersPerProvider))
                 {
-                    Reject(reference, id, PromptCompilerCodes.FragmentDuplicate);
+                    rejected++;
+                    if (!providerBudgetWarned)
+                    {
+                        providerBudgetWarned = true;
+                        warnings.Add($"{PromptCompilerCodes.PluginFragmentProviderBudget}:{reference}");
+                        _logger?.LogWarning(
+                            "prompt fragment provider quota reference={Reference} code={Code} limit={Limit}",
+                            reference,
+                            PromptCompilerCodes.PluginFragmentProviderBudget,
+                            _options.MaxCharactersPerProvider);
+                    }
+
                     continue;
                 }
 
                 if (accepted.Count >= _options.MaxFragments)
                 {
-                    Reject(reference, id, PromptCompilerCodes.PluginFragmentLimit);
+                    Reject(reference, namespacedId, PromptCompilerCodes.PluginFragmentLimit);
                     continue;
                 }
 
                 if (totalCharacters + fragment.Text.Length > _options.MaxTotalCharacters)
                 {
-                    Reject(reference, id, PromptCompilerCodes.FragmentBudget);
+                    Reject(reference, namespacedId, PromptCompilerCodes.FragmentBudget);
+                    continue;
+                }
+
+                if (!seenIds.Add(namespacedId))
+                {
+                    Reject(reference, namespacedId, PromptCompilerCodes.FragmentDuplicate);
                     continue;
                 }
 
@@ -257,13 +314,13 @@ public sealed class HostPromptFragmentSource : IPromptFragmentSource
 
                 accepted.Add(fragment with
                 {
+                    Id = namespacedId,
                     Source = PromptFragmentSource.Plugin,
                     Order = PromptPluginFragmentRules.NormalizeOrder(fragment.Order),
-                    CanDisable = true,
-                    Mandatory = false,
                     MaxCharacters = maxCharacters,
                 });
-                seenIds.Add(id);
+                providerFragments++;
+                providerCharacters += fragment.Text.Length;
                 totalCharacters += fragment.Text.Length;
             }
         }
@@ -272,15 +329,16 @@ public sealed class HostPromptFragmentSource : IPromptFragmentSource
             .OrderBy(fragment => fragment.Order)
             .ThenBy(fragment => fragment.Id, StringComparer.Ordinal)
             .ToArray();
+        var elapsed = Elapsed(started);
 
         _logger?.LogDebug(
             "prompt fragments collected providers={ProviderCount} accepted={AcceptedCount} rejected={RejectedCount} elapsedMs={ElapsedMs}",
             ordered.Length,
             orderedFragments.Length,
             rejected,
-            Elapsed(started));
+            elapsed);
 
-        return new PromptFragmentSourceResult(orderedFragments, warnings, ordered.Length, rejected);
+        return new PromptFragmentSourceResult(orderedFragments, warnings, ordered.Length, rejected, elapsed);
 
         void Reject(string reference, string? id, string code)
         {
