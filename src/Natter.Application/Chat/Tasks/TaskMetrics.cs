@@ -19,6 +19,9 @@ public sealed class TaskMetrics
     public void Failed() { Interlocked.Increment(ref _failed); Interlocked.Decrement(ref _active); }
     public void Cancelled() { Interlocked.Increment(ref _cancelled); Interlocked.Decrement(ref _active); }
 
+    /// <summary>Releases an active slot without a terminal counter (task was already advanced elsewhere).</summary>
+    public void Released() => Interlocked.Decrement(ref _active);
+
     /// <summary>One tool invocation executed (native or text protocol).</summary>
     public void ToolCalled() => Interlocked.Increment(ref _toolCalls);
 

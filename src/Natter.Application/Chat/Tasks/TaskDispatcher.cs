@@ -19,6 +19,7 @@ public sealed class TaskDispatcher(
     TimeSpan? resultRetryInterval = null) : ITaskDispatcher, IAsyncDisposable
 {
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _cancellations = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, byte> _tracked = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, byte> _resultsSent = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, byte> _pendingResults = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource _retryCancellation = new();
@@ -31,14 +32,35 @@ public sealed class TaskDispatcher(
     private static readonly TimeSpan TaskTimeout = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan LeaseTtl = TaskTimeout + TimeSpan.FromMinutes(1);
 
-    public ValueTask<string> EnqueueAsync(AgentTask task, CancellationToken cancellationToken = default)
+    /// <summary>
+    /// Idempotent by task id: a task that is already queued/running (or already terminal in the
+    /// store) returns its id without a second run or a second <see cref="TaskMetrics.Created"/>.
+    /// </summary>
+    public async ValueTask<string> EnqueueAsync(AgentTask task, CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(task);
+
+        if (_cancellations.ContainsKey(task.TaskId))
+            return task.TaskId;
+
+        var current = await store.GetAsync(task.TaskId, cancellationToken).ConfigureAwait(false);
+        if (current is null || IsTerminal(current.Status))
+            return task.TaskId;
+
         var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         cts.CancelAfter(TaskTimeout);
-        _cancellations[task.TaskId] = cts;
+        if (!_cancellations.TryAdd(task.TaskId, cts))
+        {
+            cts.Dispose();
+            return task.TaskId;
+        }
+
+        // Created is bound to the first successful enqueue only; the terminal accounting happens
+        // exactly once when this dispatcher observes/finishes the task.
+        _tracked[task.TaskId] = 0;
         metrics?.Created();
-        _ = Task.Run(() => ExecuteAsync(task, cts.Token), CancellationToken.None);
-        return ValueTask.FromResult(task.TaskId);
+        _ = Task.Run(() => ExecuteAsync(current, cts.Token), CancellationToken.None);
+        return task.TaskId;
     }
 
     public async ValueTask<bool> RequestCancelAsync(string taskId, string actorId, CancellationToken cancellationToken = default)
@@ -80,10 +102,39 @@ public sealed class TaskDispatcher(
         var startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
         try
         {
-            if (!await store.TryAcquireLeaseAsync(task.TaskId, _owner, LeaseTtl, cancellationToken).ConfigureAwait(false))
+            var current = await store.GetAsync(task.TaskId, cancellationToken).ConfigureAwait(false);
+            if (current is null || IsTerminal(current.Status))
+            {
+                ReleaseTracked(task.TaskId);
                 return;
-            task = await store.TransitionAsync(task.TaskId, AgentTaskStatus.Running, task.Version, cancellationToken: cancellationToken)
-                .ConfigureAwait(false);
+            }
+
+            if (!await store.TryAcquireLeaseAsync(task.TaskId, _owner, LeaseTtl, cancellationToken).ConfigureAwait(false))
+            {
+                // Another owner is running (or just finished) this task: not a failure.
+                ReleaseTracked(task.TaskId);
+                return;
+            }
+
+            try
+            {
+                task = await store.TransitionAsync(task.TaskId, AgentTaskStatus.Running, current.Version, cancellationToken: cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (InvalidOperationException ex)
+            {
+                // Version conflict: someone else advanced the task between the read and the
+                // transition. Re-read and only fail when it is still ours and non-terminal.
+                var latest = await store.GetAsync(task.TaskId, CancellationToken.None).ConfigureAwait(false);
+                if (latest is null || IsTerminal(latest.Status) || !IsOwnedByUs(latest))
+                {
+                    logger?.LogDebug(ex, "Task {TaskId} was advanced by another actor; skipping this run.", task.TaskId);
+                    ReleaseTracked(task.TaskId);
+                    return;
+                }
+
+                throw;
+            }
 
             var profile = profiles.Resolve(task.Source,
                 new Conversation(task.ConversationId, task.GuildId is null ? ConversationKind.Direct : ConversationKind.Guild, task.GuildId),
@@ -96,17 +147,14 @@ public sealed class TaskDispatcher(
             var result = await worker.ExecuteAsync(task, context, cancellationToken).ConfigureAwait(false);
             if (result.Ok)
             {
-                task = await store.TransitionAsync(task.TaskId, AgentTaskStatus.Completed, task.Version,
-                    resultText: result.Text, cancellationToken: cancellationToken).ConfigureAwait(false);
-                metrics?.Duration(System.Diagnostics.Stopwatch.GetElapsedTime(startedAt));
-                metrics?.Completed();
+                if (await TryTransitionAsync(task.TaskId, task.Version, AgentTaskStatus.Completed, resultText: result.Text).ConfigureAwait(false))
+                    MarkTerminal(task.TaskId, AgentTaskStatus.Completed, startedAt);
             }
             else
             {
-                task = await store.TransitionAsync(task.TaskId, AgentTaskStatus.Failed, task.Version,
-                    errorCode: result.ErrorCode, errorMessage: result.ErrorMessage, cancellationToken: cancellationToken).ConfigureAwait(false);
-                metrics?.Duration(System.Diagnostics.Stopwatch.GetElapsedTime(startedAt));
-                metrics?.Failed();
+                if (await TryTransitionAsync(task.TaskId, task.Version, AgentTaskStatus.Failed,
+                        errorCode: result.ErrorCode, errorMessage: result.ErrorMessage).ConfigureAwait(false))
+                    MarkTerminal(task.TaskId, AgentTaskStatus.Failed, startedAt);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -114,11 +162,17 @@ public sealed class TaskDispatcher(
             try
             {
                 var current = await store.GetAsync(task.TaskId, CancellationToken.None).ConfigureAwait(false);
-                if (current is not null && current.Status is not (AgentTaskStatus.Completed or AgentTaskStatus.Failed or AgentTaskStatus.Cancelled or AgentTaskStatus.Expired))
-                    await store.TransitionAsync(task.TaskId, AgentTaskStatus.Cancelled, current.Version,
-                        errorCode: "cancelled", errorMessage: "Task cancelled.", cancellationToken: CancellationToken.None).ConfigureAwait(false);
-                    metrics?.Duration(System.Diagnostics.Stopwatch.GetElapsedTime(startedAt));
-                    metrics?.Cancelled();
+                if (current is not null
+                    && !IsTerminal(current.Status)
+                    && await TryTransitionAsync(current.TaskId, current.Version, AgentTaskStatus.Cancelled,
+                        errorCode: "cancelled", errorMessage: "Task cancelled.").ConfigureAwait(false))
+                {
+                    MarkTerminal(task.TaskId, AgentTaskStatus.Cancelled, startedAt);
+                }
+                else
+                {
+                    ReleaseTracked(task.TaskId);
+                }
             }
             catch
             {
@@ -126,15 +180,24 @@ public sealed class TaskDispatcher(
         }
         catch (Exception ex)
         {
-            logger?.LogError(ex, "Task {TaskId} failed", task.TaskId);
+            // Distinguish "advanced elsewhere" from a real failure before marking Failed.
             try
             {
                 var current = await store.GetAsync(task.TaskId, CancellationToken.None).ConfigureAwait(false);
-                if (current is not null && current.Status is not (AgentTaskStatus.Completed or AgentTaskStatus.Failed or AgentTaskStatus.Cancelled or AgentTaskStatus.Expired))
-                    await store.TransitionAsync(task.TaskId, AgentTaskStatus.Failed, current.Version,
-                        errorCode: "task_failed", errorMessage: "Task failed.", cancellationToken: CancellationToken.None).ConfigureAwait(false);
-                    metrics?.Duration(System.Diagnostics.Stopwatch.GetElapsedTime(startedAt));
-                metrics?.Failed();
+                if (current is null || IsTerminal(current.Status) || !IsOwnedByUs(current))
+                {
+                    logger?.LogDebug(ex, "Task {TaskId} was advanced by another actor; not marking failed.", task.TaskId);
+                    if (current is null || current.Status != AgentTaskStatus.Expired)
+                        ReleaseTracked(task.TaskId);
+                    return;
+                }
+
+                logger?.LogError(ex, "Task {TaskId} failed", task.TaskId);
+                if (await TryTransitionAsync(current.TaskId, current.Version, AgentTaskStatus.Failed,
+                        errorCode: "task_failed", errorMessage: "Task failed.").ConfigureAwait(false))
+                    MarkTerminal(task.TaskId, AgentTaskStatus.Failed, startedAt);
+                else
+                    ReleaseTracked(task.TaskId);
             }
             catch
             {
@@ -156,6 +219,66 @@ public sealed class TaskDispatcher(
             if (_cancellations.TryRemove(task.TaskId, out var cts))
                 cts.Dispose();
         }
+    }
+
+    private static bool IsTerminal(AgentTaskStatus status)
+        => status is AgentTaskStatus.Completed
+            or AgentTaskStatus.Failed
+            or AgentTaskStatus.Cancelled
+            or AgentTaskStatus.Expired;
+
+    private bool IsOwnedByUs(AgentTask task)
+        => string.Equals(task.LeaseOwner, _owner, StringComparison.Ordinal)
+           || (task.LeaseOwner is null && !IsTerminal(task.Status));
+
+    private async ValueTask<bool> TryTransitionAsync(
+        string taskId,
+        int expectedVersion,
+        AgentTaskStatus next,
+        string? resultText = null,
+        string? errorCode = null,
+        string? errorMessage = null)
+    {
+        try
+        {
+            await store.TransitionAsync(taskId, next, expectedVersion, resultText, errorCode, errorMessage, CancellationToken.None)
+                .ConfigureAwait(false);
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            // Version conflict or already terminal: the task was advanced elsewhere.
+            return false;
+        }
+    }
+
+    private void MarkTerminal(string taskId, AgentTaskStatus status, long startedAt)
+    {
+        if (!_tracked.TryRemove(taskId, out _))
+            return;
+
+        metrics?.Duration(System.Diagnostics.Stopwatch.GetElapsedTime(startedAt));
+        switch (status)
+        {
+            case AgentTaskStatus.Completed:
+                metrics?.Completed();
+                break;
+            case AgentTaskStatus.Failed:
+                metrics?.Failed();
+                break;
+            case AgentTaskStatus.Cancelled:
+                metrics?.Cancelled();
+                break;
+            default:
+                metrics?.Released();
+                break;
+        }
+    }
+
+    private void ReleaseTracked(string taskId)
+    {
+        if (_tracked.TryRemove(taskId, out _))
+            metrics?.Released();
     }
 
     private async ValueTask SendResultOnceAsync(AgentTask task)
