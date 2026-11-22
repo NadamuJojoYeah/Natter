@@ -26,8 +26,10 @@ public sealed class DiscordSocketTransport : IDiscordTransport, IDisposable
     private readonly ILogger<DiscordSocketTransport> _logger;
     private readonly Subject<DiscordTransportEvent> _events = new();
     private readonly IObservable<DiscordTransportEvent> _synchronizedEvents;
-    private readonly ConcurrentDictionary<string, CachedInteraction> _interactions = new(StringComparer.Ordinal);
-    private readonly ConcurrentDictionary<string, CachedChannel> _channels = new(StringComparer.Ordinal);
+    // S2-A11: bounded + TTL. Both grew without bound before (interactions had no capacity at all).
+    private readonly DiscordBoundedCache<CachedInteraction> _interactions;
+    private readonly DiscordBoundedCache<IMessageChannel> _channels;
+    private readonly DiscordSendRetryOptions _retryOptions;
     private const int ChannelCacheCapacity = 500;
     private static readonly TimeSpan ChannelCacheTtl = TimeSpan.FromMinutes(30);
     private TaskCompletionSource _ready = NewReadySource();
@@ -72,6 +74,16 @@ public sealed class DiscordSocketTransport : IDiscordTransport, IDisposable
         }
 
         _client = new DiscordSocketClient(config);
+
+        _interactions = new DiscordBoundedCache<CachedInteraction>(
+            Math.Max(1, options.InteractionCacheCapacity),
+            TimeSpan.FromSeconds(Math.Max(1, options.InteractionTtlSeconds)));
+        _channels = new DiscordBoundedCache<IMessageChannel>(ChannelCacheCapacity, ChannelCacheTtl);
+        _retryOptions = new DiscordSendRetryOptions(
+            Math.Max(1, options.SendRetryMaxAttempts),
+            Math.Max(1, options.SendRetryBaseDelayMs),
+            Math.Max(1, options.SendRetryMaxDelayMs));
+
         _synchronizedEvents = Subject.Synchronize(_events);
         Subscribe();
     }
@@ -218,115 +230,109 @@ public sealed class DiscordSocketTransport : IDiscordTransport, IDisposable
     public async ValueTask<DiscordSendResult> SendMessageAsync(
         DiscordSendMessage request,
         CancellationToken cancellationToken = default)
+        => await SendWithRetryAsync(
+                $"channel:{request.ChannelId}",
+                ct => SendMessageOnceAsync(request, ct),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+    private async Task<DiscordSendResult> SendMessageOnceAsync(
+        DiscordSendMessage request,
+        CancellationToken cancellationToken)
     {
-        try
-        {
-            var channel = await GetMessageChannelAsync(request.ChannelId).ConfigureAwait(false);
-            if (channel is null)
-                return DiscordSendResult.Failure("not_found", $"Discord channel '{request.ChannelId}' was not found.");
+        var channel = await GetMessageChannelAsync(request.ChannelId).ConfigureAwait(false);
+        if (channel is null)
+            return DiscordSendResult.Failure("not_found", $"Discord channel '{request.ChannelId}' was not found.");
 
-            var reference = ParseSnowflake(request.ReplyToMessageId) is { } replyId
-                ? new MessageReference(
-                    replyId,
-                    ulong.TryParse(request.ChannelId, out var referenceChannelId) ? referenceChannelId : null,
-                    failIfNotExists: false)
-                : null;
+        var reference = ParseSnowflake(request.ReplyToMessageId) is { } replyId
+            ? new MessageReference(
+                replyId,
+                ulong.TryParse(request.ChannelId, out var referenceChannelId) ? referenceChannelId : null,
+                failIfNotExists: false)
+            : null;
 
-            var message = await channel.SendMessageAsync(
-                request.Content,
-                allowedMentions: BuildAllowedMentions(request.MentionUserIds),
-                messageReference: reference,
-                options: RequestOptionsFor(cancellationToken)).ConfigureAwait(false);
+        var message = await channel.SendMessageAsync(
+            request.Content,
+            allowedMentions: DiscordMentionPolicy.Build(request.MentionUserIds),
+            messageReference: reference,
+            options: RequestOptionsFor(cancellationToken)).ConfigureAwait(false);
 
-            return DiscordSendResult.Success(message.Id.ToString());
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            return ToFailure(ex);
-        }
+        return DiscordSendResult.Success(message.Id.ToString());
     }
 
     public async ValueTask<DiscordSendResult> UpdateMessageAsync(
         DiscordUpdateMessage request,
         CancellationToken cancellationToken = default)
+        => await SendWithRetryAsync(
+                $"channel:{request.ChannelId}",
+                ct => UpdateMessageOnceAsync(request, ct),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+    private async Task<DiscordSendResult> UpdateMessageOnceAsync(
+        DiscordUpdateMessage request,
+        CancellationToken cancellationToken)
     {
-        try
-        {
-            var channel = await GetMessageChannelAsync(request.ChannelId).ConfigureAwait(false);
-            if (channel is null)
-                return DiscordSendResult.Failure("not_found", $"Discord channel '{request.ChannelId}' was not found.");
+        var channel = await GetMessageChannelAsync(request.ChannelId).ConfigureAwait(false);
+        if (channel is null)
+            return DiscordSendResult.Failure("not_found", $"Discord channel '{request.ChannelId}' was not found.");
 
-            if (!ulong.TryParse(request.MessageId, out var messageId))
-                return DiscordSendResult.Failure("invalid_request", $"Invalid Discord message id '{request.MessageId}'.");
+        if (!ulong.TryParse(request.MessageId, out var messageId))
+            return DiscordSendResult.Failure("invalid_request", $"Invalid Discord message id '{request.MessageId}'.");
 
-            var message = await channel.GetMessageAsync(messageId, options: RequestOptionsFor(cancellationToken))
-                .ConfigureAwait(false);
-            if (message is null)
-                return DiscordSendResult.Failure("not_found", $"Discord message '{request.MessageId}' was not found.");
+        var message = await channel.GetMessageAsync(messageId, options: RequestOptionsFor(cancellationToken))
+            .ConfigureAwait(false);
+        if (message is null)
+            return DiscordSendResult.Failure("not_found", $"Discord message '{request.MessageId}' was not found.");
 
-            if (message.Author.Id != _client.CurrentUser?.Id)
-                return DiscordSendResult.Failure("forbidden", "The bot may only edit its own messages.");
+        if (message.Author.Id != _client.CurrentUser?.Id)
+            return DiscordSendResult.Failure("forbidden", "The bot may only edit its own messages.");
 
-            if (message is not IUserMessage userMessage)
-                return DiscordSendResult.Failure("invalid_request", "Discord message is not editable.");
+        if (message is not IUserMessage userMessage)
+            return DiscordSendResult.Failure("invalid_request", "Discord message is not editable.");
 
-            await userMessage.ModifyAsync(
-                properties =>
-                {
-                    properties.Content = request.Content;
-                    properties.AllowedMentions = BuildAllowedMentions(request.MentionUserIds);
-                },
-                RequestOptionsFor(cancellationToken)).ConfigureAwait(false);
+        await userMessage.ModifyAsync(
+            properties =>
+            {
+                properties.Content = request.Content;
+                properties.AllowedMentions = DiscordMentionPolicy.Build(request.MentionUserIds);
+            },
+            RequestOptionsFor(cancellationToken)).ConfigureAwait(false);
 
-            return DiscordSendResult.Success(request.MessageId);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            return ToFailure(ex);
-        }
+        return DiscordSendResult.Success(request.MessageId);
     }
 
     public async ValueTask<DiscordSendResult> DeleteMessageAsync(
         DiscordDeleteMessage request,
         CancellationToken cancellationToken = default)
+        => await SendWithRetryAsync(
+                $"channel:{request.ChannelId}",
+                ct => DeleteMessageOnceAsync(request, ct),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+    private async Task<DiscordSendResult> DeleteMessageOnceAsync(
+        DiscordDeleteMessage request,
+        CancellationToken cancellationToken)
     {
-        try
-        {
-            var channel = await GetMessageChannelAsync(request.ChannelId).ConfigureAwait(false);
-            if (channel is null)
-                return DiscordSendResult.Failure("not_found", $"Discord channel '{request.ChannelId}' was not found.");
+        var channel = await GetMessageChannelAsync(request.ChannelId).ConfigureAwait(false);
+        if (channel is null)
+            return DiscordSendResult.Failure("not_found", $"Discord channel '{request.ChannelId}' was not found.");
 
-            if (!ulong.TryParse(request.MessageId, out var messageId))
-                return DiscordSendResult.Failure("invalid_request", $"Invalid Discord message id '{request.MessageId}'.");
+        if (!ulong.TryParse(request.MessageId, out var messageId))
+            return DiscordSendResult.Failure("invalid_request", $"Invalid Discord message id '{request.MessageId}'.");
 
-            var message = await channel.GetMessageAsync(messageId, options: RequestOptionsFor(cancellationToken))
-                .ConfigureAwait(false);
-            if (message is null)
-                return DiscordSendResult.Failure("not_found", $"Discord message '{request.MessageId}' was not found.");
+        var message = await channel.GetMessageAsync(messageId, options: RequestOptionsFor(cancellationToken))
+            .ConfigureAwait(false);
+        if (message is null)
+            return DiscordSendResult.Failure("not_found", $"Discord message '{request.MessageId}' was not found.");
 
-            if (message.Author.Id != _client.CurrentUser?.Id)
-                return DiscordSendResult.Failure("forbidden", "The bot may only delete its own messages.");
+        if (message.Author.Id != _client.CurrentUser?.Id)
+            return DiscordSendResult.Failure("forbidden", "The bot may only delete its own messages.");
 
-            await channel.DeleteMessageAsync(messageId, RequestOptionsFor(cancellationToken))
-                .ConfigureAwait(false);
-            return DiscordSendResult.Success(request.MessageId);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            return ToFailure(ex);
-        }
+        await channel.DeleteMessageAsync(messageId, RequestOptionsFor(cancellationToken))
+            .ConfigureAwait(false);
+        return DiscordSendResult.Success(request.MessageId);
     }
 
     public async ValueTask TriggerTypingAsync(
@@ -344,41 +350,95 @@ public sealed class DiscordSocketTransport : IDiscordTransport, IDisposable
         DiscordInteractionResponse response,
         CancellationToken cancellationToken = default)
     {
-        if (!_interactions.TryGetValue(response.InteractionId, out var cached))
+        if (!_interactions.TryGet(response.InteractionId, out var cached))
             return DiscordSendResult.Failure("not_found", $"Discord interaction '{response.InteractionId}' is not cached.");
 
         if (cached.ExpiresAt <= DateTimeOffset.UtcNow)
         {
-            _interactions.TryRemove(response.InteractionId, out _);
+            _interactions.Remove(response.InteractionId);
             return DiscordSendResult.Failure("not_found", "Discord interaction token has expired.");
         }
 
-        try
+        return await SendWithRetryAsync(
+                $"interaction:{response.InteractionId}",
+                ct => RespondInteractionOnceAsync(response, cached, ct),
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private async Task<DiscordSendResult> RespondInteractionOnceAsync(
+        DiscordInteractionResponse response,
+        CachedInteraction cached,
+        CancellationToken cancellationToken)
+    {
+        if (response.UpdateOriginal)
         {
-            if (response.UpdateOriginal)
+            var modified = await cached.Interaction.ModifyOriginalResponseAsync(
+                properties => properties.Content = response.Content,
+                RequestOptionsFor(cancellationToken)).ConfigureAwait(false);
+
+            return DiscordSendResult.Success(modified.Id.ToString());
+        }
+
+        var message = await cached.Interaction.FollowupAsync(
+            response.Content,
+            ephemeral: response.Ephemeral,
+            allowedMentions: DiscordMentionPolicy.Build(null),
+            options: RequestOptionsFor(cancellationToken)).ConfigureAwait(false);
+
+        return DiscordSendResult.Success(message.Id.ToString());
+    }
+
+    /// <summary>
+    /// S2-A16: bounded retry around a Discord send. Only rate-limit rejections are retried, the
+    /// platform's retryAfter wins over our backoff, and exhaustion returns an explicit
+    /// <c>rate_limited</c> failure instead of dropping the message silently.
+    /// </summary>
+    private async Task<DiscordSendResult> SendWithRetryAsync(
+        string target,
+        Func<CancellationToken, Task<DiscordSendResult>> send,
+        CancellationToken cancellationToken)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try
             {
-                var modified = await cached.Interaction.ModifyOriginalResponseAsync(
-                    properties => properties.Content = response.Content,
-                    RequestOptionsFor(cancellationToken)).ConfigureAwait(false);
-
-                return DiscordSendResult.Success(modified.Id.ToString());
+                return await send(cancellationToken).ConfigureAwait(false);
             }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex) when (DiscordSendRetryPolicy.IsRateLimited(ex))
+            {
+                if (!DiscordSendRetryPolicy.ShouldRetry(ex, attempt, _retryOptions))
+                {
+                    var exhausted = DiscordSendRetryPolicy.Exhausted(ex, attempt, _retryOptions);
+                    _logger.LogError(
+                        "Discord rate limit persisted; giving up (target={Target}, attempts={Attempts}, "
+                        + "retryAfterMs={RetryAfterMs}, errorType={ErrorType}).",
+                        target,
+                        attempt,
+                        DiscordSendRetryPolicy.RetryAfterMs(ex),
+                        ex.GetType().Name);
+                    return exhausted;
+                }
 
-            var message = await cached.Interaction.FollowupAsync(
-                response.Content,
-                ephemeral: response.Ephemeral,
-                allowedMentions: AllowedMentions.None,
-                options: RequestOptionsFor(cancellationToken)).ConfigureAwait(false);
-
-            return DiscordSendResult.Success(message.Id.ToString());
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            return ToFailure(ex);
+                var delay = DiscordSendRetryPolicy.DelayFor(ex, attempt, _retryOptions);
+                _logger.LogWarning(
+                    "Discord rate limited; retrying in {DelayMs}ms (target={Target}, attempt={Attempt}/{MaxAttempts}, "
+                    + "retryAfterMs={RetryAfterMs}).",
+                    (long)delay.TotalMilliseconds,
+                    target,
+                    attempt,
+                    _retryOptions.MaxAttempts,
+                    DiscordSendRetryPolicy.RetryAfterMs(ex));
+                await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                return ToFailure(ex);
+            }
         }
     }
 
@@ -599,9 +659,9 @@ public sealed class DiscordSocketTransport : IDiscordTransport, IDisposable
             return;
         }
 
-        _interactions[slash.Id.ToString()] = new CachedInteraction(
-            slash,
-            DateTimeOffset.UtcNow.AddSeconds(Math.Max(1, _options.InteractionTtlSeconds)));
+        _interactions.Set(
+            slash.Id.ToString(),
+            new CachedInteraction(slash, DateTimeOffset.UtcNow.AddSeconds(Math.Max(1, _options.InteractionTtlSeconds))));
         if (slash.Channel is IMessageChannel interactionChannel)
             CacheChannel(interactionChannel);
 
@@ -801,37 +861,13 @@ public sealed class DiscordSocketTransport : IDiscordTransport, IDisposable
         };
     }
 
-    private static AllowedMentions BuildAllowedMentions(IReadOnlyList<string>? mentionUserIds)
-    {
-        if (mentionUserIds is not { Count: > 0 })
-            return AllowedMentions.None;
-
-        var ids = mentionUserIds
-            .Select(id => ulong.TryParse(id, out var parsed) ? parsed : (ulong?)null)
-            .Where(id => id.HasValue)
-            .Select(id => id.GetValueOrDefault())
-            .ToList();
-
-        return ids.Count == 0
-            ? AllowedMentions.None
-            : new AllowedMentions((AllowedMentionTypes?)null)
-            {
-                UserIds = ids,
-                MentionRepliedUser = false,
-            };
-    }
-
     private ValueTask<IMessageChannel?> GetMessageChannelAsync(string channelId)
     {
         if (!ulong.TryParse(channelId, out var id))
             return ValueTask.FromResult<IMessageChannel?>(null);
 
-        if (_channels.TryGetValue(channelId, out var cached))
-        {
-            if (cached.ExpiresAt > DateTimeOffset.UtcNow)
-                return ValueTask.FromResult<IMessageChannel?>(cached.Channel);
-            _channels.TryRemove(channelId, out _);
-        }
+        if (_channels.TryGet(channelId, out var cached))
+            return ValueTask.FromResult<IMessageChannel?>(cached);
 
         var channel = _client.GetChannel(id) as IMessageChannel;
         if (channel is not null)
@@ -840,34 +876,9 @@ public sealed class DiscordSocketTransport : IDiscordTransport, IDisposable
     }
 
     private void CacheChannel(IMessageChannel channel)
-    {
-        var now = DateTimeOffset.UtcNow;
-        if (_channels.Count >= ChannelCacheCapacity)
-        {
-            foreach (var (id, item) in _channels)
-            {
-                if (item.ExpiresAt <= now)
-                    _channels.TryRemove(id, out _);
-            }
-            while (_channels.Count >= ChannelCacheCapacity
-                   && _channels.FirstOrDefault() is { Key: { } oldest })
-            {
-                _channels.TryRemove(oldest, out _);
-            }
-        }
+        => _channels.Set(channel.Id.ToString(), channel);
 
-        _channels[channel.Id.ToString()] = new CachedChannel(channel, now.Add(ChannelCacheTtl));
-    }
-
-    private void CleanupChannels()
-    {
-        var now = DateTimeOffset.UtcNow;
-        foreach (var (id, cached) in _channels)
-        {
-            if (cached.ExpiresAt <= now)
-                _channels.TryRemove(id, out _);
-        }
-    }
+    private void CleanupChannels() => _channels.Prune();
 
     private static ulong? ParseSnowflake(string? value)
         => ulong.TryParse(value, out var id) ? id : null;
@@ -895,15 +906,7 @@ public sealed class DiscordSocketTransport : IDiscordTransport, IDisposable
         };
     }
 
-    private void CleanupInteractions()
-    {
-        var now = DateTimeOffset.UtcNow;
-        foreach (var (id, cached) in _interactions)
-        {
-            if (cached.ExpiresAt <= now)
-                _interactions.TryRemove(id, out _);
-        }
-    }
+    private void CleanupInteractions() => _interactions.Prune();
 
     private void Publish(DiscordTransportEvent transportEvent)
         => _events.OnNext(transportEvent);
@@ -927,6 +930,4 @@ public sealed class DiscordSocketTransport : IDiscordTransport, IDisposable
     }
 
     private sealed record CachedInteraction(SocketInteraction Interaction, DateTimeOffset ExpiresAt);
-
-    private sealed record CachedChannel(IMessageChannel Channel, DateTimeOffset ExpiresAt);
 }

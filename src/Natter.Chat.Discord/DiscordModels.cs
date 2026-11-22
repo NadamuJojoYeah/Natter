@@ -68,6 +68,18 @@ public sealed class DiscordOptions
 
     public int InteractionTtlSeconds { get; set; } = 900;
 
+    /// <summary>S2-A11: hard cap for the interaction token cache (bounded, TTL pruned).</summary>
+    public int InteractionCacheCapacity { get; set; } = 500;
+
+    /// <summary>S2-A16: send attempts for a rate-limited call (1 disables retries).</summary>
+    public int SendRetryMaxAttempts { get; set; } = 3;
+
+    /// <summary>S2-A16: exponential backoff base for rate-limited sends.</summary>
+    public int SendRetryBaseDelayMs { get; set; } = 250;
+
+    /// <summary>S2-A16: ceiling for both exponential backoff and platform retryAfter delays.</summary>
+    public int SendRetryMaxDelayMs { get; set; } = 5_000;
+
     public int ReadyTimeoutSeconds { get; set; } = 30;
 
     /// <summary>

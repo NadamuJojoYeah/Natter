@@ -126,6 +126,12 @@ public enum DingTalkTransportEventKind
     Message,
     Error,
     Disconnected,
+
+    /// <summary>
+    /// S2-A6: the transport (re)connected. Without this event the upstream kept
+    /// <c>connected=false</c> after an internal reconnect and /health showed an outage forever.
+    /// </summary>
+    Connected,
 }
 
 public sealed record DingTalkTransportEvent
