@@ -24,6 +24,8 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
     private readonly NpsPluginOptions _options;
     private readonly PluginCatalog _catalog;
     private readonly IPortAdapterRegistry _adapterRegistry;
+    private readonly EmbeddingProviderCatalog _embeddingCatalog = new();
+    private readonly RerankProviderCatalog _rerankCatalog = new();
     private readonly List<NpsPluginCandidate> _candidates = [];
     private readonly List<PluginDescriptor> _legacyDescriptors = [];
     private readonly Dictionary<string, PluginState> _legacyStates = new(StringComparer.Ordinal);
@@ -207,6 +209,8 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
             WithdrawCliCommands(candidate);
         }
 
+        _embeddingCatalog.Clear();
+        _rerankCatalog.Clear();
         _portRouter = null;
         _hostProvider = null;
     }
@@ -804,6 +808,40 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
                     break;
                 }
 
+                case PluginContributionTypes.EmbeddingProvider:
+                {
+                    var reference = $"{candidate.Id}#{registration.Id}";
+                    var implementation = provider.GetRequiredService(registration.ImplementationType!);
+                    if (implementation is not IEmbeddingProvider embedding)
+                    {
+                        throw new NpsContributionBindingException(
+                            "embedding-provider-invalid",
+                            $"Contribution '{PluginContributionTypes.EmbeddingProvider}/{registration.Id}' "
+                            + "must implement IEmbeddingProvider.");
+                    }
+
+                    _embeddingCatalog.Register(reference, embedding);
+                    active.EmbeddingProviders.Add(reference);
+                    break;
+                }
+
+                case PluginContributionTypes.RerankProvider:
+                {
+                    var reference = $"{candidate.Id}#{registration.Id}";
+                    var implementation = provider.GetRequiredService(registration.ImplementationType!);
+                    if (implementation is not IRerankProvider rerank)
+                    {
+                        throw new NpsContributionBindingException(
+                            "rerank-provider-invalid",
+                            $"Contribution '{PluginContributionTypes.RerankProvider}/{registration.Id}' "
+                            + "must implement IRerankProvider.");
+                    }
+
+                    _rerankCatalog.Register(reference, rerank);
+                    active.RerankProviders.Add(reference);
+                    break;
+                }
+
                 case PluginContributionTypes.ChatEventSubscriber:
                 {
                     var subscriber = (IChatEventSubscriber)provider.GetRequiredService(registration.ImplementationType!);
@@ -856,10 +894,17 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
                 foreach (var reference in active.ContextComponents)
                     catalog.Unregister(reference);
 
+            foreach (var reference in active.EmbeddingProviders)
+                _embeddingCatalog.Unregister(reference);
+            foreach (var reference in active.RerankProviders)
+                _rerankCatalog.Unregister(reference);
+
             active.Upstreams.Clear();
             active.Responders.Clear();
             active.Subscriptions.Clear();
             active.ContextComponents.Clear();
+            active.EmbeddingProviders.Clear();
+            active.RerankProviders.Clear();
 
             // S2-C12: port adapters registered by this plugin (and their cached singletons) must be
             // withdrawn, otherwise the host keeps routing to a half-activated plugin.
@@ -945,10 +990,17 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
                 foreach (var reference in active.ContextComponents)
                     catalog.Unregister(reference);
 
+            foreach (var reference in active.EmbeddingProviders)
+                _embeddingCatalog.Unregister(reference);
+            foreach (var reference in active.RerankProviders)
+                _rerankCatalog.Unregister(reference);
+
             active.Upstreams.Clear();
             active.Responders.Clear();
             active.Subscriptions.Clear();
             active.ContextComponents.Clear();
+            active.EmbeddingProviders.Clear();
+            active.RerankProviders.Clear();
         }
 
         await candidate.Lifetime.StopAsync().ConfigureAwait(false);
@@ -1047,6 +1099,8 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
 
         services.AddSingleton(this);
         services.AddSingleton<IPluginRuntimeDiagnostics>(this);
+        services.AddSingleton<IEmbeddingProviderCatalog>(_embeddingCatalog);
+        services.AddSingleton<IRerankProviderCatalog>(_rerankCatalog);
         services.AddSingleton<ICliCommandContributor, NpsCliCommandContributor>();
         services.AddSingleton(router);
 
@@ -1118,7 +1172,9 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
         List<IChatUpstream> Upstreams,
         List<(string Owner, string Id)> Responders,
         List<IDisposable> Subscriptions,
-        List<string> ContextComponents);
+        List<string> ContextComponents,
+        List<string> EmbeddingProviders,
+        List<string> RerankProviders);
 
     private readonly Dictionary<string, ActiveContributions> _activeContributions = new(StringComparer.Ordinal);
 
@@ -1128,7 +1184,7 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
         {
             if (!_activeContributions.TryGetValue(candidate.Id, out var active))
             {
-                active = new ActiveContributions([], [], [], []);
+                active = new ActiveContributions([], [], [], [], [], []);
                 _activeContributions[candidate.Id] = active;
             }
 

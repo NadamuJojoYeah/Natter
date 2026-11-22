@@ -296,6 +296,8 @@ v1 权限词汇：
 | `context.assembler` | `chat.read` | 组装上下文会读取会话/记忆/摘要事实 |
 | `prompt.provider` | `chat.read` | 生成 prompt 需要会话与 profile 上下文 |
 | `prompt.fragment` | `chat.read` | 片段提供者收到 profile/source/user/conversation 上下文 |
+| `embedding.provider` | `network` + 至少一个 `secrets:*` | 调用外部 embedding API 并携带 key |
+| `rerank.provider` | `network` + 至少一个 `secrets:*` | 调用外部 rerank API 并携带 key |
 
 未声明对应权限时，`IContributionRegistry.AddContextAssembler` /
 `AddPromptProvider` / `AddPromptFragmentProvider` 抛出权限错误，宿主把插件置为
@@ -543,6 +545,12 @@ public interface IContributionRegistry
         ServiceLifetime lifetime = ServiceLifetime.Singleton)
         where TService : class
         where TImplementation : class, TService;
+
+    void AddEmbeddingProvider<TProvider>(string id)
+        where TProvider : class, IEmbeddingProvider;
+
+    void AddRerankProvider<TProvider>(string id)
+        where TProvider : class, IRerankProvider;
 }
 ```
 
@@ -575,6 +583,8 @@ public interface IChatEventSubscriber
 | `chat.event-subscriber` | `IChatEventSubscriber` | 旁路消费 NLMP 事件 | 审计、统计 |
 | `cli.command` | `ICliCommandHandler` + descriptor | 贡献 CLI 命令 | `discord status` |
 | `port.adapter` | 端口接口 | 通用六边形适配器（兼容） | 自定义仓储/时钟 |
+| `embedding.provider` | `IEmbeddingProvider` | 文本 → 向量（P6.2） | OpenAI 兼容、DashScope |
+| `rerank.provider` | `IRerankProvider` | 查询 + 候选 → 重排（P6.2） | 搜索/召回插件 |
 
 约束：
 
@@ -582,6 +592,39 @@ public interface IChatEventSubscriber
 - `chat.responder` 按 `priority` 升序调用；同优先级按插件 id 排序；第一个返回非 null 命令的 responder 生效。v1 也可配置为全部执行，但必须显式配置，避免重复回复。
 - `chat.upstream` 的 `ConnectAsync` / `DisconnectAsync` 由宿主统一驱动，不由插件自己随意启动；见 §7。
 - `chat.event-subscriber` 只读，不得直接发送命令；需要回复时使用 `chat.responder`。
+
+### 6.1 Embedding / Rerank 端口（P6.2，2026-11-22）
+
+`embedding.provider` / `rerank.provider` 与 `chat.responder` 一样由插件实现、宿主持有目录，注册引用为
+`owner#id`；Stop / Rollback / Dispose 会撤销目录项。`IContributionRegistry` 的默认实现抛
+`NotSupportedException`，NPS registry 覆写并执行权限门控。
+
+```csharp
+public interface IEmbeddingProvider
+{
+    string Id { get; }
+    int MaxBatchSize { get; }
+    int MaxInputTokens { get; }
+    ValueTask<EmbeddingResult> EmbedAsync(EmbeddingRequest request, CancellationToken ct = default);
+}
+
+public interface IRerankProvider
+{
+    string Id { get; }
+    int MaxCandidates { get; }
+    ValueTask<RerankResult> RerankAsync(string query, IReadOnlyList<RerankCandidate> candidates, CancellationToken ct = default);
+}
+```
+
+- **能力元数据是契约**：宿主 `EmbeddingService` 按 `MaxBatchSize` 切批，按 `MaxInputTokens` 做保守截断
+  （CJK 1.5 字符/token、其他 4 字符/token，保留 10% 余量），并记录被截断的输入下标；不得让调用方自行猜测。
+- 结果顺序与输入一致；任一批失败整体抛错，不返回半成功结果，也不在失败前写缓存。
+- `IEmbeddingCache` 键为 `(model, dimensions, SHA-256(text))`；本轮提供 `InMemoryEmbeddingCache`，
+  SQLite 实现留给 RAG 插件自己的库。
+- `RerankService` 在超过 `MaxCandidates` 时以 `rerank.too_many_candidates` 拒绝，不静默截断候选。
+- 参考实现 `plugins/Natter.Plugin.AiEmbedding.OpenAi/` 走 OpenAI 兼容 `POST {endpoint}/embeddings`；
+  测试使用 fake HTTP handler，不联网。DashScope compatible mode 的模型名/维度/批量/单条 token 上限
+  必须在配置中显式填写；仓库未对真实 DashScope 做联网验证，不能把默认值当作官方承诺。
 
 ---
 
@@ -1163,6 +1206,7 @@ v1 不做：
 | Host 会话 | `IConversationStore` + SQLite；插件凭 `storage` 权限注入 |
 | Profile 路由 | `RuntimeProfile` / `ProfileAwareChatResponder`；provider 由 `pluginId#responderId` 决定 |
 | P3 contribution | `prompt.provider` / `context.assembler` / `memory.store` 类型、NPS 注册/激活/回滚与 host catalog 已实现；`prompt.provider` / `prompt.fragment` / `context.assembler` 要求 `chat.read`；`Natter.Sample.Plugin.Memory` 为 `memory.store` 示例 |
+| P6.2 embedding/rerank | `embedding.provider` / `rerank.provider` 贡献、`owner#id` 目录、Stop/Rollback/Dispose 撤销、`network`+`secrets:*` 门控、分批/截断/缓存/全或无失败工具；参考实现 `plugins/Natter.Plugin.AiEmbedding.OpenAi` |
 | 第二上游/消费者 | `src/Natter.Chat.DingTalk`、`samples/Natter.Sample.Plugin.DingTalk`、`src/Natter.Feature.Ai.Spark` |
 
 ### 18.3 一致性测试映射（对应 §14）

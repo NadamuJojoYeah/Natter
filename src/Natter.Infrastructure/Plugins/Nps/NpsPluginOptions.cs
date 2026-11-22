@@ -133,6 +133,10 @@ public static class NpsPermissionPolicy
                 [PluginPermissions.ChatRead],
             PluginContributionTypes.PromptFragment =>
                 [PluginPermissions.ChatRead],
+            // Embedding/rerank providers call an external service and need a key. The concrete
+            // secret name is checked separately because "secrets:<name>" is a permission prefix.
+            PluginContributionTypes.EmbeddingProvider or PluginContributionTypes.RerankProvider =>
+                [PluginPermissions.Network],
             _ => [],
         };
 }

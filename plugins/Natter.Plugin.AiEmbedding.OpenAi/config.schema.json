@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["endpoint", "model", "apiKey"],
+  "additionalProperties": false,
+  "properties": {
+    "endpoint": {
+      "type": "string",
+      "pattern": "^https?://",
+      "description": "OpenAI-compatible base URL, e.g. https://api.openai.com/v1 or https://dashscope.aliyuncs.com/compatible-mode/v1"
+    },
+    "model": { "type": "string", "minLength": 1 },
+    "dimensions": { "type": ["integer", "null"], "minimum": 1 },
+    "apiKey": {
+      "type": "string",
+      "pattern": "^\\$\\{secret:[A-Za-z0-9_.-]+\\}$",
+      "description": "Secret reference only; the API key comes from IPluginSecrets."
+    },
+    "maxBatchSize": { "type": "integer", "minimum": 1, "maximum": 2048 },
+    "maxInputTokens": { "type": "integer", "minimum": 1, "maximum": 200000 },
+    "timeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 600 }
+  }
+}

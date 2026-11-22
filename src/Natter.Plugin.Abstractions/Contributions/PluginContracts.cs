@@ -133,6 +133,24 @@ public interface IContributionRegistry
 
     void AddMemoryStore<TStore>(string id)
         where TStore : class, IMemoryStore;
+
+    /// <summary>
+    /// Contributes a text-embedding provider. The host namespaces the contribution as
+    /// <c>owner#id</c>; providers must declare <c>network</c> and a <c>secrets:</c> permission.
+    /// </summary>
+    void AddEmbeddingProvider<TProvider>(string id)
+        where TProvider : class, IEmbeddingProvider
+        => throw new NotSupportedException(
+            "This contribution registry does not support 'embedding.provider'.");
+
+    /// <summary>
+    /// Contributes a rerank provider. The host namespaces the contribution as <c>owner#id</c>;
+    /// providers must declare <c>network</c> and a <c>secrets:</c> permission.
+    /// </summary>
+    void AddRerankProvider<TProvider>(string id)
+        where TProvider : class, IRerankProvider
+        => throw new NotSupportedException(
+            "This contribution registry does not support 'rerank.provider'.");
 }
 
 /// <summary>Token-like secret reference used in config values; never contains the secret.</summary>

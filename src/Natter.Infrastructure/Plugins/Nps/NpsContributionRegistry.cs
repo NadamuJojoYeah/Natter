@@ -160,6 +160,26 @@ internal sealed class NpsContributionRegistry : IContributionRegistry
         Stage(PluginContributionTypes.MemoryStore, id, 0, typeof(IMemoryStore), typeof(TStore), ServiceLifetime.Singleton, null);
     }
 
+    public void AddEmbeddingProvider<TProvider>(string id)
+        where TProvider : class, IEmbeddingProvider
+    {
+        Require(PluginContributionTypes.EmbeddingProvider, id);
+        RequirePermissions(PluginContributionTypes.EmbeddingProvider, id);
+        RequireSecretPermission(PluginContributionTypes.EmbeddingProvider, id);
+        _services.Collection.TryAddSingleton<TProvider>();
+        Stage(PluginContributionTypes.EmbeddingProvider, id, 0, typeof(IEmbeddingProvider), typeof(TProvider), ServiceLifetime.Singleton, null);
+    }
+
+    public void AddRerankProvider<TProvider>(string id)
+        where TProvider : class, IRerankProvider
+    {
+        Require(PluginContributionTypes.RerankProvider, id);
+        RequirePermissions(PluginContributionTypes.RerankProvider, id);
+        RequireSecretPermission(PluginContributionTypes.RerankProvider, id);
+        _services.Collection.TryAddSingleton<TProvider>();
+        Stage(PluginContributionTypes.RerankProvider, id, 0, typeof(IRerankProvider), typeof(TProvider), ServiceLifetime.Singleton, null);
+    }
+
     public void AddPortAdapter<TService, TImplementation>(
         string id,
         ServiceLifetime lifetime = ServiceLifetime.Singleton)
@@ -215,6 +235,15 @@ internal sealed class NpsContributionRegistry : IContributionRegistry
                     $"Plugin '{_pluginId}' lacks permission '{permission}' required by contribution '{type}/{id}'.");
             }
         }
+    }
+
+    private void RequireSecretPermission(string type, string id)
+    {
+        if (_granted.Any(permission => permission.StartsWith(PluginPermissions.SecretsPrefix, StringComparison.Ordinal)))
+            return;
+
+        throw new PluginPermissionException(
+            $"Plugin '{_pluginId}' lacks a '{PluginPermissions.SecretsPrefix}' permission required by contribution '{type}/{id}'.");
     }
 
     private void Stage(
