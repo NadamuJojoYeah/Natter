@@ -645,6 +645,11 @@ public sealed class AdminHostContractTests
         Assert.NotNull(provider.GetService<IAdminLogReader>());
         Assert.Null(provider.GetService<IAdminConfigStore>());
         Assert.Null(provider.GetService<IAdminCommandRunner>());
+
+        // S2-D5: the host redactor is shared so plugins do not re-implement redaction rules.
+        var redactor = provider.GetService<IAdminRedactor>();
+        Assert.NotNull(redactor);
+        Assert.Same(probe.Host.Services.GetRequiredService<IAdminRedactor>(), redactor);
         await probe.Host.StopAsync();
     }
 
@@ -692,6 +697,7 @@ public sealed class AdminHostContractTests
         Assert.Null(provider.GetService<IAdminLogReader>());
         Assert.Null(provider.GetService<IAdminConfigStore>());
         Assert.Null(provider.GetService<IAdminCommandRunner>());
+        Assert.Null(provider.GetService<IAdminRedactor>());
         await probe.Host.StopAsync();
     }
 

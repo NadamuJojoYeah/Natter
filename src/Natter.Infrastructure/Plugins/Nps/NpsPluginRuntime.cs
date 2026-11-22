@@ -703,6 +703,11 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
 
             if (_hostProvider.GetService<IAdminLogReader>() is { } logReader)
                 services.AddSingleton(logReader);
+
+            // S2-D5: one shared redaction rule set. Without this bridge every admin plugin has to
+            // re-implement the host's redaction rules (and they drift).
+            if (_hostProvider.GetService<IAdminRedactor>() is { } redactor)
+                services.AddSingleton(redactor);
         }
 
         if (granted.Contains(PluginPermissions.AdminConfigWrite)

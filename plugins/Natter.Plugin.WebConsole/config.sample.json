@@ -11,5 +11,8 @@
   "commandTimeoutSeconds": 10,
   "sessionMinutes": 60,
   "maxLogLines": 500,
-  "trustedProxies": ["127.0.0.1"]
+  "requestTimeoutSeconds": 15,
+  "maxConcurrentRequests": 32,
+  "auditRetentionFiles": 3,
+  "trustedProxies": []
 }

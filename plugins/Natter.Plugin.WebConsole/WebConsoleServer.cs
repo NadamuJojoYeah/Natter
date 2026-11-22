@@ -154,6 +154,7 @@ public sealed class WebConsoleServer : IAsyncDisposable
     private readonly IPluginLog _log;
     private readonly CancellationTokenSource _stopping = new();
     private readonly HttpListener _listener = new();
+    private readonly SemaphoreSlim _concurrency;
     private Task? _loop;
     private bool _started;
 
@@ -167,6 +168,8 @@ public sealed class WebConsoleServer : IAsyncDisposable
         _handler = handler ?? throw new ArgumentNullException(nameof(handler));
         _status = status ?? throw new ArgumentNullException(nameof(status));
         _log = log ?? throw new ArgumentNullException(nameof(log));
+        _concurrency = new SemaphoreSlim(
+            Math.Clamp(options.MaxConcurrentRequests, 1, WebConsoleDefaults.MaxConcurrentRequestsLimit));
     }
 
     public string Url => BuildUrl(_options);
@@ -262,24 +265,59 @@ public sealed class WebConsoleServer : IAsyncDisposable
                 return;
             }
 
-            _ = Task.Run(() => HandleAsync(context, cancellationToken), CancellationToken.None);
+            // A slow or stuck client must not consume an unbounded number of worker slots (S2-D3);
+            // when every slot is busy the listener answers 503 immediately instead of queueing.
+            if (!_concurrency.Wait(0))
+            {
+                TryWriteError(context, 503, "server.busy", "The console is busy; retry shortly.", retryAfterSeconds: 1);
+                continue;
+            }
+
+            _ = Task.Run(
+                async () =>
+                {
+                    try
+                    {
+                        await HandleAsync(context, cancellationToken).ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        _concurrency.Release();
+                    }
+                },
+                CancellationToken.None);
         }
     }
 
     private async Task HandleAsync(HttpListenerContext context, CancellationToken cancellationToken)
     {
+        // One budget for the whole exchange, body read included: a client that trickles the request
+        // line/body can no longer hold a worker slot indefinitely (S2-D3).
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(
+            Math.Clamp(_options.RequestTimeoutSeconds, 1, WebConsoleDefaults.MaxRequestTimeoutSeconds)));
+
         try
         {
-            var request = await BuildRequestAsync(context, cancellationToken).ConfigureAwait(false);
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeout.CancelAfter(TimeSpan.FromSeconds(15));
-
+            var request = await BuildRequestAsync(context, timeout.Token).ConfigureAwait(false);
             var response = await _handler.HandleAsync(request, timeout.Token).ConfigureAwait(false);
             var isHead = string.Equals(context.Request.HttpMethod, "HEAD", StringComparison.Ordinal);
             await WriteResponseAsync(context, response, isHead, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            TryAbort(context);
+        }
+        catch (OperationCanceledException)
+        {
+            // The request budget expired (typically a slow body); answer once and drop the connection
+            // so the abandoned socket read cannot linger.
+            TryWriteError(context, 408, "request.timeout", "The request exceeded the console time budget.");
+            TryAbort(context);
+        }
+        catch (TimeoutException)
+        {
+            TryWriteError(context, 408, "request.timeout", "The request exceeded the console time budget.");
             TryAbort(context);
         }
         catch (WebConsoleStartupException exception) when (exception.Code == "webconsole.request-too-large")
@@ -317,7 +355,13 @@ public sealed class WebConsoleServer : IAsyncDisposable
             var chunk = new byte[8192];
             int read;
 
-            while ((read = await request.InputStream.ReadAsync(chunk, cancellationToken).ConfigureAwait(false)) > 0)
+            // WaitAsync races the socket read against the request budget: HttpListener's stream does
+            // not abort a half-sent body on token cancellation alone, so the race is what guarantees
+            // a slow client cannot hold the worker slot (S2-D3).
+            while ((read = await request.InputStream.ReadAsync(chunk, cancellationToken)
+                       .AsTask()
+                       .WaitAsync(cancellationToken)
+                       .ConfigureAwait(false)) > 0)
             {
                 if (buffer.Length + read > limit)
                     throw new WebConsoleStartupException("webconsole.request-too-large", $"Request body exceeds {reason}.");
@@ -375,7 +419,12 @@ public sealed class WebConsoleServer : IAsyncDisposable
         context.Response.Close();
     }
 
-    private static void TryWriteError(HttpListenerContext context, int statusCode, string code, string message)
+    private static void TryWriteError(
+        HttpListenerContext context,
+        int statusCode,
+        string code,
+        string message,
+        int? retryAfterSeconds = null)
     {
         try
         {
@@ -420,5 +469,6 @@ public sealed class WebConsoleServer : IAsyncDisposable
         await StopAsync().ConfigureAwait(false);
         _stopping.Dispose();
         _listener.Close();
+        _concurrency.Dispose();
     }
 }

@@ -37,7 +37,20 @@ public sealed class WebConsoleOptions
 
     public int MaxLogLines { get; init; } = WebConsoleDefaults.MaxLogLines;
 
-    public IReadOnlyList<string> TrustedProxies { get; init; } = ["127.0.0.1"];
+    /// <summary>Whole-request budget (body read included), in seconds (S2-D3).</summary>
+    public int RequestTimeoutSeconds { get; init; } = WebConsoleDefaults.RequestTimeoutSeconds;
+
+    /// <summary>Concurrent request slots; a saturated console answers 503 (S2-D3).</summary>
+    public int MaxConcurrentRequests { get; init; } = WebConsoleDefaults.MaxConcurrentRequests;
+
+    /// <summary>How many rotated audit files are kept (<c>.1</c> newest); at least 3 (S2-D4).</summary>
+    public int AuditRetentionFiles { get; init; } = WebConsoleDefaults.AuditRetentionFiles;
+
+    /// <summary>
+    /// Trusted reverse-proxy hops. Empty by default: without an explicit proxy the console uses the
+    /// real <c>RemoteEndPoint</c> and ignores <c>X-Forwarded-For</c> entirely (S2-D2).
+    /// </summary>
+    public IReadOnlyList<string> TrustedProxies { get; init; } = [];
 }
 
 /// <summary>Constants shared by config, auth, server and tests.</summary>
@@ -52,6 +65,12 @@ public static class WebConsoleDefaults
     public const string HostHealthUrl = "http://127.0.0.1:5099/health";
     public const int SessionMinutes = 60;
     public const int MaxLogLines = 500;
+    public const int RequestTimeoutSeconds = 15;
+    public const int MaxRequestTimeoutSeconds = 120;
+    public const int MaxConcurrentRequests = 32;
+    public const int MaxConcurrentRequestsLimit = 256;
+    public const int AuditRetentionFiles = 3;
+    public const int MaxAuditRetentionFiles = 20;
     public const int MaxRequestBodyBytes = 64 * 1024;
     public const int MaxLoginBodyBytes = 4 * 1024;
     public const int MaxAdminBodyBytes = 256 * 1024 + 4 * 1024;
@@ -183,6 +202,30 @@ public static class WebConsoleOptionsValidator
                     "webconsole.trusted-proxy-invalid",
                     $"trustedProxies entry '{proxy}' is not an IP address or CIDR."));
             }
+        }
+
+        if (options.RequestTimeoutSeconds is < 1 or > WebConsoleDefaults.MaxRequestTimeoutSeconds)
+        {
+            issues.Add(new WebConsoleOptionIssue(
+                "/requestTimeoutSeconds",
+                "webconsole.request-timeout-invalid",
+                $"requestTimeoutSeconds must be between 1 and {WebConsoleDefaults.MaxRequestTimeoutSeconds}."));
+        }
+
+        if (options.MaxConcurrentRequests is < 1 or > WebConsoleDefaults.MaxConcurrentRequestsLimit)
+        {
+            issues.Add(new WebConsoleOptionIssue(
+                "/maxConcurrentRequests",
+                "webconsole.max-concurrent-invalid",
+                $"maxConcurrentRequests must be between 1 and {WebConsoleDefaults.MaxConcurrentRequestsLimit}."));
+        }
+
+        if (options.AuditRetentionFiles is < WebConsoleDefaults.AuditRetentionFiles or > WebConsoleDefaults.MaxAuditRetentionFiles)
+        {
+            issues.Add(new WebConsoleOptionIssue(
+                "/auditRetentionFiles",
+                "webconsole.audit-retention-invalid",
+                $"auditRetentionFiles must be between {WebConsoleDefaults.AuditRetentionFiles} and {WebConsoleDefaults.MaxAuditRetentionFiles}."));
         }
 
         if (options.CommandTimeoutSeconds is < 1 or > 10)

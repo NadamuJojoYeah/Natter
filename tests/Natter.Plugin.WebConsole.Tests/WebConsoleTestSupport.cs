@@ -1,3 +1,4 @@
+using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using Natter.Abstractions.Plugins;
@@ -103,6 +104,84 @@ internal sealed class ThrowingHandler : HttpMessageHandler
         => throw new HttpRequestException("connection refused");
 }
 
+/// <summary>
+/// Starts a real <see cref="WebConsoleServer"/> on a loopback port. The port is reserved, released and
+/// then bound, which is a TOCTOU window (S2-F4); a collision is retried with a fresh port instead of
+/// failing the run. Collections are also serialized via <c>xunit.runner.json</c>.
+/// </summary>
+internal sealed class ServerUnderTest : IAsyncDisposable
+{
+    private const int MaxAttempts = 6;
+
+    private ServerUnderTest(WebConsoleHarness harness, WebConsoleServer server, int port)
+    {
+        Harness = harness;
+        Server = server;
+        Port = port;
+    }
+
+    public WebConsoleHarness Harness { get; }
+
+    public WebConsoleServer Server { get; }
+
+    public int Port { get; }
+
+    public WebConsoleOptions Options => Harness.Options;
+
+    public string BaseUrl => $"http://127.0.0.1:{Port}";
+
+    public static async Task<ServerUnderTest> StartAsync(Func<int, WebConsoleOptions> optionsFactory)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            var port = LoopbackPortPool.Reserve();
+            var harness = WebConsoleHarness.Create(optionsFactory(port));
+            var server = new WebConsoleServer(harness.Options, harness.Handler, harness.Status, new NullPluginLog());
+
+            try
+            {
+                await server.StartAsync();
+                return new ServerUnderTest(harness, server, port);
+            }
+            catch (WebConsoleStartupException exception)
+                when (exception.Code == "webconsole.port-in-use" && attempt < MaxAttempts)
+            {
+                await server.DisposeAsync();
+                harness.Dispose();
+            }
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        try
+        {
+            await Server.StopAsync();
+            await Server.DisposeAsync();
+        }
+        catch (Exception)
+        {
+            // Best effort: the listener may already be gone.
+        }
+
+        Harness.Dispose();
+    }
+}
+
+/// <summary>
+/// Binds an ephemeral loopback port, then releases it. Callers must tolerate a collision: see
+/// <see cref="ServerUnderTest.StartAsync"/> (S2-F4).
+/// </summary>
+internal static class LoopbackPortPool
+{
+    public static int Reserve()
+    {
+        using var listener = new TcpListener(System.Net.IPAddress.Loopback, 0);
+        listener.Start();
+        return ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
+    }
+}
+
 internal sealed class WebConsoleHarness : IDisposable
 {
     public const string Token = "test-token-0123456789abcdef";
@@ -116,7 +195,8 @@ internal sealed class WebConsoleHarness : IDisposable
         string directory,
         FakeAdminConfigStore? adminConfig,
         FakeAdminCommandRunner? adminCommand,
-        FakeAdminLogReader? logReader)
+        FakeAdminLogReader? logReader,
+        Natter.Application.Admin.IAdminRedactor? redactor)
     {
         Options = options;
         Clock = new FakeTimeProvider(new DateTimeOffset(2026, 11, 18, 2, 0, 0, TimeSpan.Zero));
@@ -145,7 +225,8 @@ internal sealed class WebConsoleHarness : IDisposable
         AdminConfig = adminConfig;
         AdminCommand = adminCommand;
         LogReader = logReader;
-        var surface = new WebConsoleAdminSurface(adminConfig, adminCommand, logReader, new FakeAdminRedactor());
+        HostRedactor = redactor;
+        var surface = new WebConsoleAdminSurface(adminConfig, adminCommand, logReader, redactor);
         Admin = new WebConsoleAdminGateway(surface, options, Clock);
 
         Diagnostics = new WebConsoleDiagnostics(
@@ -194,6 +275,12 @@ internal sealed class WebConsoleHarness : IDisposable
 
     public FakeAdminLogReader? LogReader { get; }
 
+    /// <summary>Host redactor handed to the surface (null = plugin-local rules only).</summary>
+    public Natter.Application.Admin.IAdminRedactor? HostRedactor { get; }
+
+    /// <summary>Absolute path of the JSONL audit file used by this harness.</summary>
+    public string AuditFilePath => Audit.FilePath;
+
     public WebConsoleRequestHandler Handler { get; }
 
     public string Directory { get; }
@@ -204,7 +291,8 @@ internal sealed class WebConsoleHarness : IDisposable
         JsonElement? config = null,
         FakeAdminConfigStore? adminConfig = null,
         FakeAdminCommandRunner? adminCommand = null,
-        FakeAdminLogReader? logReader = null)
+        FakeAdminLogReader? logReader = null,
+        Natter.Application.Admin.IAdminRedactor? redactor = null)
     {
         options ??= new WebConsoleOptions { Port = 5090 };
         var directory = Path.Combine(Path.GetTempPath(), "natter-webconsole-tests", Guid.NewGuid().ToString("N"));
@@ -229,7 +317,8 @@ internal sealed class WebConsoleHarness : IDisposable
             directory,
             adminConfig,
             adminCommand,
-            logReader);
+            logReader,
+            redactor);
     }
 
     public WebConsoleHttpRequest Request(
@@ -266,12 +355,14 @@ internal sealed class WebConsoleHarness : IDisposable
 
     public async Task<LoginResult> LoginAsync(
         string? token = null,
-        IReadOnlyDictionary<string, string>? extraHeaders = null)
+        IReadOnlyDictionary<string, string>? extraHeaders = null,
+        string ip = "127.0.0.1")
     {
         var response = await Handler.HandleAsync(Request(
             "POST",
             "/api/session",
             JsonSerializer.Serialize(new { token = token ?? Token }),
+            ip: ip,
             extraHeaders: extraHeaders));
 
         var cookie = response.Headers.TryGetValue("Set-Cookie", out var setCookie)

@@ -11,10 +11,11 @@ public sealed class WebConsoleDiagnosticsTests
 
         var snapshot = await harness.Diagnostics.CreateSnapshotAsync();
 
-        Assert.Equal(11, snapshot.Checks.Count);
+        Assert.Equal(12, snapshot.Checks.Count);
         Assert.Contains(snapshot.Checks, check => check.Name == "audit" && check.Status == "ok");
         Assert.Contains(snapshot.Checks, check => check.Name == "viewer-login" && check.Status == "ok");
         Assert.Contains(snapshot.Checks, check => check.Name == "audit-root" && check.Status == "ok");
+        Assert.Contains(snapshot.Checks, check => check.Name == "redaction" && check.Status == "ok");
         Assert.Contains(snapshot.Checks, check => check.Name == "server" && check.Status == "ok");
         Assert.Contains(snapshot.Checks, check => check.Name == "host.health" && check.Status == "degraded");
         Assert.Equal("degraded", snapshot.Self.HealthStatus);

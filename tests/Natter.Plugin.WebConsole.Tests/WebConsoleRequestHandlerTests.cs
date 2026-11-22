@@ -302,7 +302,12 @@ public sealed class WebConsoleRequestHandlerTests
     [Fact]
     public async Task Forwarded_for_is_only_trusted_for_configured_proxies()
     {
-        using var harness = WebConsoleHarness.Create();
+        // S2-D2: no trusted proxy by default -> X-Forwarded-For is ignored entirely.
+        using var harness = WebConsoleHarness.Create(new WebConsoleOptions
+        {
+            Port = 5090,
+            TrustedProxies = ["127.0.0.1"],
+        });
         var login = await harness.LoginAsync();
 
         var trusted = await harness.Handler.HandleAsync(harness.Request(
@@ -324,6 +329,19 @@ public sealed class WebConsoleRequestHandlerTests
         var audit = harness.Audit.Read(20);
         Assert.Contains(audit, entry => entry.Action == "snapshot.view" && entry.Ip == "198.51.100.7");
         Assert.Contains(audit, entry => entry.Action == "snapshot.view" && entry.Ip == "203.0.113.9");
+
+        // Direct peer is not a proxy: the forged header must not change the recorded address.
+        using var direct = WebConsoleHarness.Create();
+        var directLogin = await direct.LoginAsync(ip: "203.0.113.9");
+        await direct.Handler.HandleAsync(direct.Request(
+            "GET",
+            "/api/snapshot",
+            cookie: directLogin.Cookie,
+            ip: "203.0.113.9",
+            extraHeaders: new Dictionary<string, string> { ["X-Forwarded-For"] = "198.51.100.7" }));
+
+        Assert.DoesNotContain(direct.Audit.Read(20), entry => entry.Action == "snapshot.view" && entry.Ip == "198.51.100.7");
+        Assert.Contains(direct.Audit.Read(20), entry => entry.Action == "snapshot.view" && entry.Ip == "203.0.113.9");
     }
 
     [Fact]
@@ -503,7 +521,12 @@ public sealed class WebConsoleRequestHandlerTests
     [Fact]
     public async Task Trusted_forwarded_proto_marks_session_cookie_secure()
     {
-        using var trusted = WebConsoleHarness.Create();
+        // X-Forwarded-Proto is only honoured when the direct peer is a configured proxy (S2-D2).
+        using var trusted = WebConsoleHarness.Create(new WebConsoleOptions
+        {
+            Port = 5090,
+            TrustedProxies = ["127.0.0.1"],
+        });
         var secure = await trusted.LoginAsync(extraHeaders: new Dictionary<string, string>
         {
             ["X-Forwarded-Proto"] = "https",

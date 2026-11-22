@@ -34,6 +34,7 @@ public sealed class WebConsoleRequestHandler
     private readonly WebConsoleDiagnostics _diagnostics;
     private readonly WebConsoleAdminGateway _admin;
     private readonly WebConsoleAuditStore _audit;
+    private readonly WebConsoleAuditGate _preAuthAudit;
     private readonly WebConsoleStaticAssets _assets;
     private readonly TimeProvider _clock;
     private readonly IPluginLog _log;
@@ -61,6 +62,7 @@ public sealed class WebConsoleRequestHandler
         _diagnostics = diagnostics ?? throw new ArgumentNullException(nameof(diagnostics));
         _admin = admin ?? throw new ArgumentNullException(nameof(admin));
         _audit = audit ?? throw new ArgumentNullException(nameof(audit));
+        _preAuthAudit = new WebConsoleAuditGate(clock);
         _assets = assets ?? throw new ArgumentNullException(nameof(assets));
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
         _log = log ?? throw new ArgumentNullException(nameof(log));
@@ -121,7 +123,7 @@ public sealed class WebConsoleRequestHandler
 
         if (!_origins.IsAllowed(origin, fetchSite))
         {
-            Audit(request, "origin.rejected", "denied", startedAt);
+            AuditPreAuth(request, "origin.rejected", "denied", startedAt);
             return Error(403, "request.origin_denied", "Origin is not allowed.");
         }
 
@@ -367,7 +369,12 @@ public sealed class WebConsoleRequestHandler
 
         if (_throttle.IsBlocked(client, out var retryAfter))
         {
-            Audit(request, "auth.login", "blocked", startedAt, $"retryAfterSeconds={(int)Math.Ceiling(retryAfter.TotalSeconds)}");
+            AuditPreAuth(
+                request,
+                "auth.login",
+                "blocked",
+                startedAt,
+                $"retryAfterSeconds={(int)Math.Ceiling(retryAfter.TotalSeconds)}");
             return WebConsoleHttpResponse.Json(
                 429,
                 new { error = new { code = "auth.too_many_attempts", message = "Too many failed login attempts. Try again later." } },
@@ -388,7 +395,7 @@ public sealed class WebConsoleRequestHandler
         if (role is null)
         {
             _throttle.RecordFailure(client);
-            Audit(request, "auth.login", "denied", startedAt);
+            AuditPreAuth(request, "auth.login", "denied", startedAt);
             return Error(401, "auth.invalid_token", "Invalid token.");
         }
 
@@ -1032,6 +1039,15 @@ public sealed class WebConsoleRequestHandler
             GetHeader(request, WebConsoleDefaults.CsrfHeaderName),
             session.Csrf);
 
+    /// <summary>Maximum accepted <c>X-Forwarded-For</c> hops; anything longer is ignored.</summary>
+    private const int MaxForwardedHops = 16;
+
+    /// <summary>
+    /// Resolves the client address for throttling and audit. <c>X-Forwarded-For</c> is only parsed
+    /// when the direct peer is a configured trusted proxy, and then from the <em>right</em>: the
+    /// first hop that is not itself a trusted proxy is the client. The leftmost value is
+    /// attacker-controlled and is never trusted (S2-D2).
+    /// </summary>
     private string ResolveClientAddress(WebConsoleHttpRequest request)
     {
         var remote = WebConsoleNetwork.NormalizeAddress(request.RemoteAddress) ?? request.RemoteAddress;
@@ -1042,8 +1058,56 @@ public sealed class WebConsoleRequestHandler
         if (string.IsNullOrWhiteSpace(forwarded))
             return remote;
 
-        var first = forwarded.Split(',')[0].Trim();
-        return WebConsoleNetwork.NormalizeAddress(first) ?? remote;
+        var hops = forwarded.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        if (hops.Length == 0 || hops.Length > MaxForwardedHops)
+            return remote;
+
+        for (var index = hops.Length - 1; index >= 0; index--)
+        {
+            if (WebConsoleNetwork.NormalizeAddress(hops[index]) is not { } hop)
+                return remote;
+
+            if (WebConsoleNetwork.IsInAnyCidr(hop, _options.TrustedProxies))
+                continue;
+
+            return hop;
+        }
+
+        // Every hop is a trusted proxy: the direct peer is the closest identifiable client.
+        return remote;
+    }
+
+    /// <summary>
+    /// Writes an audit line for a request that has not proven a session (S2-D4). Such requests can be
+    /// produced by any page the operator visits, so they are aggregated: after
+    /// <see cref="WebConsoleAuditGate.Burst"/> entries per minute the line is dropped and a single
+    /// summary is written when the next window opens.
+    /// </summary>
+    private void AuditPreAuth(
+        WebConsoleHttpRequest request,
+        string action,
+        string result,
+        DateTimeOffset startedAt,
+        string? target = null)
+    {
+        var client = ResolveClientAddress(request);
+        var acquired = _preAuthAudit.TryAcquire(action, client, out var suppressed);
+
+        if (suppressed > 0)
+        {
+            _audit.Write(
+                action + ".suppressed",
+                null,
+                client,
+                $"suppressed={suppressed}",
+                "aggregated",
+                _clock.GetUtcNow() - startedAt);
+        }
+
+        if (!acquired)
+            return;
+
+        _audit.Write(action, null, client, target, result, _clock.GetUtcNow() - startedAt);
     }
 
     private void Audit(

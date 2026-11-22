@@ -103,7 +103,11 @@ plugins/natter.plugin.webconsole/
 - `bind` 必须是 loopback（`127.0.0.1`、`::1`、`localhost`）；其他值 → `webconsole.bind-not-loopback`；
 - `hostHealthUrl` 必须是 loopback URL；指向 `natter serve --health-port <port>` 的 `/health`；
 - `publicBaseUrl` 仅在通过反向代理暴露时设置（用于 cookie `Secure`、Origin 校验）；
-- `commandTimeoutSeconds`（1–10，默认 10）是插件侧命令预算，必须小于 HTTP 层 15s，保证超时能返回 `504 command:timeout` 而不是被传输层掐断。
+- `commandTimeoutSeconds`（1–10，默认 10）是插件侧命令预算，必须小于 HTTP 层预算，保证超时能返回 `504 command:timeout` 而不是被传输层掐断；
+- `requestTimeoutSeconds`（1–120，默认 15）是**整次请求**（含 body 读取）的预算，超时返回 `408 request.timeout`；
+- `maxConcurrentRequests`（1–256，默认 32）是并发槽位，占满后新连接**立即** `503 server.busy`（带 `Retry-After: 1`），不排队；
+- `auditRetentionFiles`（3–20，默认 3）是审计轮转保留份数（`.1` 最新）；
+- `trustedProxies` **默认为空**：未配置可信代理时不解析 `X-Forwarded-For` / `X-Forwarded-Proto`，只用真实 `RemoteEndPoint`。反向代理部署必须显式列出代理地址（例如 `["127.0.0.1"]`），此时从 XFF **最右侧**开始跳过可信跳，取第一个不可信地址作为客户端。
 
 ### 4.1 宿主权限（manifest）
 
@@ -366,7 +370,10 @@ natter-admin.example.com {
 - 审计只记录摘要，不记录 token、secret、prompt/memory 正文或完整命令输出；
 - 审计目录 0700、文件 0600（Unix，best-effort）；默认写在 `$NATTER_STATE_DIR/webconsole/audit`，只读挂载下不会改插件目录（见 §4.4）；
 - 只读挂载且没有 state 根时，激活直接失败并给 `webconsole.audit-unwritable`，而不是静默丢审计；
-- 反向代理下只信任 `trustedProxies` 的 `X-Forwarded-For` / `X-Forwarded-Proto`；后者为 `https` 时会话 cookie 加 `Secure`；
+- 反向代理下**只有** `trustedProxies` 中的直连对端才被信任；`X-Forwarded-For` 从右往左取第一个不可信跳（最左值永不可信，最多 16 跳，非法值回落到真实对端）；`X-Forwarded-Proto: https` 同样只在可信代理时生效并给 cookie 加 `Secure`；
+- 登录限速：单客户端 5 次 / 5 分钟；全局兜底 50 次 / 15 分钟。全局命中后**可恢复**——一次成功登录释放最旧的 5 条全局记录；`Reset(client)` 清除该客户端的两个窗口，`ResetAll()` 清空全局兜底（运维恢复）；
+- 未认证请求的审计（`origin.rejected`、`auth.login denied/blocked`）按「动作 + 客户端」聚合：每窗口最多 5 条，其余只计数并在下一窗口写一条 `*.suppressed` 汇总，避免任意网页刷掉取证历史；
+- 审计轮转保留 `auditRetentionFiles` 份（默认 3，`.1` 最新），单个文件超 1 MiB 触发；
 - Phase 2/3 的校验端点不写文件、不执行命令；真正写入/执行在宿主 API 缺失时 501，不提供“临时替代路径”。
 
 ---
@@ -389,6 +396,9 @@ natter-admin.example.com {
 | 配置保存 409 | `config.conflict` | 重新加载文档（新 ETag）再保存 |
 | 管理端点 403 | `auth.forbidden` | 用 admin token 登录（viewer 只读） |
 | 管理端点 403 | `console.read_only` | 关闭 `readOnly`（并确认 `allowConfigWrite`/`allowCommandConsole`） |
+| 请求 408 | `request.timeout` | 客户端 body 发送过慢或命令超出预算；可调 `requestTimeoutSeconds` |
+| 请求 503 | `server.busy` | 并发槽位占满（慢速攻击或突发）；查 `maxConcurrentRequests` 与网络侧速率 |
+| 客户端 IP 显示为代理地址 | — | `trustedProxies` 未包含该代理；补齐后从 XFF 右侧解析 |
 | 日志 400 | `logs.invalid_query` | 按 §7.3 修正参数（level 词表、limit 上限、时间格式） |
 | 命令 504 | `command.timeout` | 调小 `commandTimeoutSeconds` 或换命令；部分输出仍会返回 |
 
@@ -408,4 +418,6 @@ natter-admin.example.com {
 - `external` 模式只做探测，不代理另一个实例的请求；
 - 双角色（admin / viewer），仍是单会话单凭据模型；多用户/每用户账号未实现；
 - 会话只存内存，插件重启后需要重新登录；
-- 审计日志路径由 `NATTER_STATE_DIR` 决定；未设置时回落到插件目录（只读部署下不可用，会在激活阶段失败）。
+- 审计日志路径由 `NATTER_STATE_DIR` 决定；未设置时回落到插件目录（只读部署下不可用，会在激活阶段失败）；
+- 脱敏统一入口：宿主 `IAdminRedactor` 通过 `admin.read` 桥接进插件 provider（S2-D5），插件一律走宿主规则，不再自建一套；`web status` 的 `redaction.source` 语义是**当前实际生效的规则集**——`host` 表示宿主播接的 redactor 生效（授予 `admin.read` 时的常态），`plugin` 表示桥接缺席（未授予该权限、管理面关闭或旧宿主）时回落到插件本地规则。健康检查 `redaction` 同样显示来源。
+- 两侧规则形状一致：完整/未闭合 PEM 私钥块、`sk-*`/`ak-*`/`Bearer`、敏感键值对（`key=value`、`"key": "value"`），且 `${secret:NAME}` 引用保持可读（S1-04 已补 PEM）。

@@ -43,6 +43,35 @@ public static class WebConsoleConfig
 }
 
 /// <summary>
+/// Single redaction entry point (S2-D5). When the host bridges <c>IAdminRedactor</c> its rules win, so
+/// the console and the host cannot drift apart; otherwise the local rules below are used. Both
+/// cover the same shapes: PEM private-key blocks, <c>sk-*</c>/<c>ak-*</c>/<c>Bearer</c> values and
+/// <c>key=value</c>/<c>"key": "value"</c> assignment pairs, while <c>${secret:NAME}</c> references stay
+/// readable.
+/// </summary>
+public sealed class WebConsoleRedactionPolicy
+{
+    public static WebConsoleRedactionPolicy Local { get; } = new(null);
+
+    public WebConsoleRedactionPolicy(Natter.Application.Admin.IAdminRedactor? hostRedactor)
+        => HostRedactor = hostRedactor;
+
+    public Natter.Application.Admin.IAdminRedactor? HostRedactor { get; }
+
+    /// <summary>True when the host redactor is in use (surfaced in <c>web status</c>/health).</summary>
+    public bool UsesHostRedactor => HostRedactor is not null;
+
+    public string Redact(string? value)
+        => HostRedactor?.Redact(value) ?? WebConsoleRedaction.RedactSecrets(value);
+
+    public string SanitizeText(string? value, int maxLength = 300)
+    {
+        var redacted = Redact(value);
+        return redacted.Length <= maxLength ? redacted : redacted[..maxLength] + "…";
+    }
+}
+
+/// <summary>
 /// Local redaction (gap G9: the host has no public redactor contract yet).
 /// Rules are intentionally conservative and covered by unit tests.
 /// </summary>

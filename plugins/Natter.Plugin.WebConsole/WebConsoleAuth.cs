@@ -190,15 +190,32 @@ public static class WebConsoleCredentials
     }
 }
 
-/// <summary>Failed-login throttle: 5 failures per 5 minutes per client, plus a global cap.</summary>
+/// <summary>
+/// Failed-login throttle. Two windows:
+/// <list type="bullet">
+/// <item>per client: <see cref="MaxFailuresPerClient"/> failures in <see cref="Window"/> (5 min);</item>
+/// <item>global backstop: <see cref="MaxFailuresGlobal"/> failures in <see cref="GlobalWindow"/> (15 min).</item>
+/// </list>
+/// The global cap used to be a one-way trap: once it tripped, every client was refused for the full
+/// window and <c>Reset</c> only cleared a single client. It is now recoverable — a successful login
+/// releases the oldest global entries (S2-D1), <see cref="Reset"/> removes that client from both
+/// windows, and <see cref="ResetAll"/> clears the global backstop explicitly (ops recovery).
+/// </summary>
 public sealed class WebConsoleLoginThrottle
 {
     public const int MaxFailuresPerClient = 5;
     public const int MaxFailuresGlobal = 50;
+
+    /// <summary>How many oldest global entries one successful login releases.</summary>
+    public const int GlobalRecoveryPerSuccess = 5;
+
     public static readonly TimeSpan Window = TimeSpan.FromMinutes(5);
 
+    /// <summary>Global backstop window; longer than the per-client window so a burst decays gradually.</summary>
+    public static readonly TimeSpan GlobalWindow = TimeSpan.FromMinutes(15);
+
     private readonly Dictionary<string, List<DateTimeOffset>> _failures = new(StringComparer.Ordinal);
-    private readonly List<DateTimeOffset> _global = [];
+    private readonly List<GlobalFailure> _global = [];
     private readonly Lock _gate = new();
     private readonly TimeProvider _clock;
 
@@ -216,15 +233,15 @@ public sealed class WebConsoleLoginThrottle
         {
             PruneLocked(now);
 
-            if (_global.Count >= MaxFailuresGlobal)
+            if (_failures.TryGetValue(clientKey, out var entries) && entries.Count >= MaxFailuresPerClient)
             {
-                retryAfter = RetryAfter(_global, now);
+                retryAfter = RetryAfter(entries, now, Window);
                 return true;
             }
 
-            if (_failures.TryGetValue(clientKey, out var entries) && entries.Count >= MaxFailuresPerClient)
+            if (_global.Count >= MaxFailuresGlobal)
             {
-                retryAfter = RetryAfter(entries, now);
+                retryAfter = RetryAfter(_global.Select(entry => entry.At).ToList(), now, GlobalWindow);
                 return true;
             }
 
@@ -247,20 +264,72 @@ public sealed class WebConsoleLoginThrottle
             }
 
             entries.Add(now);
-            _global.Add(now);
+            _global.Add(new GlobalFailure(clientKey, now));
         }
     }
 
+    /// <summary>
+    /// A successful login proves this client is not the attacker: its failures leave both windows,
+    /// and up to <see cref="GlobalRecoveryPerSuccess"/> oldest global entries are released so a
+    /// saturated backstop cannot lock every operator out (S2-D1).
+    /// </summary>
+    public void RecordSuccess(string clientKey)
+    {
+        lock (_gate)
+        {
+            // The client's own failures leave both windows…
+            _failures.Remove(clientKey);
+            _global.RemoveAll(entry => string.Equals(entry.Client, clientKey, StringComparison.Ordinal));
+
+            // …and a saturated backstop releases a bounded slice so operators can get back in.
+            if (_global.Count >= MaxFailuresGlobal)
+            {
+                var release = Math.Min(GlobalRecoveryPerSuccess, _global.Count);
+                _global.RemoveRange(0, release);
+            }
+        }
+    }
+
+    /// <summary>Clears one client from both windows (a client-scoped reset, e.g. after ops verified it).</summary>
     public void Reset(string clientKey)
     {
         lock (_gate)
+        {
             _failures.Remove(clientKey);
+            _global.RemoveAll(entry => string.Equals(entry.Client, clientKey, StringComparison.Ordinal));
+        }
     }
 
-    private static TimeSpan RetryAfter(List<DateTimeOffset> entries, DateTimeOffset now)
+    /// <summary>Clears every failure and the global backstop (explicit operator recovery).</summary>
+    public void ResetAll()
     {
-        var oldest = entries.Count == 0 ? now : entries[0];
-        var remaining = Window - (now - oldest);
+        lock (_gate)
+        {
+            _failures.Clear();
+            _global.Clear();
+        }
+    }
+
+    /// <summary>Diagnostics: current global failure count inside the global window.</summary>
+    public int GlobalFailureCount
+    {
+        get
+        {
+            lock (_gate)
+            {
+                PruneLocked(_clock.GetUtcNow());
+                return _global.Count;
+            }
+        }
+    }
+
+    private static TimeSpan RetryAfter(List<DateTimeOffset> entries, DateTimeOffset now, TimeSpan window)
+    {
+        if (entries.Count == 0)
+            return TimeSpan.Zero;
+
+        var oldest = entries.Min();
+        var remaining = window - (now - oldest);
         return remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero;
     }
 
@@ -274,8 +343,10 @@ public sealed class WebConsoleLoginThrottle
             _failures.Remove(key);
         }
 
-        _global.RemoveAll(entry => now - entry >= Window);
+        _global.RemoveAll(entry => now - entry.At >= GlobalWindow);
     }
+
+    private readonly record struct GlobalFailure(string Client, DateTimeOffset At);
 }
 
 /// <summary>Origin / Sec-Fetch-Site policy for browser requests (design §6.1).</summary>

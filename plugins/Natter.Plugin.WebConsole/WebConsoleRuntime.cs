@@ -92,7 +92,7 @@ public sealed class WebConsoleRuntime : IAsyncDisposable
 
         try
         {
-            _audit = new WebConsoleAuditStore(auditLocation.Directory, _clock);
+            _audit = new WebConsoleAuditStore(auditLocation.Directory, _clock, _options.AuditRetentionFiles);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
@@ -266,6 +266,14 @@ public sealed class WebConsoleRuntime : IAsyncDisposable
                 readOnly = _options.ReadOnly,
             },
             hostHealthUrl = _options.HostHealthUrl,
+            // "host" = the bridge handed the host IAdminRedactor to the plugin (default when
+            // admin.read is granted, S2-D5); "plugin" = the bridge is absent and the plugin-local
+            // rule set is in effect. The field reports which rules actually produced the output.
+            redaction = new
+            {
+                source = AdminSurface.Redactor is null ? "plugin" : "host",
+                pemBlocks = true,
+            },
             admin = new
             {
                 configStore = AdminSurface.DescribeConfig(),
@@ -311,6 +319,7 @@ public sealed class WebConsoleRuntime : IAsyncDisposable
         lines.Add($"health: {_options.HostHealthUrl}");
         lines.Add($"admin: config={AdminSurface.DescribeConfig()} command={AdminSurface.DescribeCommand()}"
                   + $" logs={(AdminSurface.HasLogReader ? "available" : WebConsoleGaps.HostLogs.Code)}");
+        lines.Add($"redaction: {(AdminSurface.Redactor is null ? "plugin" : "host")}");
         lines.Add($"audit: {AuditPath}"
                   + (AuditLocation is null
                       ? string.Empty

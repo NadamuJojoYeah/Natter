@@ -11,21 +11,15 @@ public sealed class WebConsoleServerTests
     [Fact]
     public async Task Server_serves_login_and_snapshot_over_loopback()
     {
-        var port = FreePort();
-        using var harness = WebConsoleHarness.Create(new WebConsoleOptions { Port = port });
-        await using var server = new WebConsoleServer(
-            harness.Options,
-            harness.Handler,
-            harness.Status,
-            new NullPluginLog());
+        await using var serverUnderTest = await ServerUnderTest.StartAsync(port => new WebConsoleOptions { Port = port });
+        var harness = serverUnderTest.Harness;
+        var baseUrl = serverUnderTest.BaseUrl;
 
-        await server.StartAsync();
         Assert.Equal("listening", harness.Status.Current.State);
 
         try
         {
             using var client = new HttpClient(new SocketsHttpHandler { UseProxy = false });
-            var baseUrl = $"http://127.0.0.1:{port}";
 
             var index = await client.GetAsync(baseUrl + "/");
             Assert.Equal(HttpStatusCode.OK, index.StatusCode);
@@ -60,7 +54,7 @@ public sealed class WebConsoleServerTests
         }
         finally
         {
-            await server.StopAsync();
+            await serverUnderTest.Server.StopAsync();
         }
 
         Assert.Equal("stopped", harness.Status.Current.State);
@@ -69,7 +63,7 @@ public sealed class WebConsoleServerTests
     [Fact]
     public async Task Port_conflict_reports_stable_error_code()
     {
-        var port = FreePort();
+        var port = LoopbackPortPool.Reserve();
         var blocker = new TcpListener(IPAddress.Loopback, port);
         blocker.Start();
 
@@ -123,10 +117,4 @@ public sealed class WebConsoleServerTests
         Assert.DoesNotContain("onclick=", html);
     }
 
-    private static int FreePort()
-    {
-        using var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        return ((IPEndPoint)listener.LocalEndpoint).Port;
-    }
 }

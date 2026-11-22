@@ -166,6 +166,10 @@ public sealed class WebConsoleDiagnostics
             new("static-assets", "ok", $"{_assets.Files.Count} whitelisted assets"),
             new("audit", auditWritable ? "ok" : "error", auditError ?? _audit.FilePath),
             new(
+                "redaction",
+                "ok",
+                _admin.Redaction.UsesHostRedactor ? "host IAdminRedactor" : "plugin rules (host redactor not bridged)"),
+            new(
                 "audit-root",
                 _auditLocation is null || _auditLocation.Root == WebConsoleAuditRoot.StateDirectory
                     ? "ok"

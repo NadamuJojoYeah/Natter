@@ -110,9 +110,13 @@ public sealed class WebConsoleAdminGateway
         _surface = surface ?? throw new ArgumentNullException(nameof(surface));
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
+        Redaction = new WebConsoleRedactionPolicy(surface.Redactor);
     }
 
     public WebConsoleAdminSurface Surface => _surface;
+
+    /// <summary>Redaction policy: host <c>IAdminRedactor</c> when bridged, local rules otherwise (S2-D5).</summary>
+    public WebConsoleRedactionPolicy Redaction { get; }
 
     /// <summary>
     /// Best-effort document list (<c>ListAsync</c> is an optional host capability). A missing or
@@ -173,7 +177,7 @@ public sealed class WebConsoleAdminGateway
                                AdminConfigDocumentSource.Missing,
                                AdminConfigDocumentPolicy.ReloadHintFor(id));
 
-            var safeContent = WebConsoleRedaction.RedactSecrets(document.Content);
+            var safeContent = Redaction.Redact(document.Content);
             var redacted = !string.Equals(safeContent, document.Content, StringComparison.Ordinal);
 
             return WebConsoleAdminResult<WebConsoleAdminDocument>.Success(new WebConsoleAdminDocument(
@@ -416,7 +420,7 @@ public sealed class WebConsoleAdminGateway
             result.Args,
             result.Executed,
             result.Code,
-            WebConsoleRedaction.SanitizeText(result.Message, 300),
+            Redaction.SanitizeText(result.Message, 300),
             result.ExitCode,
             output.Stdout,
             output.Stderr,
@@ -461,7 +465,7 @@ public sealed class WebConsoleAdminGateway
                     entry.Timestamp,
                     entry.Level,
                     entry.Category,
-                    WebConsoleRedaction.SanitizeText(entry.Message, 400)))
+                    Redaction.SanitizeText(entry.Message, 400)))
                 .ToArray();
 
             return WebConsoleSection<IReadOnlyList<WebConsoleLogEntry>>.Ok(mapped, _clock.GetUtcNow());
@@ -566,14 +570,14 @@ public sealed class WebConsoleAdminGateway
         }
     }
 
-    private static IReadOnlyList<WebConsoleAdminIssue> MapIssues(IReadOnlyList<AdminConfigIssue>? issues)
+    private IReadOnlyList<WebConsoleAdminIssue> MapIssues(IReadOnlyList<AdminConfigIssue>? issues)
         => issues is null
             ? []
             : issues
                 .Select(issue => new WebConsoleAdminIssue(
                     issue.Pointer,
                     issue.Code,
-                    WebConsoleRedaction.SanitizeText(issue.Message, 300)))
+                    Redaction.SanitizeText(issue.Message, 300)))
                 .ToArray();
 
     /// <summary>
@@ -581,7 +585,7 @@ public sealed class WebConsoleAdminGateway
     /// config text. Every line is redacted before it can leave the process (S1-04); the counters only
     /// carry numbers and stay as-is.
     /// </summary>
-    private static WebConsoleAdminDiffView? MapDiff(AdminConfigDiff? diff)
+    private WebConsoleAdminDiffView? MapDiff(AdminConfigDiff? diff)
         => diff is null
             ? null
             : new WebConsoleAdminDiffView(
@@ -592,7 +596,7 @@ public sealed class WebConsoleAdminGateway
                 diff.Lines.Select(RedactDiffLine).ToArray());
 
     /// <summary>Redacts one diff line, keeping the <c>" "</c>/<c>"-"</c>/<c>"+"</c> prefix readable.</summary>
-    private static string RedactDiffLine(string? line)
+    private string RedactDiffLine(string? line)
     {
         if (string.IsNullOrEmpty(line))
             return line ?? string.Empty;
@@ -600,13 +604,13 @@ public sealed class WebConsoleAdminGateway
         var prefix = line[0] is ' ' or '-' or '+' ? line[..1] : string.Empty;
         var body = prefix.Length == 0 ? line : line[1..];
 
-        var redacted = WebConsoleRedaction.RedactSecrets(body);
+        var redacted = Redaction.Redact(body);
         return prefix + redacted;
     }
 
-    private static string Describe(Exception exception)
+    private string Describe(Exception exception)
     {
-        var message = WebConsoleRedaction.SanitizeText(exception.Message, 300);
+        var message = Redaction.SanitizeText(exception.Message, 300);
         return string.IsNullOrWhiteSpace(message)
             ? $"Host admin call failed ({exception.GetType().Name})."
             : $"Host admin call failed ({exception.GetType().Name}): {message}";
