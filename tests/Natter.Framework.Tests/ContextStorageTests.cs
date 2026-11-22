@@ -45,7 +45,7 @@ public sealed class ContextStorageTests
     }
 
     [Fact]
-    public async Task Schema_user_version_is_migrated_to_three()
+    public async Task Schema_user_version_matches_the_single_migration_owner()
     {
         using var temp = new TempDirectory();
         var db = Path.Combine(temp.Path, "natter.db");
@@ -54,7 +54,7 @@ public sealed class ContextStorageTests
         connection.Open();
         using var command = connection.CreateCommand();
         command.CommandText = "PRAGMA user_version;";
-        Assert.Equal(3, Convert.ToInt32(command.ExecuteScalar()));
+        Assert.Equal(Natter.Infrastructure.Chat.SqliteSchema.CurrentVersion, Convert.ToInt32(command.ExecuteScalar()));
     }
 
     [Fact]

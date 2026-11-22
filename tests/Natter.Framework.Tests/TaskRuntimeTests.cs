@@ -188,10 +188,19 @@ public sealed class TaskRuntimeTests
         await Task.Delay(5);
 
         var lifecycle = new TaskRecoveryLifecycle(store, dispatcher);
-        await lifecycle.StartAsync(new Microsoft.Extensions.DependencyInjection.ServiceCollection().BuildServiceProvider());
+        var services = new Microsoft.Extensions.DependencyInjection.ServiceCollection().BuildServiceProvider();
+        await lifecycle.StartAsync(services);
+
+        // S2-B7: recovery waits for the transport in the background, so the first enqueue is
+        // asynchronous; wait for it instead of asserting immediately.
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(10);
+        while (DateTimeOffset.UtcNow < deadline && dispatcher.Enqueued.Count == 0)
+            await Task.Delay(20);
+
         Assert.Single(dispatcher.Enqueued);
         Assert.Equal(pending.TaskId, dispatcher.Enqueued[0].TaskId);
         Assert.Equal(AgentTaskStatus.Expired, (await store.GetAsync(running.TaskId))!.Status);
+        await lifecycle.StopAsync(services);
     }
 
     [Fact]
