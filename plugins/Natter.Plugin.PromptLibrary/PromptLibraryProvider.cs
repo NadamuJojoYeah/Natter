@@ -15,24 +15,31 @@ public sealed class PromptLibraryProvider : IPromptProvider
 
     private readonly PromptLibraryRuntime _runtime;
     private readonly PromptComposer _composer = new();
+    private readonly IPromptFragmentSource? _fragmentSource;
 
-    public PromptLibraryProvider(PromptLibraryRuntime runtime)
+    public PromptLibraryProvider(
+        PromptLibraryRuntime runtime,
+        IPromptFragmentSource? fragmentSource = null)
     {
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
+        _fragmentSource = fragmentSource;
     }
 
-    public ValueTask<PromptBundle> GetAsync(PromptRequest request, CancellationToken cancellationToken = default)
+    public async ValueTask<PromptBundle> GetAsync(PromptRequest request, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
         cancellationToken.ThrowIfCancellationRequested();
 
         var library = _runtime.Library;
         if (!library.Enabled)
-            return ValueTask.FromResult(Fallback(request, "disabled"));
+            return Fallback(request, "disabled");
 
         try
         {
             var presetId = FirstNonEmpty(request.Profile.Prompt.Preset, library.ActivePreset);
+            var pluginFragments = await CollectPluginFragmentsAsync(request, presetId, cancellationToken)
+                .ConfigureAwait(false);
+
             var compose = PromptComposeRequest.FromPromptRequest(
                 request,
                 library.Presets,
@@ -45,29 +52,70 @@ public sealed class PromptLibraryProvider : IPromptProvider
             {
                 Locale = request.Locale ?? request.Profile.Prompt.Locale ?? library.Locale,
                 DisabledFragmentIds = Combine(library.DisabledFragments, request.Profile.Prompt.DisabledFragments),
+                PluginFragments = pluginFragments.Fragments,
+                PluginFragmentWarnings = pluginFragments.Warnings,
             };
 
             var plan = _composer.Compose(compose);
             _runtime.Log.Debug(
-                "prompt library composed preset={PresetId} version={PresetVersion} fragments={FragmentCount} disabled={DisabledCount} hash={Hash}",
+                "prompt library composed preset={PresetId} version={PresetVersion} fragments={FragmentCount} pluginFragments={PluginFragmentCount} disabled={DisabledCount} hash={Hash}",
                 plan.PresetId,
                 plan.PresetVersion,
                 plan.Fragments.Count,
+                plan.PluginFragmentCount,
                 plan.Disabled.Count,
                 plan.Hash);
 
-            return ValueTask.FromResult(_composer.ToBundle(plan));
+            return _composer.ToBundle(plan) with
+            {
+                PluginFragmentCount = plan.PluginFragmentCount,
+                PluginFragmentProviderCount = pluginFragments.ProviderCount,
+            };
         }
         catch (PromptCompilationException exception)
         {
             // Code only: the message can name ids but never text/values, and even that stays out.
             _runtime.Log.Error(null, "prompt library composition failed code={Code}; using safe fallback", exception.Code);
-            return ValueTask.FromResult(Fallback(request, exception.Code));
+            return Fallback(request, exception.Code);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             _runtime.Log.Error(null, "prompt library composition failed type={Type}; using safe fallback", exception.GetType().Name);
-            return ValueTask.FromResult(Fallback(request, "unexpected"));
+            return Fallback(request, "unexpected");
+        }
+    }
+
+    /// <summary>
+    /// Optional host integration: when the host does not expose IPromptFragmentSource (older host,
+    /// missing registration) or aggregation fails unexpectedly, the library still compiles without
+    /// plugin fragments. Activation is never failed and no prompt text is logged. Caller
+    /// cancellation is always propagated. The provider deliberately caches nothing, so fragments
+    /// from one composition cannot leak into another.
+    /// </summary>
+    private async ValueTask<PromptFragmentSourceResult> CollectPluginFragmentsAsync(
+        PromptRequest request,
+        string? presetId,
+        CancellationToken cancellationToken)
+    {
+        if (_fragmentSource is null)
+            return PromptFragmentSourceResult.Empty;
+
+        try
+        {
+            return await _fragmentSource.GetFragmentsAsync(
+                PromptFragmentContexts.FromPromptRequest(request, presetId),
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            _runtime.Log.Debug(
+                "prompt library fragment aggregation failed code={Code}; continuing without plugin fragments",
+                PromptCompilerCodes.FragmentFailed);
+            return PromptFragmentSourceResult.Empty;
         }
     }
 
