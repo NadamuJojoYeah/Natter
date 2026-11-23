@@ -211,11 +211,26 @@ if [[ $RESTART -eq 1 ]]; then
 import json,sys
 d=json.load(sys.stdin)
 p=d.get("plugins") or {}
-print("  status=", d.get("status"), "uptime=", d.get("uptimeSeconds"), "plugins=", p.get("activated"), "/", p.get("failed"), "failed")
+status=(d.get("status") or "unknown")
+print("  status=", status, "uptime=", d.get("uptimeSeconds"), "plugins=", p.get("activated"), "/", p.get("failed"), "failed")
 for u in d.get("upstreams") or []:
     print("  upstream", u.get("source"), "connected=", u.get("connected"))
-sys.exit(0 if d.get("status") == "healthy" else 1)
-' || die "health check not healthy after restart" 6
+
+# Four states (see RuntimeHealth): healthy / plugins-failed / degraded / unknown.
+# - degraded  : core capability impaired (upstream down, Tier 1 provider unavailable) -> fail, roll back.
+# - unknown   : no upstream configured -> cannot judge liveness -> fail loudly.
+# - plugins-failed: host and upstreams are fine, but at least one plugin failed to load. This is the
+#   EXPECTED state right after installing plugins that still need config/secrets, so failing here
+#   would make the gate useless (every fresh install would "fail"). Warn, do not fail.
+if status not in ("healthy", "plugins-failed"):
+    print("  ERROR: status=", status, "-> core capability is impaired", file=sys.stderr)
+    sys.exit(1)
+if status == "plugins-failed":
+    ids=[f.get("id") for f in (p.get("failures") or [])]
+    print("  WARNING: plugins failed to load (configuration/secrets?):", ", ".join(x for x in ids if x))
+    print("           core service is up; fix the plugins above or remove them from the release.")
+sys.exit(0)
+' || die "health check failed after restart (status=degraded/unknown)" 6
     fi
   fi
 else

@@ -138,7 +138,10 @@ def summarise(
     interval: int,
     max_gap: int,
     max_error_percent: float = 5.0,
-    allow_status: tuple[str, ...] = ("healthy",),
+    # `plugins-failed` is allowed by default: it means a plugin is unconfigured, not that the runtime
+    # is unstable. Soak measures uptime/send-failure behaviour, so plugin config gaps must not
+    # invalidate every sample. Use --allow-status healthy to require a fully configured host.
+    allow_status: tuple[str, ...] = ("healthy", "plugins-failed"),
 ) -> dict:
     samples = audit.samples
     timeline = samples  # every timestamp, healthy or not
@@ -613,7 +616,10 @@ def summarise_cumulative(
     max_unexplained_percent: float,
     max_rss_drift_percent: float,
     max_error_percent: float = 5.0,
-    allow_status: tuple[str, ...] = ("healthy",),
+    # `plugins-failed` is allowed by default: it means a plugin is unconfigured, not that the runtime
+    # is unstable. Soak measures uptime/send-failure behaviour, so plugin config gaps must not
+    # invalidate every sample. Use --allow-status healthy to require a fully configured host.
+    allow_status: tuple[str, ...] = ("healthy", "plugins-failed"),
 ) -> dict:
     """Effective-runtime report: segments, gap attribution, RSS drift, verdict."""
     timeline = audit.samples

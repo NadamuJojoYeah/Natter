@@ -108,6 +108,42 @@ public sealed class CliOpsHardeningTests : IDisposable
         Assert.Equal(CliHealthExitCodes.Degraded, exitCode);
     }
 
+    // ------------------------------------------------------------------ plugins-failed
+    [Theory]
+    // no upstream configured -> nothing to judge
+    [InlineData(0, false, false, 0, "unknown")]
+    [InlineData(0, false, false, 3, "unknown")]
+    // core healthy, no failed plugins
+    [InlineData(1, false, false, 0, "healthy")]
+    [InlineData(2, false, false, 0, "healthy")]
+    // a plugin failed to load, but the host still serves -> distinct from degraded
+    [InlineData(1, false, false, 1, "plugins-failed")]
+    [InlineData(2, false, false, 4, "plugins-failed")]
+    // core capability impaired always wins over plugin failures
+    [InlineData(1, true, false, 1, "degraded")]
+    [InlineData(1, false, true, 1, "degraded")]
+    [InlineData(2, true, true, 0, "degraded")]
+    public void Health_status_separates_plugin_failures_from_core_degradation(
+        int upstreamCount,
+        bool anyDisconnected,
+        bool tier1Unavailable,
+        int failedPlugins,
+        string expected)
+    {
+        Assert.Equal(
+            expected,
+            RuntimeHealth.Classify(upstreamCount, anyDisconnected, tier1Unavailable, failedPlugins));
+    }
+
+    [Fact]
+    public void Plugins_failed_has_its_own_exit_code_so_it_is_not_silently_success()
+    {
+        // Distinct from Degraded (4) and from Success (0): automation can tell "unconfigured plugin"
+        // apart from "core is down" without treating the former as an outage.
+        Assert.NotEqual(CliExitCodes.Success, CliHealthExitCodes.PluginsFailed);
+        Assert.NotEqual(CliHealthExitCodes.Degraded, CliHealthExitCodes.PluginsFailed);
+    }
+
     // ------------------------------------------------------------------ S2-E4
     [Fact]
     public async Task Global_option_without_a_value_is_a_usage_error()

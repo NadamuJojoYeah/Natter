@@ -8,8 +8,15 @@ namespace Natter.Cli.Core.Commands;
 /// <summary>Exit codes specific to health probes (S2-E3: automation must not read degraded as OK).</summary>
 public static class CliHealthExitCodes
 {
-    /// <summary>Snapshot is `degraded` (or plugins failed): the host answers, but is not healthy.</summary>
+    /// <summary>Snapshot is `degraded`: core capability is impaired (upstream down / Tier 1 provider
+    /// unavailable). Automation must treat this as a failure.</summary>
     public const int Degraded = 4;
+
+    /// <summary>Snapshot is `plugins-failed`: the host and its upstreams work, but at least one plugin
+    /// failed to load (typically still unconfigured). Distinct from <see cref="Degraded"/> so callers
+    /// can warn without treating a freshly installed plugin as an outage; exit 0 would hide it
+    /// entirely, so a dedicated code is used instead.</summary>
+    public const int PluginsFailed = 5;
 }
 
 /// <summary>Single health snapshot builder shared by `natter health` and `/health`.</summary>
@@ -21,6 +28,36 @@ public static class RuntimeHealth
 
     public static string Sanitize(string message)
         => string.IsNullOrEmpty(message) ? message : SecretPattern.Replace(message, "[redacted]");
+
+    /// <summary>
+    /// Maps the raw facts onto one of four health states. Kept pure so every combination is testable
+    /// without standing up a host.
+    /// </summary>
+    /// <remarks>
+    /// Four states, because collapsing them hides which action is needed:
+    /// <list type="bullet">
+    /// <item><c>unknown</c>: no upstream is configured at all, so there is nothing to judge.</item>
+    /// <item><c>degraded</c>: core capability is impaired — an upstream dropped or a Tier 1 provider
+    /// is unavailable. Users cannot be served properly.</item>
+    /// <item><c>plugins-failed</c>: core capability is fine, but at least one plugin failed to load.
+    /// This is the expected state right after installing plugins that still need config or secrets,
+    /// so it must stay distinguishable from a real outage.</item>
+    /// <item><c>healthy</c>: everything works.</item>
+    /// </list>
+    /// Precedence: <c>degraded</c> outranks <c>plugins-failed</c> (core beats periphery).
+    /// </remarks>
+    public static string Classify(
+        int upstreamCount,
+        bool anyUpstreamDisconnected,
+        bool tier1ProviderUnavailable,
+        int failedPluginCount)
+    {
+        if (upstreamCount == 0)
+            return "unknown";
+        if (anyUpstreamDisconnected || tier1ProviderUnavailable)
+            return "degraded";
+        return failedPluginCount > 0 ? "plugins-failed" : "healthy";
+    }
 
     public static async ValueTask<RuntimeHealthSnapshot> CreateAsync(
         IChatUpstreamRegistry upstreams,
@@ -81,13 +118,11 @@ public static class RuntimeHealth
         var anyPluginActivated = plugins.Plugins.Any(plugin => plugin.State == PluginState.Activated);
         var tier1Unavailable = anyPluginActivated
                                && providers.Any(provider => provider.SupportTier == 1 && !provider.Available);
-        var status = upstreamSnapshots.Length == 0
-            ? "unknown"
-            : upstreamSnapshots.Any(upstream => !upstream.Connected)
-                || tier1Unavailable
-                || failedPlugins.Length > 0
-                ? "degraded"
-                : "healthy";
+        var status = Classify(
+            upstreamSnapshots.Length,
+            upstreamSnapshots.Any(upstream => !upstream.Connected),
+            tier1Unavailable,
+            failedPlugins.Length);
 
         var sampledAt = DateTimeOffset.UtcNow;
         return new RuntimeHealthSnapshot(

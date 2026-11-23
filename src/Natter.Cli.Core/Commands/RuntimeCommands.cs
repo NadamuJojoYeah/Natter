@@ -172,9 +172,19 @@ public sealed class HealthCommand(
         return ExitCodeFor(snapshot);
     }
 
-    /// <summary>S2-E3: `degraded` must not exit 0, otherwise CI/automation reads it as healthy.</summary>
+    /// <summary>
+    /// S2-E3: `degraded` must not exit 0, otherwise CI/automation reads it as healthy.
+    /// `plugins-failed` gets its own code: the host serves fine, but silently returning 0 would hide
+    /// a plugin that never activated. Callers that only care about outages can compare with
+    /// <see cref="CliHealthExitCodes.Degraded"/>.
+    /// </summary>
     private static int ExitCodeFor(RuntimeHealthSnapshot snapshot)
-        => string.Equals(snapshot.Status, "degraded", StringComparison.OrdinalIgnoreCase)
-            ? CliHealthExitCodes.Degraded
-            : CliExitCodes.Success;
+        => snapshot.Status switch
+        {
+            var status when string.Equals(status, "degraded", StringComparison.OrdinalIgnoreCase)
+                => CliHealthExitCodes.Degraded,
+            var status when string.Equals(status, "plugins-failed", StringComparison.OrdinalIgnoreCase)
+                => CliHealthExitCodes.PluginsFailed,
+            _ => CliExitCodes.Success,
+        };
 }
