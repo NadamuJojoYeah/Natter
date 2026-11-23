@@ -63,27 +63,27 @@ public sealed class WebConsoleServerStatusHolder
 public sealed class WebConsoleStaticAssets
 {
     private const string HtmlContentType = "text/html; charset=utf-8";
-    private const string JavaScriptContentType = "text/javascript; charset=utf-8";
-    private const string CssContentType = "text/css; charset=utf-8";
 
-    private static readonly (string Route, string File, string ContentType)[] KnownAssets =
-    [
-        ("/", "index.html", HtmlContentType),
-        ("/app.js", "app.js", JavaScriptContentType),
-        ("/app.css", "app.css", CssContentType),
-    ];
+    /// <summary>Long-lived cache for content-hashed build output; the hash changes when bytes change.</summary>
+    public const string ImmutableCacheControl = "public, max-age=31536000, immutable";
+
+    /// <summary><c>index.html</c> must never be cached: it is what points at the current hashed assets.</summary>
+    public const string NoStoreCacheControl = "no-store";
 
     private readonly Dictionary<string, WebConsoleHttpResponse> _assets = new(StringComparer.Ordinal);
 
-    private WebConsoleStaticAssets(string root, IReadOnlyList<string> files)
+    private WebConsoleStaticAssets(string root, WebConsoleHttpResponse index)
     {
         Root = root;
-        Files = files;
+        Index = index;
     }
 
     public string Root { get; }
 
-    public IReadOnlyList<string> Files { get; }
+    /// <summary>The SPA document served for `/` and for every unknown client-side route.</summary>
+    public WebConsoleHttpResponse Index { get; }
+
+    public IReadOnlyList<string> Files => _assets.Keys.OrderBy(route => route, StringComparer.Ordinal).ToArray();
 
     public static WebConsoleStaticAssets Load(string root)
     {
@@ -91,75 +91,114 @@ public sealed class WebConsoleStaticAssets
         {
             throw new WebConsoleStartupException(
                 "webconsole.static-assets-missing",
-                $"WebConsole static assets directory was not found: '{root}'. Re-stage the plugin package including wwwroot/.");
+                $"WebConsole static assets directory was not found: '{root}'. Run the UI build "
+                + "(npm run build in ui/) or stage a plugin package that includes wwwroot/.");
         }
 
-        var missing = KnownAssets
-            .Select(asset => asset.File)
-            .Where(file => !File.Exists(Path.Combine(root, file)))
-            .ToArray();
-
-        if (missing.Length > 0)
+        var indexPath = Path.Combine(root, "index.html");
+        if (!File.Exists(indexPath))
         {
             throw new WebConsoleStartupException(
                 "webconsole.static-assets-missing",
-                $"WebConsole static assets are incomplete under '{root}': missing {string.Join(", ", missing)}.");
+                $"WebConsole build output is incomplete under '{root}': missing index.html. "
+                + "Run the UI build (npm run build in ui/) before packaging the plugin.");
         }
 
-        var assets = KnownAssets
-            .Select(asset => (asset.Route, asset.ContentType, Path.Combine(root, asset.File)))
-            .ToList();
-
-        // Native ES modules are served straight from wwwroot (zero build step, UI-DIRECTION §4).
-        // Only files that physically live under root are exposed; the route is derived from the
-        // relative path, so nothing outside the asset directory can be reached.
         var rootFull = Path.GetFullPath(root) + Path.DirectorySeparatorChar;
+        var result = new WebConsoleStaticAssets(root, BuildResponse("/index.html", indexPath, index: true));
+
+        // `/` and `/index.html` stay addressable as assets (existing callers and health checks use
+        // them); every other client-side route goes through TryGetSpaDocument.
+        result._assets["/"] = result.Index;
+        result._assets["/index.html"] = result.Index;
+
         foreach (var file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
         {
             var full = Path.GetFullPath(file);
+
+            // Traversal is impossible by construction: only files physically under root are reachable.
             if (!full.StartsWith(rootFull, StringComparison.Ordinal))
-                continue;
-
-            var contentType = Path.GetExtension(full).ToLowerInvariant() switch
-            {
-                ".js" => JavaScriptContentType,
-                ".css" => CssContentType,
-                _ => null,
-            };
-
-            if (contentType is null)
                 continue;
 
             var relative = Path.GetRelativePath(root, full).Replace(Path.DirectorySeparatorChar, '/');
             var route = "/" + relative;
-            if (assets.Any(asset => string.Equals(asset.Route, route, StringComparison.Ordinal)))
+            if (string.Equals(relative, "index.html", StringComparison.Ordinal))
                 continue;
 
-            assets.Add((route, contentType, full));
+            result._assets[route] = BuildResponse(route, full, index: false);
         }
-
-        var loaded = assets
-            .Select(asset =>
-            {
-                var bytes = File.ReadAllBytes(asset.Item3);
-                var response = new WebConsoleHttpResponse(
-                    200,
-                    asset.ContentType,
-                    bytes,
-                    new Dictionary<string, string>());
-                return (asset.Route, Response: response);
-            })
-            .ToArray();
-
-        var result = new WebConsoleStaticAssets(root, loaded.Select(asset => asset.Route).ToArray());
-        foreach (var asset in loaded)
-            result._assets[asset.Route] = asset.Response;
 
         return result;
     }
 
     public bool TryGet(string path, out WebConsoleHttpResponse response)
         => _assets.TryGetValue(path, out response!);
+
+    /// <summary>
+    /// SPA routing: a non-API GET that does not match a build artifact falls back to index.html.
+    /// Anything that looks like a file request (has an extension) still 404s, so a missing asset is
+    /// visible instead of silently returning HTML with the wrong content type.
+    /// </summary>
+    public bool TryGetSpaDocument(string path, out WebConsoleHttpResponse response)
+    {
+        response = Index;
+
+        if (path.Contains('\\', StringComparison.Ordinal))
+            return false;
+
+        var lastSegment = path.AsSpan(path.LastIndexOf('/') + 1);
+        if (lastSegment.IsEmpty)
+            return true;
+
+        // A dot in the last segment means "asset", not "client route".
+        return lastSegment.IndexOf('.') < 0;
+    }
+
+    private static WebConsoleHttpResponse BuildResponse(string route, string file, bool index)
+    {
+        var contentType = ContentTypeFor(file);
+        var headers = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["Cache-Control"] = index ? NoStoreCacheControl : ImmutableCacheControl,
+        };
+
+        if (index)
+            headers["X-Content-Type-Options"] = "nosniff";
+
+        if (route.StartsWith("/assets/", StringComparison.Ordinal))
+            headers["X-Content-Type-Options"] = "nosniff";
+
+        return new WebConsoleHttpResponse(200, contentType, File.ReadAllBytes(file), headers);
+    }
+
+    /// <summary>
+    /// MIME map for build output. A wrong type is fatal for ES modules (`text/javascript`) and for
+    /// fonts (the browser silently drops a mismatched <c>font/woff2</c>).
+    /// </summary>
+    public static string ContentTypeFor(string file)
+    {
+        var extension = Path.GetExtension(file).ToLowerInvariant();
+        return extension switch
+        {
+            ".html" => "text/html; charset=utf-8",
+            ".js" or ".mjs" => "text/javascript; charset=utf-8",
+            ".css" => "text/css; charset=utf-8",
+            ".json" => "application/json; charset=utf-8",
+            ".map" => "application/json; charset=utf-8",
+            ".svg" => "image/svg+xml",
+            ".png" => "image/png",
+            ".jpg" or ".jpeg" => "image/jpeg",
+            ".gif" => "image/gif",
+            ".webp" => "image/webp",
+            ".ico" => "image/x-icon",
+            ".woff2" => "font/woff2",
+            ".woff" => "font/woff",
+            ".ttf" => "font/ttf",
+            ".txt" => "text/plain; charset=utf-8",
+            ".wasm" => "application/wasm",
+            _ => "application/octet-stream",
+        };
+    }
 }
 
 /// <summary>Raised on startup failures that must mark the plugin Failed with a stable code.</summary>

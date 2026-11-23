@@ -59,7 +59,7 @@ public sealed class ConfigPhase2HttpTests
         var login = await harness.LoginAsync();
 
         var response = await harness.Handler.HandleAsync(harness.Request(
-            "GET", "/api/config/plugin:natter.plugin.webconsole", cookie: login.Cookie));
+            "GET", "/api/config/plugin:natter.tool.admin.webconsole", cookie: login.Cookie));
 
         Assert.Equal(200, response.StatusCode);
         var json = Json(response);
@@ -157,7 +157,7 @@ public sealed class ConfigPhase2HttpTests
 
         var withEtag = await harness.Handler.HandleAsync(harness.Request(
             "POST",
-            "/api/config/plugin:natter.plugin.webconsole",
+            "/api/config/plugin:natter.tool.admin.webconsole",
             body: Body("{\"readOnly\":true}", "sha256:0000000000000000000000000000000000000000000000000000000000000000"),
             cookie: login.Cookie,
             csrf: login.Csrf));
@@ -165,7 +165,7 @@ public sealed class ConfigPhase2HttpTests
 
         var created = await harness.Handler.HandleAsync(harness.Request(
             "POST",
-            "/api/config/plugin:natter.plugin.webconsole",
+            "/api/config/plugin:natter.tool.admin.webconsole",
             body: Body("{\"readOnly\":true}", null),
             cookie: login.Cookie,
             csrf: login.Csrf));
@@ -173,7 +173,7 @@ public sealed class ConfigPhase2HttpTests
         Assert.Equal(200, created.StatusCode);
         Assert.True(Json(created).GetProperty("saved").GetBoolean());
         Assert.Equal("restart-plugin", Json(created).GetProperty("reloadHint").GetString());
-        Assert.Equal("{\"readOnly\":true}", store.ContentOf("plugin:natter.plugin.webconsole"));
+        Assert.Equal("{\"readOnly\":true}", store.ContentOf("plugin:natter.tool.admin.webconsole"));
     }
 
     [Fact]

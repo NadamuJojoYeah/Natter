@@ -804,3 +804,59 @@ dotnet run --project src/Natter.Cli -- satori status --features message.update
 ./scripts/publish.sh linux-x64
 ./scripts/publish-android.sh
 ```
+
+## 前端构建（WebConsole / Conversation Console）
+
+两个控制台的前端源码在 `ui/`，**构建产物不入库**：`plugins/*/wwwroot/` 是 Vite 输出目录，
+`.gitignore` 已忽略 `ui/node_modules/`、`ui/dist/`、`plugins/*/wwwroot/`。
+
+```text
+ui/                     React 19 + TypeScript + Vite + Ant Design + ECharts
+├── package.json        npm ci 可复现
+├── package-lock.json   必须提交
+├── vite.config.ts      `--mode webconsole|conversation` 选中入口与 outDir
+├── webconsole-app/     入口 HTML（emit 为 wwwroot/index.html）
+├── conversation-app/   入口 HTML
+└── src/
+    ├── shared/         api 客户端、三态组件、格式化（两个入口共用）
+    ├── webconsole/     运维面（admin.* 权限域）
+    ├── conversation/   会话面（只有 chat.read）
+    └── legacy/         重写前的手写实现，仅作移植对照，不参与构建
+```
+
+### 环境要求
+
+- Node.js **≥ 20.19**（`ui/package.json` 的 `engines` 与 Vite 7 要求）；
+- npm 可访问 registry（`npm ci` 首次约 260 MB `node_modules`）；
+- 网络不可用又没有 `node_modules` 时，插件构建会失败并提示——这是有意的：没有 UI 的插件包是坏包。
+
+```bash
+cd ui
+npm ci
+npm run build          # 两个入口都构建（约 6 秒）
+npm run build:webconsole
+npm run typecheck
+```
+
+### 与 .NET 构建的集成
+
+两个 UI 插件的 `.csproj` 里有 `BuildWebUi` / `BuildConversationWebUi` target：
+`BeforeTargets="PrepareForBuild;AssignTargetPaths"` 跑 `npm ci`（首次）+ `npm run build:<target>`，
+因此 **`dotnet build` / `dotnet publish` 单独就能产出完整插件**（含 `wwwroot/index.html` 与 hashed assets）。
+target 带 `Inputs/Outputs` 增量判断，`ui/src/**` 没变时不会重复跑 npm。
+
+纯后端开发可以跳过：
+
+```bash
+dotnet build plugins/Natter.Plugin.WebConsole/Natter.Plugin.WebConsole.csproj -p:SkipUiBuild=true
+```
+
+**跳过有风险**：构建会打醒目 warning，产物不含 UI。`dotnet publish` 出来的包如果缺
+`wwwroot/index.html` 或 `wwwroot/assets/*.js`，`deploy/update-release.sh` 的部署闸门会以 `die 6`
+拒绝发布——所以跳过构建的包不会静默流到生产。
+
+### CSP 与同源约束
+
+打包产物必须全部同源：CSP 仍是 `default-src 'none'; script-src 'self'; …`，没有 `unsafe-eval`、
+没有 CDN。`UiBuildIntegrationTests` 会对构建产物做断言（hashed entry、无外部 module import、无
+`eval(`、no inline script）。

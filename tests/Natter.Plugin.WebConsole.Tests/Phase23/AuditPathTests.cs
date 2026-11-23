@@ -58,7 +58,7 @@ public sealed class AuditPathTests
     [Fact]
     public void Container_layout_is_supported()
     {
-        var location = WebConsoleAuditPaths.Resolve("/opt/natter/plugins/natter.plugin.webconsole", "/state");
+        var location = WebConsoleAuditPaths.Resolve("/opt/natter/plugins/natter.tool.admin.webconsole", "/state");
 
         Assert.Equal(Path.Combine("/state", "webconsole", "audit"), location.Directory);
         Assert.Equal(WebConsoleAuditRoot.StateDirectory, location.Root);

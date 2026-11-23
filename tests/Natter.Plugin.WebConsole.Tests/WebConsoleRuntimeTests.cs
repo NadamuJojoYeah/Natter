@@ -24,7 +24,7 @@ public sealed class WebConsoleRuntimeTests
         {
             var options = new WebConsoleOptions { Port = port };
             var identity = new WebConsoleIdentity(
-                "natter.plugin.webconsole",
+                "natter.tool.admin.webconsole",
                 "Natter WebConsole",
                 "0.1.0",
                 "tool",
@@ -80,7 +80,7 @@ public sealed class WebConsoleRuntimeTests
         {
             var options = new WebConsoleOptions { Port = port };
             var identity = new WebConsoleIdentity(
-                "natter.plugin.webconsole",
+                "natter.tool.admin.webconsole",
                 "Natter WebConsole",
                 "0.1.0",
                 "tool",
@@ -229,7 +229,7 @@ public sealed class WebConsoleRuntimeTests
     }
 
     private static WebConsoleIdentity Identity(string directory) => new(
-        "natter.plugin.webconsole",
+        "natter.tool.admin.webconsole",
         "Natter WebConsole",
         "0.1.0",
         "tool",

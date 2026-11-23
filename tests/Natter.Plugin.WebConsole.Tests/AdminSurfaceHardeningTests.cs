@@ -459,7 +459,7 @@ public sealed class AdminSurfaceHardeningTests
         var options = new WebConsoleOptions { Port = 5090 };
         var runtime = new WebConsoleRuntime(
             new WebConsoleIdentity(
-                "natter.plugin.webconsole",
+                "natter.tool.admin.webconsole",
                 "WebConsole",
                 "0.1.0",
                 "tool",

@@ -102,7 +102,7 @@ public sealed class WebConsoleRequestHandlerTests
 
         Assert.Equal(200, response.StatusCode);
         var json = LoginResult.Json(response);
-        Assert.Equal("natter.plugin.webconsole", json.GetProperty("self").GetProperty("pluginId").GetString());
+        Assert.Equal("natter.tool.admin.webconsole", json.GetProperty("self").GetProperty("pluginId").GetString());
         Assert.False(json.GetProperty("health").GetProperty("available").GetBoolean());
         Assert.Equal("host.plugin_diagnostics.unavailable",
             json.GetProperty("plugins").GetProperty("gapCode").GetString());
@@ -153,7 +153,7 @@ public sealed class WebConsoleRequestHandlerTests
         var writableLogin = await writable.LoginAsync();
         var gap = await writable.Handler.HandleAsync(writable.Request(
             "POST",
-            "/api/config/plugin:natter.plugin.webconsole",
+            "/api/config/plugin:natter.tool.admin.webconsole",
             body: JsonSerializer.Serialize(new { content = "{}" }),
             cookie: writableLogin.Cookie,
             csrf: writableLogin.Csrf));

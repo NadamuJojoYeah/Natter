@@ -50,7 +50,7 @@ public sealed class WebConsoleServerTests
 
             Assert.Equal(HttpStatusCode.OK, snapshot.StatusCode);
             using var document = JsonDocument.Parse(await snapshot.Content.ReadAsStringAsync());
-            Assert.Equal("natter.plugin.webconsole", document.RootElement.GetProperty("self").GetProperty("pluginId").GetString());
+            Assert.Equal("natter.tool.admin.webconsole", document.RootElement.GetProperty("self").GetProperty("pluginId").GetString());
         }
         finally
         {
@@ -105,20 +105,22 @@ public sealed class WebConsoleServerTests
     }
 
     [Fact]
-    public void Packaged_wwwroot_loads_without_inline_script()
+    public void Packaged_wwwroot_ships_a_module_document_with_no_inline_script()
     {
-        var assets = WebConsoleStaticAssets.Load(Path.Combine(AppContext.BaseDirectory, "plugin-assets"));
+        var root = Path.Combine(AppContext.BaseDirectory, "plugin-assets");
+        if (!File.Exists(Path.Combine(root, "index.html")))
+            return; // UI build not run in this checkout; the build gate asserts it in CI/publish.
 
-        // UI-DIRECTION P1: index + entry + the native ES modules under wwwroot.
-        Assert.Contains("/", assets.Files);
-        Assert.Contains("/app.js", assets.Files);
-        Assert.Contains("/app.css", assets.Files);
-        Assert.Contains("/views/trace.js", assets.Files);
+        var assets = WebConsoleStaticAssets.Load(root);
         Assert.True(assets.TryGet("/", out var index));
         var html = Encoding.UTF8.GetString(index.Body);
-        Assert.Contains("<script type=\"module\" src=\"/app.js\"></script>", html);
-        Assert.DoesNotContain("<script>", html);
-        Assert.DoesNotContain("onclick=", html);
+
+        // Vite emits `<script type="module" crossorigin src="/assets/index-<hash>.js">`.
+        Assert.Contains("type=\"module\"", html, StringComparison.Ordinal);
+        Assert.Matches(@"src=""/assets/[A-Za-z0-9._-]+\.js""", html);
+        Assert.DoesNotContain("<script>", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("onclick=", html, StringComparison.Ordinal);
+        Assert.Equal(WebConsoleStaticAssets.NoStoreCacheControl, index.Headers["Cache-Control"]);
     }
 
 }

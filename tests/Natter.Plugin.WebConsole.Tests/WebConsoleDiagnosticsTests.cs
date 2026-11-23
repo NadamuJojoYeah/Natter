@@ -34,7 +34,7 @@ public sealed class WebConsoleDiagnosticsTests
     {
         using var harness = WebConsoleHarness.Create();
         var identity = new WebConsoleIdentity(
-            "natter.plugin.webconsole",
+            "natter.tool.admin.webconsole",
             "Natter WebConsole",
             "0.1.0",
             "tool",

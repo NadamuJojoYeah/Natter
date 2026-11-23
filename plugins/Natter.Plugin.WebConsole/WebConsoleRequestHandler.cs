@@ -148,7 +148,17 @@ public sealed class WebConsoleRequestHandler
             return HandleSession(request, startedAt);
 
         if (!request.Path.StartsWith("/api/", StringComparison.Ordinal))
+        {
+            // SPA: client-side routes fall back to the single document; `/api/*` never does.
+            if ((string.Equals(request.Method, "GET", StringComparison.Ordinal)
+                 || string.Equals(request.Method, "HEAD", StringComparison.Ordinal))
+                && _assets.TryGetSpaDocument(request.Path, out var document))
+            {
+                return document;
+            }
+
             return Error(404, "route.not_found", "Route not found.");
+        }
 
         var session = ResolveSession(request);
         if (session is null)

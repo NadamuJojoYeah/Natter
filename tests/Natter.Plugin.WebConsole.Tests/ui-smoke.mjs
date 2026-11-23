@@ -66,7 +66,7 @@ const document = {
 const snapshot = {
   generatedAt: "2026-11-18T02:30:00Z",
   self: {
-    pluginId: "natter.plugin.webconsole",
+    pluginId: "natter.tool.admin.webconsole",
     name: "Natter WebConsole",
     version: "0.1.0",
     kind: "tool",
@@ -138,8 +138,8 @@ const snapshot = {
           blockedBy: [],
         },
       ],
-      contributions: [{ type: "cli.command", id: "web.status", pluginId: "natter.plugin.webconsole", priority: 0, status: "active" }],
-      permissions: [{ pluginId: "natter.plugin.webconsole", requested: ["network"], granted: ["network"], denied: [] }],
+      contributions: [{ type: "cli.command", id: "web.status", pluginId: "natter.tool.admin.webconsole", priority: 0, status: "active" }],
+      permissions: [{ pluginId: "natter.tool.admin.webconsole", requested: ["network"], granted: ["network"], denied: [] }],
       source: "health-endpoint",
     },
   },
@@ -180,7 +180,7 @@ const snapshot = {
     redacted: ["$.nested.password", "$.nested.apiKey"],
     documents: [
       { id: "profiles", exists: true, eTag: "sha256:aaa", lastModified: "2026-11-18T02:00:00Z", source: "config-directory", writable: true, reloadHint: "restart-host" },
-      { id: "plugin:natter.plugin.webconsole", exists: false, eTag: "sha256:bbb", lastModified: null, source: "missing", writable: true, reloadHint: "restart-plugin" },
+      { id: "plugin:natter.tool.admin.webconsole", exists: false, eTag: "sha256:bbb", lastModified: null, source: "missing", writable: true, reloadHint: "restart-plugin" },
     ],
   },
   admin: {

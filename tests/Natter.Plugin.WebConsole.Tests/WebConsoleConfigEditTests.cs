@@ -76,8 +76,8 @@ public sealed class WebConsoleConfigEditTests
 
     [Theory]
     [InlineData("profiles", true)]
-    [InlineData("plugin:natter.plugin.webconsole", true)]
-    [InlineData("plugin:natter.sample.metrics", true)]
+    [InlineData("plugin:natter.tool.admin.webconsole", true)]
+    [InlineData("plugin:natter.sample.event.metrics", true)]
     [InlineData("plugin:../escape", false)]
     [InlineData("plugin:", false)]
     [InlineData("secrets", false)]

@@ -29,7 +29,7 @@ public sealed class WebConsoleManifestTests
         Assert.Empty(embedded.Errors);
         Assert.Empty(packaged.Errors);
 
-        Assert.Equal("natter.plugin.webconsole", packaged.Manifest!.Id);
+        Assert.Equal("natter.tool.admin.webconsole", packaged.Manifest!.Id);
         Assert.Equal(PluginKind.Tool, packaged.Manifest.Kind);
         Assert.Equal("lib/Natter.Plugin.WebConsole.dll", packaged.Manifest.Entry.Assembly);
         Assert.Equal(typeof(WebConsolePlugin).FullName, packaged.Manifest.Entry.Type);

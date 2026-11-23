@@ -24,7 +24,7 @@ public sealed class AdminContractParityTests
 
     [Theory]
     [InlineData("profiles", true)]
-    [InlineData("plugin:natter.plugin.webconsole", true)]
+    [InlineData("plugin:natter.tool.admin.webconsole", true)]
     [InlineData("plugin:bad id", false)]
     [InlineData("../../etc/passwd", false)]
     [InlineData("plugin:../escape", false)]
@@ -80,7 +80,7 @@ public sealed class AdminContractParityTests
         Assert.Equal(AdminConfigReloadHint.RestartHost, AdminConfigDocumentPolicy.ReloadHintFor("profiles"));
         Assert.Equal(
             AdminConfigReloadHint.RestartPlugin,
-            AdminConfigDocumentPolicy.ReloadHintFor("plugin:natter.plugin.webconsole"));
+            AdminConfigDocumentPolicy.ReloadHintFor("plugin:natter.tool.admin.webconsole"));
     }
 
     [Fact]

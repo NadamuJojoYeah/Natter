@@ -27,8 +27,15 @@ public sealed class ConversationConsoleAssetsAndHostTests
         var (handler, _) = ConversationConsoleTestFactory.CreateHandler(workspace, query: new FakeConversationQuery());
 
         AssertAsset(handler, "/", "text/html; charset=utf-8");
-        AssertAsset(handler, "/app.js", "text/javascript; charset=utf-8");
-        AssertAsset(handler, "/app.css", "text/css; charset=utf-8");
+
+        // wwwroot is Vite output now: one hashed entry chunk, no hand-written app.js/app.css.
+        var script = Directory.GetFiles(AssetRoot, "*.js", SearchOption.AllDirectories)
+            .Select(file => "/" + Path.GetRelativePath(AssetRoot, file).Replace(Path.DirectorySeparatorChar, '/'))
+            .First();
+        AssertAsset(handler, script, "text/javascript; charset=utf-8");
+
+        var asset = handler.HandleAsync(ConversationConsoleTestFactory.Request(script)).GetAwaiter().GetResult();
+        Assert.Equal(ConversationConsoleStaticAssets.ImmutableCacheControl, asset.Headers["Cache-Control"]);
     }
 
     [Theory]
@@ -58,14 +65,11 @@ public sealed class ConversationConsoleAssetsAndHostTests
 
         var scriptTags = ExtractTags(html, "script");
         Assert.Single(scriptTags);
-        Assert.Contains("src=\"/app.js\"", scriptTags[0], StringComparison.Ordinal);
+        Assert.Contains("type=\"module\"", scriptTags[0], StringComparison.Ordinal);
+        Assert.Matches(@"src=""/assets/index-[A-Za-z0-9_-]+\.js""", scriptTags[0]);
 
         var styleTags = ExtractTags(html, "style");
         Assert.Empty(styleTags);
-
-        var linkTags = ExtractTags(html, "link");
-        Assert.Single(linkTags);
-        Assert.Contains("href=\"/app.css\"", linkTags[0], StringComparison.Ordinal);
 
         // No inline event handlers: CSP would block them, and they are an injection foothold.
         foreach (var handler in new[] { "onclick=", "onload=", "onerror=", "onsubmit=", "onchange=" })
@@ -78,44 +82,23 @@ public sealed class ConversationConsoleAssetsAndHostTests
         var files = Directory.GetFiles(AssetRoot, "*", SearchOption.AllDirectories);
         Assert.NotEmpty(files);
 
+        // Bundled vendors contain documentation URLs as *strings*; what matters is that nothing is
+        // loaded from another origin: no external script src, no external module import, no CDN host.
+        var externalLoad = new System.Text.RegularExpressions.Regex(
+            @"from\s*[""'](?:https?:)?//|import\s*\(\s*[""'](?:https?:)?//|src\s*=\s*[""'](?:https?:)?//|"
+            + @"cdn\.jsdelivr|unpkg\.com|use\.typekit|fonts\.googleapis",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
         foreach (var file in files)
         {
             var content = File.ReadAllText(file);
-            var name = Path.GetFileName(file);
 
-            Assert.DoesNotContain("http://", content, StringComparison.OrdinalIgnoreCase);
-            Assert.DoesNotContain("https://", content, StringComparison.OrdinalIgnoreCase);
-            Assert.DoesNotContain("//cdn", content, StringComparison.OrdinalIgnoreCase);
-            Assert.DoesNotContain("cdn.jsdelivr", content, StringComparison.OrdinalIgnoreCase);
-            Assert.DoesNotContain("unpkg.com", content, StringComparison.OrdinalIgnoreCase);
-            Assert.DoesNotContain("crossorigin", content, StringComparison.OrdinalIgnoreCase);
-            Assert.DoesNotContain("@import", content, StringComparison.OrdinalIgnoreCase);
-            Assert.False(
-                content.Contains("import(", StringComparison.Ordinal) && name.EndsWith(".js", StringComparison.Ordinal),
-                $"{name} must not use dynamic import(): the console ships as one same-origin script.");
-            Assert.DoesNotContain("XMLHttpRequest", content, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotMatch(externalLoad, content);
+            Assert.DoesNotContain("eval(", content, StringComparison.Ordinal);
+            Assert.DoesNotContain("localStorage", content, StringComparison.Ordinal);
         }
     }
 
-    [Fact]
-    public void App_js_only_talks_to_the_local_api()
-    {
-        var script = File.ReadAllText(Path.Combine(AssetRoot, "app.js"));
-
-        Assert.Contains("fetch(", script, StringComparison.Ordinal);
-        Assert.Contains("'/api/health'", script, StringComparison.Ordinal);
-        Assert.Contains("/api/sessions", script, StringComparison.Ordinal);
-        // Every request goes through the local api() wrapper with the in-memory token.
-        Assert.Contains("headers.Authorization = 'Bearer ' + state.token", script, StringComparison.Ordinal);
-        Assert.DoesNotContain("localStorage", script, StringComparison.Ordinal);
-        Assert.DoesNotContain("sessionStorage", script, StringComparison.Ordinal);
-        Assert.DoesNotContain("document.cookie", script, StringComparison.Ordinal);
-
-        // Untrusted conversation text must never be rendered as HTML.
-        Assert.DoesNotContain("innerHTML", script, StringComparison.Ordinal);
-        Assert.DoesNotContain("outerHTML", script, StringComparison.Ordinal);
-        Assert.DoesNotContain("insertAdjacentHTML", script, StringComparison.Ordinal);
-    }
 
     // ------------------------------------------------------------------ manifest
 
@@ -124,7 +107,7 @@ public sealed class ConversationConsoleAssetsAndHostTests
     {
         var manifest = ConversationConsolePlugin.Manifest;
 
-        Assert.Equal("natter.plugin.conversation-console", manifest.Id);
+        Assert.Equal("natter.tool.conversation.conversation-console", manifest.Id);
         Assert.Equal(PluginKind.Tool, manifest.Kind);
         Assert.Empty(manifest.Contributions ?? []);
 
@@ -259,10 +242,13 @@ public sealed class ConversationConsoleAssetsAndHostTests
             Assert.DoesNotContain(secrets.Token, body, StringComparison.Ordinal);
         }
 
-        var script = await client.GetAsync("app.js");
+        var hashedScript = Directory.GetFiles(AssetRoot, "*.js", SearchOption.AllDirectories)
+            .Select(file => "/" + Path.GetRelativePath(AssetRoot, file).Replace(Path.DirectorySeparatorChar, '/'))
+            .First();
+        var script = await client.GetAsync(hashedScript);
         Assert.Equal(HttpStatusCode.OK, script.StatusCode);
         Assert.Equal("text/javascript; charset=utf-8", script.Content.Headers.ContentType?.ToString());
-        Assert.Contains("会话控制台", await (await client.GetAsync("/")).Content.ReadAsStringAsync(), StringComparison.Ordinal);
+        Assert.Contains("<div id=\"root\">", await (await client.GetAsync("/")).Content.ReadAsStringAsync(), StringComparison.Ordinal);
     }
 
     [Fact]

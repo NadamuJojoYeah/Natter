@@ -206,7 +206,7 @@ internal sealed class WebConsoleHarness : IDisposable
         Audit = new WebConsoleAuditStore(Path.Combine(directory, "audit"), Clock);
 
         var identity = new WebConsoleIdentity(
-            "natter.plugin.webconsole",
+            "natter.tool.admin.webconsole",
             "Natter WebConsole",
             "0.1.0",
             "tool",

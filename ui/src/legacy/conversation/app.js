@@ -142,7 +142,7 @@
       return {
         kind: 'warn',
         title: '宿主未启用会话查询',
-        body: '插件没有拿到 IConversationQuery：请在 Natter 插件配置中给 natter.plugin.conversation-console 授予 chat.read 后重启宿主。（' + (error.code || '') + '）'
+        body: '插件没有拿到 IConversationQuery：请在 Natter 插件配置中给 natter.tool.conversation.conversation-console 授予 chat.read 后重启宿主。（' + (error.code || '') + '）'
       };
     }
     if (error.status === 503) {

@@ -1,124 +1,13 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="color-scheme" content="light dark">
-<title>Natter · 会话控制台</title>
-<link rel="stylesheet" href="/app.css">
-</head>
-<body>
-<header class="topbar">
-  <div class="brand">
-    <span class="brand-mark">Natter</span>
-    <span class="brand-sub">会话控制台 · 只读回放</span>
-  </div>
-  <div class="badges">
-    <span class="badge badge-ro" id="readonly-badge">readOnly</span>
-    <span class="badge" id="query-badge">chat.read: ?</span>
-  </div>
-</header>
-
-<section class="token-gate" id="token-gate">
-  <form class="token-form" id="token-form" autocomplete="off">
-    <label class="field">
-      <span class="field-label">Console token</span>
-      <input class="field-input" id="token-input" type="password" spellcheck="false"
-             placeholder="CONVERSATION_CONSOLE_TOKEN" autocomplete="off">
-    </label>
-    <button class="btn btn-primary" id="token-submit" type="submit">连接</button>
-    <button class="btn btn-ghost" id="token-forget" type="button" hidden>清除</button>
-  </form>
-  <p class="hint">
-    独立 token（<code>CONVERSATION_CONSOLE_TOKEN</code>），与 WebConsole 的 token 无关。
-    token 只保存在本页内存中，刷新即失效。
-  </p>
-  <p class="hint hint-warn" id="token-message" hidden></p>
-</section>
-
-<main class="layout" id="console" hidden>
-  <aside class="pane pane-list">
-    <form class="filters" id="filters" autocomplete="off">
-      <label class="field">
-        <span class="field-label">source key</span>
-        <input class="field-input" id="filter-source" placeholder="discord:discord:123">
-      </label>
-      <label class="field">
-        <span class="field-label">actor id</span>
-        <input class="field-input" id="filter-actor" placeholder="1234567890">
-      </label>
-      <label class="field">
-        <span class="field-label">内容搜索</span>
-        <input class="field-input" id="filter-query" placeholder="只在本会话内匹配">
-      </label>
-      <div class="filters-row">
-        <label class="field">
-          <span class="field-label">since</span>
-          <input class="field-input" id="filter-since" type="datetime-local">
-        </label>
-        <label class="field">
-          <span class="field-label">until</span>
-          <input class="field-input" id="filter-until" type="datetime-local">
-        </label>
-      </div>
-      <div class="filters-actions">
-        <button class="btn btn-primary" id="filter-apply" type="submit">查询</button>
-        <button class="btn btn-ghost" id="filter-reset" type="button">重置</button>
-      </div>
-    </form>
-
-    <div class="list-meta">
-      <span id="list-count">—</span>
-      <button class="btn btn-small" id="list-refresh" type="button">刷新</button>
-    </div>
-
-    <div class="state" id="list-state" hidden>
-      <p class="state-title" id="list-state-title"></p>
-      <p class="state-body" id="list-state-body"></p>
-    </div>
-
-    <ul class="session-list" id="session-list"></ul>
-
-    <div class="pager">
-      <button class="btn btn-small" id="list-more" type="button" hidden>加载更多会话</button>
-    </div>
-  </aside>
-
-  <section class="pane pane-detail">
-    <div class="detail-empty" id="detail-empty">
-      <p class="state-title">未选择会话</p>
-      <p class="state-body">在左侧选择一个会话查看消息。P1 只读：不能发送、编辑或删除任何内容。</p>
-    </div>
-
-    <article class="detail" id="detail" hidden>
-      <header class="detail-head">
-        <div class="detail-id">
-          <h2 id="detail-source">—</h2>
-          <p class="detail-sub" id="detail-meta">—</p>
-        </div>
-        <button class="btn btn-small" id="message-more" type="button" hidden>加载更多消息</button>
-      </header>
-
-      <div class="state" id="detail-state" hidden>
-        <p class="state-title" id="detail-state-title"></p>
-        <p class="state-body" id="detail-state-body"></p>
-      </div>
-
-      <ol class="message-list" id="message-list"></ol>
-
-      <footer class="detail-foot">
-        <span id="detail-foot-count">—</span>
-        <span id="detail-foot-loaded" hidden>已加载全部消息</span>
-      </footer>
-    </article>
-  </section>
-</main>
-
-<footer class="pagefoot">
-  <span>只读回放 · 数据经宿主 <code>IConversationQuery</code> 端口，插件不接触数据库</span>
-  <span id="build-note">P1 · readOnly</span>
-</footer>
-
-<script src="/app.js" defer></script>
-</body>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Natter Conversation Console</title>
+    <script type="module" crossorigin src="/assets/index-CoINOD46.js"></script>
+    <link rel="modulepreload" crossorigin href="/assets/antd-D9dTAj9O.js">
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
 </html>

@@ -6,29 +6,32 @@ using Natter.Plugin.Abstractions;
 namespace Natter.Plugin.ConversationConsole;
 
 /// <summary>
-/// Static asset whitelist. Only three known files are served, with explicit MIME types; there is no
-/// directory listing and no path mapping from the URL to the filesystem, so traversal is impossible
-/// by construction.
+/// Serves the Vite build output under the plugin's <c>wwwroot</c>. Only files that physically exist
+/// under that directory are reachable (the URL never maps to an arbitrary filesystem path, so
+/// traversal is impossible by construction), and unknown client-side routes fall back to
+/// <c>index.html</c>.
 /// </summary>
 public sealed class ConversationConsoleStaticAssets
 {
-    private const string HtmlContentType = "text/html; charset=utf-8";
-    private const string JavaScriptContentType = "text/javascript; charset=utf-8";
-    private const string CssContentType = "text/css; charset=utf-8";
+    /// <summary>Content-hashed build output can be cached forever; the hash changes with the bytes.</summary>
+    public const string ImmutableCacheControl = "public, max-age=31536000, immutable";
 
-    private static readonly (string Route, string File, string ContentType)[] KnownAssets =
-    [
-        ("/", "index.html", HtmlContentType),
-        ("/app.js", "app.js", JavaScriptContentType),
-        ("/app.css", "app.css", CssContentType),
-    ];
+    /// <summary><c>index.html</c> points at the current hashes and must never be cached.</summary>
+    public const string NoStoreCacheControl = "no-store";
 
     private readonly Dictionary<string, ConversationConsoleHttpResponse> _assets = new(StringComparer.Ordinal);
 
-    private ConversationConsoleStaticAssets(string root)
-        => Root = root;
+    private ConversationConsoleStaticAssets(string root, ConversationConsoleHttpResponse index)
+    {
+        Root = root;
+        Index = index;
+    }
 
     public string Root { get; }
+
+    public ConversationConsoleHttpResponse Index { get; }
+
+    public IReadOnlyList<string> Files => _assets.Keys.OrderBy(route => route, StringComparer.Ordinal).ToArray();
 
     public static ConversationConsoleStaticAssets Load(string root)
     {
@@ -36,29 +39,35 @@ public sealed class ConversationConsoleStaticAssets
         {
             throw new ConversationConsoleStartupException(
                 "conversation-console.static-assets-missing",
-                $"Console assets directory was not found: '{root}'. Re-stage the plugin package including wwwroot/.");
+                $"Console assets directory was not found: '{root}'. Run the UI build (npm run build in ui/) "
+                + "or stage a plugin package that includes wwwroot/.");
         }
 
-        var missing = KnownAssets
-            .Select(asset => asset.File)
-            .Where(file => !File.Exists(Path.Combine(root, file)))
-            .ToArray();
-
-        if (missing.Length > 0)
+        var indexPath = Path.Combine(root, "index.html");
+        if (!File.Exists(indexPath))
         {
             throw new ConversationConsoleStartupException(
                 "conversation-console.static-assets-missing",
-                $"Console assets are incomplete under '{root}': missing {string.Join(", ", missing)}.");
+                $"Console build output is incomplete under '{root}': missing index.html. "
+                + "Run the UI build (npm run build in ui/) before packaging the plugin.");
         }
 
-        var result = new ConversationConsoleStaticAssets(root);
-        foreach (var asset in KnownAssets)
+        var rootFull = Path.GetFullPath(root) + Path.DirectorySeparatorChar;
+        var result = new ConversationConsoleStaticAssets(root, BuildResponse(indexPath, index: true));
+        result._assets["/"] = result.Index;
+        result._assets["/index.html"] = result.Index;
+
+        foreach (var file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
         {
-            result._assets[asset.Route] = new ConversationConsoleHttpResponse(
-                200,
-                asset.ContentType,
-                File.ReadAllBytes(Path.Combine(root, asset.File)),
-                new Dictionary<string, string>());
+            var full = Path.GetFullPath(file);
+            if (!full.StartsWith(rootFull, StringComparison.Ordinal))
+                continue;
+
+            var relative = Path.GetRelativePath(root, full).Replace(Path.DirectorySeparatorChar, '/');
+            if (string.Equals(relative, "index.html", StringComparison.Ordinal))
+                continue;
+
+            result._assets["/" + relative] = BuildResponse(full, index: false);
         }
 
         return result;
@@ -66,6 +75,61 @@ public sealed class ConversationConsoleStaticAssets
 
     public bool TryGet(string path, out ConversationConsoleHttpResponse response)
         => _assets.TryGetValue(path, out response!);
+
+    /// <summary>
+    /// SPA routing: unknown non-API GETs render the document, but a request whose last segment looks
+    /// like a file (contains a dot) still 404s so missing assets stay visible.
+    /// </summary>
+    public bool TryGetSpaDocument(string path, out ConversationConsoleHttpResponse response)
+    {
+        response = Index;
+
+        if (path.Contains('\\', StringComparison.Ordinal))
+            return false;
+
+        var lastSegment = path.AsSpan(path.LastIndexOf('/') + 1);
+        if (lastSegment.IsEmpty)
+            return true;
+
+        return lastSegment.IndexOf('.') < 0;
+    }
+
+    public static string ContentTypeFor(string file)
+        => Path.GetExtension(file).ToLowerInvariant() switch
+        {
+            ".html" => "text/html; charset=utf-8",
+            ".js" or ".mjs" => "text/javascript; charset=utf-8",
+            ".css" => "text/css; charset=utf-8",
+            ".json" => "application/json; charset=utf-8",
+            ".map" => "application/json; charset=utf-8",
+            ".svg" => "image/svg+xml",
+            ".png" => "image/png",
+            ".jpg" or ".jpeg" => "image/jpeg",
+            ".gif" => "image/gif",
+            ".webp" => "image/webp",
+            ".ico" => "image/x-icon",
+            ".woff2" => "font/woff2",
+            ".woff" => "font/woff",
+            ".ttf" => "font/ttf",
+            ".txt" => "text/plain; charset=utf-8",
+            ".wasm" => "application/wasm",
+            _ => "application/octet-stream",
+        };
+
+    private static ConversationConsoleHttpResponse BuildResponse(string file, bool index)
+    {
+        var headers = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["Cache-Control"] = index ? NoStoreCacheControl : ImmutableCacheControl,
+            ["X-Content-Type-Options"] = "nosniff",
+        };
+
+        return new ConversationConsoleHttpResponse(
+            200,
+            ContentTypeFor(file),
+            File.ReadAllBytes(file),
+            headers);
+    }
 }
 
 /// <summary>Shared mutable status so diagnostics can describe the listener without a circular dependency.</summary>

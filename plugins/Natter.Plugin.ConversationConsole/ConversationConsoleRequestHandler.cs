@@ -103,7 +103,12 @@ public sealed class ConversationConsoleRequestHandler
             return asset;
 
         if (!request.Path.StartsWith("/api/", StringComparison.Ordinal))
+        {
+            if (isRead && _assets.TryGetSpaDocument(request.Path, out var document))
+                return document;
+
             return ConversationConsoleHttpResponse.Error(404, ConversationConsoleErrorCodes.RouteNotFound, "Route not found.");
+        }
 
         // P1 is read-only: no route is reachable with a mutating verb, even with a valid token.
         if (!isRead)
@@ -333,8 +338,10 @@ public sealed class ConversationConsoleRequestHandler
 
     private static ConversationConsoleHttpResponse Secure(ConversationConsoleHttpResponse response)
     {
-        var headers = new Dictionary<string, string>(response.Headers, StringComparer.OrdinalIgnoreCase);
-        foreach (var header in SecurityHeaders)
+        // Security defaults first, response headers last: a hashed build asset must be able to set
+        // its immutable cache policy, while everything else keeps `no-store`.
+        var headers = new Dictionary<string, string>(SecurityHeaders, StringComparer.OrdinalIgnoreCase);
+        foreach (var header in response.Headers)
             headers[header.Key] = header.Value;
 
         return response with { Headers = headers };

@@ -33,7 +33,7 @@ internal sealed class FileAdminConfigStore(string root) : IAdminConfigStore
     public bool AllowPluginDocuments { get; init; } = true;
 
     /// <summary>Plugin ids the (reference) host knows; unknown plugin documents map to 404.</summary>
-    public IReadOnlySet<string> KnownPlugins { get; init; } = new HashSet<string>(["natter.plugin.webconsole"], StringComparer.Ordinal);
+    public IReadOnlySet<string> KnownPlugins { get; init; } = new HashSet<string>(["natter.tool.admin.webconsole"], StringComparer.Ordinal);
 
     public bool FailEverySave { get; init; }
 
@@ -45,7 +45,7 @@ internal sealed class FileAdminConfigStore(string root) : IAdminConfigStore
     {
         var ids = new List<string> { "profiles" };
         if (AllowPluginDocuments)
-            ids.Add("plugin:natter.plugin.webconsole");
+            ids.Add("plugin:natter.tool.admin.webconsole");
 
         var documents = ids
             .Select(id => Describe(id))
@@ -424,7 +424,7 @@ internal sealed class AcceptanceHarness : IDisposable
         var commandRunner = withRunner ? runner ?? new ScriptedCommandRunner() : null;
 
         var identity = new WebConsoleIdentity(
-            "natter.plugin.webconsole",
+            "natter.tool.admin.webconsole",
             "Natter WebConsole",
             "0.1.0",
             "tool",
