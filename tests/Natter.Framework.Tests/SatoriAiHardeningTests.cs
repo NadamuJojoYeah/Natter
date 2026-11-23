@@ -165,7 +165,7 @@ public sealed class SatoriAiHardeningTests
         stopwatch.Stop();
 
         Assert.Equal(2, calls);
-        Assert.Equal("AI is temporarily unavailable.", command.Payload.Content.Text);
+        Assert.StartsWith("The answer was too long", command.Payload.Content.Text);
         Assert.True(stopwatch.ElapsedMilliseconds >= 40, $"elapsed={stopwatch.ElapsedMilliseconds}");
         Assert.Equal("ai.clipped", responder.LastFailureCode);
     }
@@ -193,7 +193,7 @@ public sealed class SatoriAiHardeningTests
             ChatTestData.CreatedEvent(ChatTestData.Source(), ChatTestData.Message(ChatTestData.Source(), id: "clip-limit"))));
 
         Assert.Equal(3, calls);
-        Assert.Equal("AI is temporarily unavailable.", command.Payload.Content.Text);
+        Assert.StartsWith("The answer was too long", command.Payload.Content.Text);
     }
 
     [Fact]
@@ -264,7 +264,7 @@ public sealed class SatoriAiHardeningTests
         var command = Assert.IsType<MessageSendCommand>(await responder.RespondAsync(
             ChatTestData.CreatedEvent(ChatTestData.Source(), ChatTestData.Message(ChatTestData.Source(), id: "finish-length-2"))));
 
-        Assert.Equal("AI is temporarily unavailable.", command.Payload.Content.Text);
+        Assert.StartsWith("The answer was too long", command.Payload.Content.Text);
     }
 
     // ---------------------------------------------------------------- AI A20

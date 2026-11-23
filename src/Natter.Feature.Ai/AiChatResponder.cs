@@ -258,9 +258,12 @@ public sealed partial class AiChatResponder : IChatResponder
 
                 if (attempt >= maxRetries)
                 {
-                    _log.Warning("AI provider still returned a clipped response; using fallback text.");
+                    _log.Warning(
+                        "AI provider still returned a clipped response after {Attempts} attempts "
+                        + "(output ceiling reached, not a provider outage); returning ClippedText.",
+                        attempt + 1);
                     RecordFailure("ai.clipped");
-                    return new GenerationResult(FallbackText(), "ai.clipped");
+                    return new GenerationResult(_options.ClippedText, "ai.clipped");
                 }
 
                 _log.Warning(

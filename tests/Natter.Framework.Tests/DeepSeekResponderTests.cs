@@ -234,7 +234,7 @@ public sealed class AiChatResponderTests
         };
         var fallback = await Build(alwaysClipped, 20).RespondAsync(
             ChatTestData.CreatedEvent(source, ChatTestData.Message(source, id: "m-clip2"), "evt:clip2"));
-        Assert.Equal("AI is temporarily unavailable.", Assert.IsType<MessageSendCommand>(fallback).Payload.Content.Text);
+        Assert.StartsWith("The answer was too long", Assert.IsType<MessageSendCommand>(fallback).Payload.Content.Text);
     }
 
     [Theory]

@@ -17,7 +17,11 @@ public sealed class DeepSeekOptions
 
     public double Temperature { get; set; } = 0.7;
 
-    public int MaxOutputTokens { get; set; } = 1024;
+    // 1024 was far too low: a 150-line code block (~5k tokens) was clipped on every attempt, retried
+    // three times, and then surfaced as the generic "AI is temporarily unavailable" — the user saw an
+    // outage where the real cause was our own token ceiling. DeepSeek accepts far more; 4096 covers
+    // normal chat plus a full code block without inviting runaway generations.
+    public int MaxOutputTokens { get; set; } = 4096;
 
     public int MaxInputCharacters { get; set; } = 12000;
 
