@@ -60,12 +60,12 @@ public sealed class StateVitalsOptions
 public static class StateVitalsDefaults
 {
     /// <summary>NPS plugin id; also the state directory name (§8.1).</summary>
-    public const string PluginId = "natter.plugin.state-vitals";
+    public const string PluginId = "natter.feature.character.state-vitals";
 
     /// <summary>The one global character state row (§2 早定格 1).</summary>
     public const string StateId = "character";
 
-    /// <summary>Plugin-local fragment id; the host prefixes it as <c>natter.plugin.state-vitals#state</c>.</summary>
+    /// <summary>Plugin-local fragment id; the host prefixes it as <c>natter.feature.character.state-vitals#state</c>.</summary>
     public const string FragmentId = "state";
 
     /// <summary>Contribution id declared in <c>plugin.json</c>; must match the registration exactly.</summary>
@@ -271,7 +271,7 @@ public static class StateVitalsCodes
 /// <summary>Paths and directory resolution for the plugin's own database (design §8: never natter.db).</summary>
 public static class StateVitalsPaths
 {
-    /// <summary><c>&lt;state&gt;/plugins/natter.plugin.state-vitals</c>, or the configured override.</summary>
+    /// <summary><c>&lt;state&gt;/plugins/natter.feature.character.state-vitals</c>, or the configured override.</summary>
     public static string ResolveStateDirectory(StateVitalsOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);

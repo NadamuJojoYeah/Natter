@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
-  "id": "natter.sample.greetings",
+  "id": "natter.sample.port.greetings",
   "name": "Greetings Plugin",
   "version": "0.1.0",
-  "kind": "feature",
+  "kind": "sample",
   "hostApi": ">=0.1.0 <1.0.0",
   "entry": {
     "assembly": "Natter.Sample.Plugin.Greetings.dll",
@@ -12,11 +12,27 @@
   "description": "Sample feature plugin: overrides IGreetingPort, contributes CLI commands and consumes the domain event stream.",
   "author": "Natter samples",
   "license": "MIT",
-  "permissions": ["cli.commands"],
-  "contributions": [
-    { "type": "port.adapter", "id": "greeting" },
-    { "type": "cli.command", "id": "greet" },
-    { "type": "cli.command", "id": "greetings.recent" }
+  "permissions": [
+    "cli.commands"
   ],
-  "capabilities": ["port:IGreetingPort", "cli:greet", "cli:greetings recent", "events:subscriber"]
+  "contributions": [
+    {
+      "type": "port.adapter",
+      "id": "greeting"
+    },
+    {
+      "type": "cli.command",
+      "id": "greet"
+    },
+    {
+      "type": "cli.command",
+      "id": "greetings.recent"
+    }
+  ],
+  "capabilities": [
+    "port:IGreetingPort",
+    "cli:greet",
+    "cli:greetings recent",
+    "events:subscriber"
+  ]
 }

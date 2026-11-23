@@ -117,7 +117,7 @@ public sealed class ConversationConsoleRuntime : IAsyncDisposable
         {
             _log.Warning(
                 "conversation console started without IConversationQuery; grant 'chat.read' to "
-                + "natter.plugin.conversation-console to enable conversation replay");
+                + "natter.tool.conversation.conversation-console to enable conversation replay");
         }
 
         var handler = new ConversationConsoleRequestHandler(

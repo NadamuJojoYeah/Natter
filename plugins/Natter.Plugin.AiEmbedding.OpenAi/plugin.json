@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "id": "natter.plugin.ai-embedding.openai",
+  "id": "natter.feature.ai.embedding-openai",
   "name": "Natter OpenAI-compatible Embedding",
   "version": "0.1.0",
   "kind": "feature",

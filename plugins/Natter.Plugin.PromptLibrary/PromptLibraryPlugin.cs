@@ -8,7 +8,7 @@ namespace Natter.Plugin.PromptLibrary;
 /// NPS v1 entry point. Configure loads/validates the library and stages the
 /// <c>prompt.provider</c> + <c>prompt explain</c> contributions. The default profile keeps using
 /// <c>host#static</c>; a profile opts in by setting
-/// <c>prompt.provider = "natter.prompt.library#default"</c>.
+/// <c>prompt.provider = "natter.feature.prompt.library#default"</c>.
 /// </summary>
 public sealed class PromptLibraryPlugin : INatterPlugin
 {

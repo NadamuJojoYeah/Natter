@@ -141,7 +141,7 @@ public static partial class PluginManifestReader
                 errors.Add(new PluginManifestIssue(
                     "/kind",
                     "invalid-kind",
-                    "Kind is required and must be transport, feature, tool or memory."));
+                    "Kind is required and must be transport, feature, tool, memory or sample."));
             }
 
             if (schemaVersion.ValueKind != JsonValueKind.Number
@@ -191,7 +191,8 @@ public static partial class PluginManifestReader
            && (string.Equals(kind, "transport", StringComparison.OrdinalIgnoreCase)
                || string.Equals(kind, "feature", StringComparison.OrdinalIgnoreCase)
                || string.Equals(kind, "tool", StringComparison.OrdinalIgnoreCase)
-               || string.Equals(kind, "memory", StringComparison.OrdinalIgnoreCase));
+               || string.Equals(kind, "memory", StringComparison.OrdinalIgnoreCase)
+               || string.Equals(kind, "sample", StringComparison.OrdinalIgnoreCase));
 
     private static void Validate(
         PluginManifest manifest,
@@ -209,7 +210,7 @@ public static partial class PluginManifestReader
             errors.Add(new PluginManifestIssue("/version", "invalid-version", "Plugin version must be SemVer 2.0."));
 
         if (!Enum.IsDefined(manifest.Kind))
-            errors.Add(new PluginManifestIssue("/kind", "invalid-kind", "Kind must be transport, feature or tool."));
+            errors.Add(new PluginManifestIssue("/kind", "invalid-kind", "Kind must be transport, feature, tool, memory or sample."));
 
         if (!VersionRange.TryParse(manifest.HostApi, out _))
             errors.Add(new PluginManifestIssue("/hostApi", "invalid-range", "hostApi must be a SemVer range."));

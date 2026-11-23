@@ -17,7 +17,7 @@
     },
     "stateDirectory": {
       "type": "string",
-      "description": "Override for the plugin state directory. Defaults to <NATTER_STATE_DIR>/plugins/natter.plugin.state-vitals."
+      "description": "Override for the plugin state directory. Defaults to <NATTER_STATE_DIR>/plugins/natter.feature.character.state-vitals."
     },
     "stateId": {
       "type": "string",

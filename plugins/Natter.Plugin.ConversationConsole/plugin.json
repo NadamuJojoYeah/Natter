@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "id": "natter.plugin.conversation-console",
+  "id": "natter.tool.conversation.conversation-console",
   "name": "Natter Conversation Console",
   "version": "0.1.0",
   "kind": "tool",

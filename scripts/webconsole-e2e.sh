@@ -72,7 +72,7 @@ echo "== stage =="
 rm -rf "$WORK"
 mkdir -p "$WORK/config" "$WORK/state"
 CONFIGURATION=Debug "$ROOT/scripts/stage-webconsole.sh" "$WORK/plugins" >/dev/null
-cat >"$WORK/plugins/natter.plugin.webconsole/config.json" <<JSON
+cat >"$WORK/plugins/natter.tool.admin.webconsole/config.json" <<JSON
 {
   "bind": "127.0.0.1",
   "port": $CONSOLE_PORT,

@@ -24,6 +24,6 @@ public static class NpsCliCommandOwners
     /// <summary>Owner-key prefix used for every NPS-contributed CLI command.</summary>
     public const string Prefix = "plugin:";
 
-    /// <summary>Returns the owner key for one plugin id, e.g. <c>plugin:natter.transport.discord</c>.</summary>
+    /// <summary>Returns the owner key for one plugin id, e.g. <c>plugin:natter.transport.messaging.discord</c>.</summary>
     public static string For(string pluginId) => $"{Prefix}{pluginId}";
 }

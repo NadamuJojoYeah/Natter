@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "id": "natter.plugin.webconsole",
+  "id": "natter.tool.admin.webconsole",
   "name": "Natter WebConsole",
   "version": "0.1.0",
   "kind": "tool",

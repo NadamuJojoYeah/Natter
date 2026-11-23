@@ -7,7 +7,7 @@ using Natter.Plugin.StateVitals.Kernel;
 namespace Natter.Plugin.StateVitals.Storage;
 
 /// <summary>
-/// The plugin's own SQLite database under <c>&lt;state&gt;/plugins/natter.plugin.state-vitals/state.db</c>
+/// The plugin's own SQLite database under <c>&lt;state&gt;/plugins/natter.feature.character.state-vitals/state.db</c>
 /// (design §8.1). The host's <c>SqliteSchema</c> stays the single migration owner of
 /// <c>natter.db</c>; this file owns its own <c>user_version</c> and never touches the host schema.
 ///

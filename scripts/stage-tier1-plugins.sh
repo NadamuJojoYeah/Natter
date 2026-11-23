@@ -23,7 +23,7 @@
 #   └── config.json            # NOT written here — deployment provides it
 #
 # Feature plugins additionally get their declared static assets, e.g.:
-#   <plugin-root>/natter.plugin.webconsole/wwwroot/{index.html,app.js,app.css}
+#   <plugin-root>/natter.tool.admin.webconsole/wwwroot/{index.html,app.js,app.css}
 #
 # Guarantees:
 #   * never writes config.json and never touches a running host;
@@ -52,22 +52,22 @@ JSON=0
 
 # name|project relative path|directory name|expected plugin id
 PLUGIN_TABLE_TIER1=(
-  "discord|samples/Natter.Sample.Plugin.Discord/Natter.Sample.Plugin.Discord.csproj|discord|natter.transport.discord|"
-  "deepseek|src/Natter.Feature.Ai.DeepSeek/Natter.Feature.Ai.DeepSeek.csproj|deepseek|natter.feature.ai.deepseek|"
+  "discord|samples/Natter.Sample.Plugin.Discord/Natter.Sample.Plugin.Discord.csproj|natter.transport.messaging.discord|natter.transport.messaging.discord|"
+  "deepseek|src/Natter.Feature.Ai.DeepSeek/Natter.Feature.Ai.DeepSeek.csproj|natter.feature.ai.deepseek|natter.feature.ai.deepseek|"
 )
 PLUGIN_TABLE_TIER2=(
-  "dingtalk|samples/Natter.Sample.Plugin.DingTalk/Natter.Sample.Plugin.DingTalk.csproj|dingtalk|natter.transport.dingtalk|"
-  "spark|src/Natter.Feature.Ai.Spark/Natter.Feature.Ai.Spark.csproj|spark|natter.feature.ai.spark|"
+  "dingtalk|samples/Natter.Sample.Plugin.DingTalk/Natter.Sample.Plugin.DingTalk.csproj|natter.transport.messaging.dingtalk|natter.transport.messaging.dingtalk|"
+  "spark|src/Natter.Feature.Ai.Spark/Natter.Feature.Ai.Spark.csproj|natter.feature.ai.spark|natter.feature.ai.spark|"
 )
 # Feature plugins live under plugins/ and carry static assets (wwwroot/, prompts/, definitions/).
 # Column 5 lists those extras explicitly: directory names get copied recursively, file names are
 # installed as-is. Never infer this from the folder contents - plugin source folders also contain
 # C# packages (Kernel/, Rendering/, ...) that must NOT ship.
 PLUGIN_TABLE_FEATURE=(
-  "webconsole|plugins/Natter.Plugin.WebConsole/Natter.Plugin.WebConsole.csproj|natter.plugin.webconsole|natter.plugin.webconsole|wwwroot,config.sample.json"
-  "conversation-console|plugins/Natter.Plugin.ConversationConsole/Natter.Plugin.ConversationConsole.csproj|natter.plugin.conversation-console|natter.plugin.conversation-console|wwwroot,config.sample.json"
-  "prompt-library|plugins/Natter.Plugin.PromptLibrary/Natter.Plugin.PromptLibrary.csproj|natter.prompt.library|natter.prompt.library|prompts,presets.extra.json,config.sample.json"
-  "state-vitals|plugins/Natter.Plugin.StateVitals/Natter.Plugin.StateVitals.csproj|natter.plugin.state-vitals|natter.plugin.state-vitals|definitions,config.sample.json"
+  "webconsole|plugins/Natter.Plugin.WebConsole/Natter.Plugin.WebConsole.csproj|natter.tool.admin.webconsole|natter.tool.admin.webconsole|wwwroot,config.sample.json"
+  "conversation-console|plugins/Natter.Plugin.ConversationConsole/Natter.Plugin.ConversationConsole.csproj|natter.tool.conversation.conversation-console|natter.tool.conversation.conversation-console|wwwroot,config.sample.json"
+  "prompt-library|plugins/Natter.Plugin.PromptLibrary/Natter.Plugin.PromptLibrary.csproj|natter.feature.prompt.library|natter.feature.prompt.library|prompts,presets.extra.json,config.sample.json"
+  "state-vitals|plugins/Natter.Plugin.StateVitals/Natter.Plugin.StateVitals.csproj|natter.feature.character.state-vitals|natter.feature.character.state-vitals|definitions,config.sample.json"
 )
 
 usage() {
@@ -189,6 +189,11 @@ stage_one() {
   if [[ "$manifest_id" != "$expected_id" ]]; then
     echo "plugin id mismatch for $name: manifest='$manifest_id' expected='$expected_id'" >&2
     exit 7
+  fi
+  # Install directory name MUST equal the full plugin id (naming rule).
+  if [[ "$dirname" != "$manifest_id" ]]; then
+    echo "install directory mismatch for $name: dir='$dirname' id='$manifest_id'" >&2
+    exit 8
   fi
 
   # Stage into a temp dir first so a failed copy cannot leave a half-written plugin.

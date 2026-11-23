@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "id": "natter.prompt.library",
+  "id": "natter.feature.prompt.library",
   "name": "Natter Prompt Library",
   "version": "0.1.0",
   "kind": "feature",

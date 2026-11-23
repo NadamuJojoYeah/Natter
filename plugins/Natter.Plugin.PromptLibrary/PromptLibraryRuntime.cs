@@ -19,7 +19,7 @@ public sealed class PromptLibraryRuntime
 
     public PromptLibraryRuntime(string pluginId, string pluginVersion, PromptLibrary library, IPluginLog log)
     {
-        PluginId = string.IsNullOrWhiteSpace(pluginId) ? "natter.prompt.library" : pluginId;
+        PluginId = string.IsNullOrWhiteSpace(pluginId) ? "natter.feature.prompt.library" : pluginId;
         PluginVersion = string.IsNullOrWhiteSpace(pluginVersion) ? "0.0.0" : pluginVersion;
         Library = library ?? throw new ArgumentNullException(nameof(library));
         Log = log ?? throw new ArgumentNullException(nameof(log));
@@ -41,7 +41,7 @@ public sealed class PromptLibraryRuntime
             Id = "prompt-explain",
             Prompt = new ProfilePrompt
             {
-                Provider = "natter.prompt.library#default",
+                Provider = "natter.feature.prompt.library#default",
                 Preset = Library.ActivePreset,
                 Locale = Library.Locale,
             },

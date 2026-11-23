@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "id": "natter.plugin.state-vitals",
+  "id": "natter.feature.character.state-vitals",
   "name": "Natter State & Vitals",
   "version": "0.1.0",
   "kind": "feature",

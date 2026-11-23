@@ -57,7 +57,7 @@
         "model": "deepseek-flash"
       },
       "prompt": {
-        "provider": "natter.prompt.library#default",
+        "provider": "natter.feature.prompt.library#default",
         "preset": "tier1-default",
         "version": "2026-11-21",
         "locale": "zh-CN",

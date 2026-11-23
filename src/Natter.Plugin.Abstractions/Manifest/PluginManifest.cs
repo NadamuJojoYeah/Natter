@@ -10,6 +10,7 @@ public enum PluginKind
     Feature,
     Tool,
     Memory,
+    Sample,
 }
 
 /// <summary>NPS v1 manifest. The manifest is the single source of plugin identity and metadata.</summary>

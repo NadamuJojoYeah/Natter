@@ -143,6 +143,46 @@ if [[ $RESTART -eq 1 && $DRY_RUN -eq 0 ]]; then
   done
 fi
 
+# Stale plugin directories: after the naming migration, /opt/natter/plugins may still contain old
+# short/id directories. Two directories with the same plugin id make the host fail activation with
+# duplicate-plugin-id, so they must be reported (never deleted automatically: config.json lives there).
+if [[ -d "$TARGET/plugins" ]]; then
+  echo "check: stale plugin directories under $TARGET/plugins"
+  python3 - "$RELEASE/plugins" "$TARGET/plugins" <<'PY' || true
+import json, os, sys
+release_root, target_root = sys.argv[1], sys.argv[2]
+def ids(root):
+    found = {}
+    for name in os.listdir(root):
+        manifest = os.path.join(root, name, "plugin.json")
+        if not os.path.isfile(manifest):
+            continue
+        try:
+            data = json.load(open(manifest, encoding="utf-8"))
+        except Exception:
+            continue
+        pid = data.get("id")
+        if isinstance(pid, str) and pid:
+            found[name] = pid
+    return found
+release = ids(release_root)
+release_ids = set(release.values())
+stale = [(name, pid) for name, pid in ids(target_root).items() if pid not in release_ids]
+if not stale:
+    print("  (none)")
+else:
+    print("  WARNING: the following installed plugin directories are not part of this release:")
+    for name, pid in sorted(stale):
+        print(f"    {name}  (id={pid})")
+    print("  They were NOT deleted. Two directories with the same id cause duplicate-plugin-id.")
+    print("  Manual steps (after backing up any config.json/custom files):")
+    print("    sudo systemctl stop natter.service")
+    for name, _ in sorted(stale):
+        print(f"    sudo mv '{target_root}/{name}' '/var/backups/natter/plugins-{name}-$(date -u +%Y%m%dT%H%M%SZ)'")
+    print("    sudo systemctl start natter.service   # then confirm no duplicate-plugin-id in the log")
+PY
+fi
+
 echo "deploy: $RELEASE -> $TARGET"
 run install -d -m 0755 "$TARGET" || die "cannot create target" 5
 # Copy the release on top; do not delete unknown files (config, audit, local state may live here).
@@ -245,9 +285,9 @@ echo "verify: release marker files"
     fi
   }
 
-  require_marker "$TARGET/plugins/natter.plugin.webconsole/lib/Natter.Plugin.WebConsole.dll" \
+  require_marker "$TARGET/plugins/natter.tool.admin.webconsole/lib/Natter.Plugin.WebConsole.dll" \
     "DiffOmitted" "webconsole"
-  require_marker "$TARGET/plugins/discord/lib/Natter.Chat.Discord.dll" \
+  require_marker "$TARGET/plugins/natter.transport.messaging.discord/lib/Natter.Chat.Discord.dll" \
     "ReconnectWatchdog" "discord"
 }
 
