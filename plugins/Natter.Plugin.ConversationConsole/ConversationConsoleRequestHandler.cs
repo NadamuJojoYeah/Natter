@@ -279,10 +279,16 @@ public sealed class ConversationConsoleRequestHandler
     {
         yield return ConversationConsoleNetwork.BuildUrl(_options.Bind, _options.Port)["http://".Length..];
 
-        if (ConversationConsoleNetwork.IsLoopbackHost(_options.Bind)
-            && !string.Equals(_options.Bind, "localhost", StringComparison.OrdinalIgnoreCase))
+        // The browser sends whatever the address bar says, and 127.0.0.1 / localhost / [::1] are the
+        // same server. Only echoing back the exact configured Bind made `Origin:
+        // http://127.0.0.1:5091` fail with request.origin_denied when Bind was `localhost`, and the
+        // other way round. Bound to loopback => accept every loopback spelling on that port.
+        if (ConversationConsoleNetwork.IsLoopbackHost(_options.Bind))
         {
-            yield return "localhost:" + _options.Port.ToString(CultureInfo.InvariantCulture);
+            var port = _options.Port.ToString(CultureInfo.InvariantCulture);
+            yield return "127.0.0.1:" + port;
+            yield return "localhost:" + port;
+            yield return "[::1]:" + port;
         }
     }
 

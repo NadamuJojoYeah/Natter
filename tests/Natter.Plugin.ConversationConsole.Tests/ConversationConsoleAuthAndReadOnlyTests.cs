@@ -232,4 +232,44 @@ public sealed class ConversationConsoleAuthAndReadOnlyTests
 
         Assert.Equal(200, response.StatusCode);
     }
+
+    [Theory]
+    // Bound to `localhost` must still accept a request whose Origin says 127.0.0.1 (and vice versa):
+    // the address bar decides what the browser sends, and both names reach the same socket. Echoing
+    // back only the configured Bind produced request.origin_denied on a correctly configured instance.
+    [InlineData("localhost", "http://127.0.0.1:5091")]
+    [InlineData("localhost", "http://localhost:5091")]
+    [InlineData("localhost", "http://[::1]:5091")]
+    [InlineData("127.0.0.1", "http://localhost:5091")]
+    [InlineData("127.0.0.1", "http://127.0.0.1:5091")]
+    [InlineData("::1", "http://127.0.0.1:5091")]
+    public async Task Loopback_bind_accepts_every_loopback_origin_spelling(string bind, string origin)
+    {
+        using var workspace = new ConversationConsoleWorkspace();
+        var (handler, _) = ConversationConsoleTestFactory.CreateHandler(
+            workspace,
+            options: new ConversationConsoleOptions { Bind = bind },
+            query: new FakeConversationQuery());
+
+        var response = await handler.HandleAsync(
+            ConversationConsoleTestFactory.Request("/api/health", origin: origin));
+
+        Assert.Equal(200, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Loopback_bind_still_rejects_a_non_loopback_origin()
+    {
+        using var workspace = new ConversationConsoleWorkspace();
+        var (handler, _) = ConversationConsoleTestFactory.CreateHandler(
+            workspace,
+            options: new ConversationConsoleOptions { Bind = "localhost" },
+            query: new FakeConversationQuery());
+
+        var response = await handler.HandleAsync(
+            ConversationConsoleTestFactory.Request("/api/health", origin: "http://evil.example:5091"));
+
+        Assert.Equal(403, response.StatusCode);
+    }
+
 }
