@@ -272,4 +272,51 @@ public sealed class ConversationConsoleAuthAndReadOnlyTests
         Assert.Equal(403, response.StatusCode);
     }
 
+
+    [Theory]
+    // Sec-Fetch-Site ignores the port, so a link from the WebConsole on :5090 into this console on
+    // :5091 is `same-site`. That used to be rejected before the Origin allow-list ran, which denied
+    // the console's own root page for anyone arriving from the sibling console.
+    [InlineData("same-site", "http://127.0.0.1:5091")]
+    [InlineData("same-site", "http://localhost:5091")]
+    [InlineData("same-site", null)]
+    [InlineData("none", null)]
+    public async Task Same_site_navigation_with_an_allowed_origin_is_accepted(string fetchSite, string? origin)
+    {
+        using var workspace = new ConversationConsoleWorkspace();
+        var (handler, _) = ConversationConsoleTestFactory.CreateHandler(
+            workspace,
+            options: new ConversationConsoleOptions { Bind = "127.0.0.1" },
+            query: new FakeConversationQuery());
+
+        var response = await handler.HandleAsync(
+            ConversationConsoleTestFactory.Request("/", origin: origin, fetchSite: fetchSite));
+
+        Assert.Equal(200, response.StatusCode);
+    }
+
+    [Theory]
+    // `same-site` must not become a bypass: a foreign Origin still wins.
+    [InlineData("same-site", "http://evil.example")]
+    [InlineData("same-site", "http://127.0.0.1:5090")]
+    [InlineData("cross-site", "http://127.0.0.1:5091")]
+    [InlineData("cross-site", null)]
+    public async Task Cross_site_and_foreign_origins_are_still_rejected(string fetchSite, string? origin)
+    {
+        using var workspace = new ConversationConsoleWorkspace();
+        var (handler, _) = ConversationConsoleTestFactory.CreateHandler(
+            workspace,
+            options: new ConversationConsoleOptions { Bind = "127.0.0.1" },
+            query: new FakeConversationQuery());
+
+        var response = await handler.HandleAsync(
+            ConversationConsoleTestFactory.Request("/", origin: origin, fetchSite: fetchSite));
+
+        Assert.Equal(403, response.StatusCode);
+        Assert.Contains(
+            "request.origin_denied",
+            System.Text.Encoding.UTF8.GetString(response.Body),
+            StringComparison.Ordinal);
+    }
+
 }

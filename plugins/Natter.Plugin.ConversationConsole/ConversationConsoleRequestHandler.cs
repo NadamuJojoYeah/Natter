@@ -251,10 +251,17 @@ public sealed class ConversationConsoleRequestHandler
     /// </summary>
     private bool IsSameOrigin(ConversationConsoleHttpRequest request)
     {
+        // `Sec-Fetch-Site` is computed from scheme + registrable domain and IGNORES the port, so a link
+        // from the WebConsole on 127.0.0.1:5090 to this console on 127.0.0.1:5091 is reported as
+        // `same-site`. Rejecting `same-site` outright therefore denied a legitimate same-host
+        // navigation before the Origin allow-list ever ran (observed: root page returned
+        // request.origin_denied, while the same URL typed into the address bar worked).
+        //
+        // Only `cross-site` is disqualifying by itself. `same-site` still has to pass the Origin check
+        // below, which is the authoritative test: it matches the exact authority the console serves on.
         var fetchSite = GetHeader(request, "Sec-Fetch-Site");
         if (!string.IsNullOrWhiteSpace(fetchSite)
-            && (string.Equals(fetchSite, "cross-site", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(fetchSite, "same-site", StringComparison.OrdinalIgnoreCase)))
+            && string.Equals(fetchSite, "cross-site", StringComparison.OrdinalIgnoreCase))
         {
             return false;
         }
