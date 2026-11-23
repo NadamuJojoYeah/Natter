@@ -478,8 +478,8 @@ public sealed class MemoryRetrievalTests
         public ValueTask<MemoryEntry?> GetAsync(Source source, Conversation conversation, User user, string id, CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
 
-        public ValueTask<bool> ArchiveAsync(Source source, Conversation conversation, User user, string id, CancellationToken cancellationToken = default)
-            => ValueTask.FromResult(false);
+        public ValueTask<MemoryArchiveResult> ArchiveAsync(Source source, Conversation conversation, User user, string id, CancellationToken cancellationToken = default)
+            => ValueTask.FromResult(MemoryArchiveResult.NotFound);
 
         public ValueTask ReinforceRecallAsync(IReadOnlyList<string> ids, CancellationToken cancellationToken = default)
             => ValueTask.CompletedTask;
@@ -666,7 +666,7 @@ public sealed class MemoryContractTests
         var store = new SqliteMemoryEntryStore(temp.Combine("natter.db"));
         var entry = Write(store, Alice, MemoryType.Fact, "我住在杭州").GetAwaiter().GetResult();
 
-        Assert.True(store.ArchiveAsync(Discord, Direct, Alice, entry.Id).GetAwaiter().GetResult());
+        Assert.Equal(MemoryArchiveStatus.Archived, store.ArchiveAsync(Discord, Direct, Alice, entry.Id).GetAwaiter().GetResult().Status);
         Assert.Empty(Search(store, Alice, query: null, includeArchived: false).GetAwaiter().GetResult());
         Assert.Single(Search(store, Alice, query: null, includeArchived: true).GetAwaiter().GetResult());
     }
@@ -853,6 +853,271 @@ public sealed class MemoryContractTests
         public TempDirectory()
         {
             Path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "natter-p65-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(Path);
+        }
+
+        public string Path { get; }
+
+        public string Combine(params string[] parts) => System.IO.Path.Combine([Path, .. parts]);
+
+        public void Dispose()
+        {
+            try
+            {
+                Directory.Delete(Path, recursive: true);
+            }
+            catch
+            {
+            }
+        }
+    }
+}
+
+/// <summary>
+/// task-66: v2 must keep the v1 guarantee that only the creator can archive an entry.
+/// Guild/Global scopes are visible to every member, so the guard cannot come from scope alone.
+/// </summary>
+public sealed class MemoryOwnershipTests
+{
+    private static readonly Source Discord = Source.Create("discord", "discord", "bot");
+    private static readonly Conversation Guild = new("c1", ConversationKind.Guild, GuildId: "g1");
+    private static readonly User Alice = new("alice", "Alice");
+    private static readonly User Bob = new("bob", "Bob");
+
+    [Fact]
+    public async Task Different_actor_cannot_archive_a_shared_scope_entry()
+    {
+        using var temp = new TempDirectory();
+        var store = new SqliteMemoryEntryStore(temp.Combine("natter.db"));
+        var entry = await store.WriteAsync(
+            new MemoryEntryWriteRequest(Discord, Guild, Alice, MemoryType.Fact, "guild decision", MemoryScopeType.Guild));
+
+        Assert.Equal("alice", entry.OwnerId);
+
+        var refused = await store.ArchiveAsync(Discord, Guild, Bob, entry.Id);
+        Assert.Equal(MemoryArchiveStatus.NotOwner, refused.Status);
+        Assert.False(refused.Succeeded);
+
+        // The refusal must not have side effects.
+        var stillLive = await store.GetAsync(Discord, Guild, Alice, entry.Id);
+        Assert.NotNull(stillLive);
+        Assert.False(stillLive!.Archived);
+
+        Assert.Equal(MemoryArchiveStatus.Archived, (await store.ArchiveAsync(Discord, Guild, Alice, entry.Id)).Status);
+    }
+
+    [Fact]
+    public async Task Missing_entry_reports_not_found_rather_than_not_owner()
+    {
+        using var temp = new TempDirectory();
+        var store = new SqliteMemoryEntryStore(temp.Combine("natter.db"));
+        var result = await store.ArchiveAsync(Discord, Guild, Alice, "me_missing");
+        Assert.Equal(MemoryArchiveStatus.NotFound, result.Status);
+    }
+
+    [Fact]
+    public async Task Migrated_rows_take_their_owner_from_the_v1_subject_id()
+    {
+        // v1 recorded the author in memory_items.subject_id; the v7 copy dropped the column but the
+        // data is still there, so v8 reads attribution instead of guessing it.
+        using var temp = new TempDirectory();
+        var path = temp.Combine("natter.db");
+        CreateVersionSixDatabase(path);
+
+        var store = new SqliteMemoryEntryStore(path);
+        var entries = await store.SearchAsync(
+            new MemoryEntryQuery(Discord, new Conversation("c1", ConversationKind.Direct), Alice)
+            {
+                IncludeArchived = true,
+            });
+
+        Assert.Equal(3, entries.Count);
+        Assert.All(entries, entry => Assert.Equal("alice", entry.OwnerId));
+    }
+
+    [Fact]
+    public async Task Migration_is_idempotent_and_keeps_owner_stable()
+    {
+        using var temp = new TempDirectory();
+        var path = temp.Combine("natter.db");
+        CreateVersionSixDatabase(path);
+
+        _ = new SqliteMemoryEntryStore(path);
+        var second = new SqliteMemoryEntryStore(path);
+        var entries = await second.SearchAsync(
+            new MemoryEntryQuery(Discord, new Conversation("c1", ConversationKind.Direct), Alice)
+            {
+                IncludeArchived = true,
+            });
+
+        Assert.Equal(3, entries.Count);
+        Assert.All(entries, entry => Assert.Equal("alice", entry.OwnerId));
+        Assert.Equal(8, ReadUserVersion(path));
+    }
+
+    [Fact]
+    public async Task Unattributed_rows_stay_archivable()
+    {
+        // No recorded author (imported envelope without subject, or a system row): archiving is
+        // reversible, so refusing would strand data nobody can ever clean up.
+        using var temp = new TempDirectory();
+        var store = new SqliteMemoryEntryStore(temp.Combine("natter.db"));
+        var entry = await store.WriteAsync(
+            new MemoryEntryWriteRequest(Discord, Guild, Alice, MemoryType.Fact, "system note", MemoryScopeType.Guild));
+
+        ClearOwner(store, temp.Combine("natter.db"), entry.Id);
+
+        var reloaded = await store.GetAsync(Discord, Guild, Bob, entry.Id);
+        Assert.NotNull(reloaded);
+        Assert.Null(reloaded!.OwnerId);
+
+        Assert.Equal(MemoryArchiveStatus.Archived, (await store.ArchiveAsync(Discord, Guild, Bob, entry.Id)).Status);
+    }
+
+    [Fact]
+    public async Task Cli_forget_reports_the_refusal_instead_of_claiming_success()
+    {
+        // The user must never be told "forgotten" when the archive was rejected (task-66).
+        using var temp = new TempDirectory();
+        var state = temp.Combine("state");
+        var options = new Natter.Cli.Core.NatterCliOptions { LoadPlugins = false, StateDirectory = state };
+        var common = new[]
+        {
+            "--source", "discord:discord:bot", "--conversation", "c1", "--guild", "g1",
+        };
+
+        var remember = new CliStringConsole();
+        Assert.Equal(
+            Natter.Cli.Abstractions.CliExitCodes.Success,
+            await Natter.Cli.Core.NatterCli.RunAsync(
+                ["remember", "guild decision", "--scope", "guild", "--actor", "alice", .. common],
+                remember,
+                options));
+
+        var list = new CliStringConsole();
+        await Natter.Cli.Core.NatterCli.RunAsync(
+            ["memory", "list", "--actor", "alice", "--json", .. common], list, options);
+        var id = ExtractFirstId(list.Output);
+        Assert.False(string.IsNullOrEmpty(id));
+
+        var refused = new CliStringConsole();
+        var exit = await Natter.Cli.Core.NatterCli.RunAsync(
+            ["forget", id!, "--actor", "bob", .. common], refused, options);
+        Assert.Equal(Natter.Cli.Abstractions.CliExitCodes.Failure, exit);
+        Assert.Contains("another user", refused.ErrorText, StringComparison.Ordinal);
+
+        // And the owner can still do it.
+        var allowed = new CliStringConsole();
+        Assert.Equal(
+            Natter.Cli.Abstractions.CliExitCodes.Success,
+            await Natter.Cli.Core.NatterCli.RunAsync(
+                ["forget", id!, "--actor", "alice", .. common], allowed, options));
+        Assert.Contains("archived", allowed.Output, StringComparison.Ordinal);
+    }
+
+    private static string? ExtractFirstId(string json)
+    {
+        try
+        {
+            using var document = System.Text.Json.JsonDocument.Parse(json);
+            if (document.RootElement.ValueKind != System.Text.Json.JsonValueKind.Array)
+                return null;
+            foreach (var item in document.RootElement.EnumerateArray())
+            {
+                if (item.TryGetProperty("id", out var id))
+                    return id.GetString();
+            }
+        }
+        catch (System.Text.Json.JsonException)
+        {
+        }
+
+        return null;
+    }
+
+    /// <summary>Minimal CLI console double (the RuntimeCliTests one is private to that class).</summary>
+    private sealed class CliStringConsole : Natter.Cli.Abstractions.IConsole
+    {
+        private readonly System.IO.StringWriter _out = new();
+        private readonly System.IO.StringWriter _err = new();
+
+        public System.IO.TextWriter Out => _out;
+
+        public System.IO.TextWriter Error => _err;
+
+        public bool IsInteractive => false;
+
+        public string? ReadLine() => null;
+
+        public string Output => _out.ToString();
+
+        public string ErrorText => _err.ToString();
+    }
+
+    private static void ClearOwner(SqliteMemoryEntryStore store, string path, string entryId)
+    {
+        _ = store;
+        using var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={path}");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE memory_entries SET owner_id = NULL WHERE entry_id = $id;";
+        command.Parameters.AddWithValue("$id", entryId);
+        command.ExecuteNonQuery();
+    }
+
+    private static int ReadUserVersion(string path)
+    {
+        using var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={path}");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "PRAGMA user_version;";
+        return Convert.ToInt32(command.ExecuteScalar());
+    }
+
+    /// <summary>v6 database with v1 rows whose subject_id records the author.</summary>
+    private static void CreateVersionSixDatabase(string path)
+    {
+        using var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={path}");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            PRAGMA journal_mode = WAL;
+            CREATE TABLE IF NOT EXISTS memory_items (
+                memory_id       TEXT PRIMARY KEY,
+                scope_type      TEXT NOT NULL,
+                scope_id        TEXT NOT NULL,
+                subject_id      TEXT NULL,
+                kind            TEXT NOT NULL,
+                text            TEXT NOT NULL,
+                data_json       TEXT NULL,
+                confidence      REAL NOT NULL,
+                sensitivity     TEXT NOT NULL,
+                user_confirmed  INTEGER NOT NULL,
+                source_message_ids_json TEXT NULL,
+                created_at      TEXT NOT NULL,
+                updated_at      TEXT NOT NULL,
+                expires_at      TEXT NULL,
+                version         INTEGER NOT NULL
+            );
+            INSERT INTO memory_items VALUES
+                ('mem_keep','user','discord:discord:bot|user|alice','alice','note','我住在杭州',NULL,1.0,'normal',1,NULL,
+                 '2026-11-01T00:00:00.0000000+00:00','2026-11-01T00:00:00.0000000+00:00',NULL,1),
+                ('mem_pref','user','discord:discord:bot|user|alice','alice','preference','我喜欢吃苹果',NULL,0.9,'normal',1,NULL,
+                 '2026-11-02T00:00:00.0000000+00:00','2026-11-02T00:00:00.0000000+00:00',NULL,1),
+                ('mem_expired','user','discord:discord:bot|user|alice','alice','fact','我搬到上海了',NULL,1.0,'normal',1,NULL,
+                 '2026-10-01T00:00:00.0000000+00:00','2026-10-01T00:00:00.0000000+00:00',
+                 '2026-10-02T00:00:00.0000000+00:00',1);
+            CREATE INDEX IF NOT EXISTS ix_memory_scope ON memory_items(scope_type, scope_id, updated_at DESC);
+            PRAGMA user_version = 6;
+            """;
+        command.ExecuteNonQuery();
+    }
+
+    private sealed class TempDirectory : IDisposable
+    {
+        public TempDirectory()
+        {
+            Path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "natter-own-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(Path);
         }
 

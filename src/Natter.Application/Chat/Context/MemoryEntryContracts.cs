@@ -117,6 +117,13 @@ public sealed record MemoryEntry(
     DateTimeOffset? LastRecalledAt)
 {
     /// <summary>
+    /// Actor that may archive this entry (task-66). NULL means "no recorded attribution": legacy rows
+    /// migrated without a v1 <c>subject_id</c>, or system-generated entries. NULL entries are still
+    /// archivable — see docs/P6_MEMORY_SYSTEM.md §10.5 for why that direction was chosen.
+    /// </summary>
+    public string? OwnerId { get; init; }
+
+    /// <summary>
     /// Current recall weight (§9.1): the power-law retention for this entry's type. There is no
     /// category multiplier — the per-type decay exponent already encodes the prior (§9.1.1).
     /// </summary>
@@ -157,6 +164,31 @@ public sealed record MemoryEntryQuery(
     public int Limit { get; init; } = 20;
 }
 
+/// <summary>Why an archive attempt succeeded or failed (task-66).</summary>
+public enum MemoryArchiveStatus
+{
+    /// <summary>The entry is archived (idempotent: archiving an archived entry reports this).</summary>
+    Archived,
+
+    /// <summary>No entry with that id is visible to this actor and scope.</summary>
+    NotFound,
+
+    /// <summary>The entry belongs to a different actor; only its owner may archive it.</summary>
+    NotOwner,
+}
+
+/// <summary>Archive outcome. Never a bare bool: "not found" and "not yours" must not look alike.</summary>
+public sealed record MemoryArchiveResult(MemoryArchiveStatus Status)
+{
+    public bool Succeeded => Status == MemoryArchiveStatus.Archived;
+
+    public static MemoryArchiveResult Archived { get; } = new(MemoryArchiveStatus.Archived);
+
+    public static MemoryArchiveResult NotFound { get; } = new(MemoryArchiveStatus.NotFound);
+
+    public static MemoryArchiveResult NotOwner { get; } = new(MemoryArchiveStatus.NotOwner);
+}
+
 /// <summary>v2 memory store contract. Separate from <see cref="IMemoryStore"/> on purpose: the v1
 /// contract is still consumed by the CLI and the context pipeline.</summary>
 public interface IMemoryEntryStore
@@ -172,8 +204,12 @@ public interface IMemoryEntryStore
         string id,
         CancellationToken cancellationToken = default);
 
-    /// <summary>Archives instead of deleting (§5.3). Returns false when the entry is not visible.</summary>
-    ValueTask<bool> ArchiveAsync(
+    /// <summary>
+    /// Archives instead of deleting (§5.3). Only the entry's owner may archive it (task-66); the
+    /// result distinguishes "no such entry" from "not yours" so a caller never reports a failed
+    /// archive as success.
+    /// </summary>
+    ValueTask<MemoryArchiveResult> ArchiveAsync(
         Source source,
         Conversation conversation,
         User user,
@@ -408,7 +444,11 @@ public static class MemoryExportBridge
                 item.Sensitivity,
                 item.CreatedAt,
                 item.UpdatedAt,
-                LastRecalledAt: null));
+                LastRecalledAt: null)
+            {
+                // v1 recorded the author in SubjectId; carry it over instead of guessing.
+                OwnerId = item.SubjectId,
+            });
         }
 
         return MemoryEntryExport.Create(items, legacy.ExportedAt);

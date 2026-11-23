@@ -9,7 +9,7 @@ namespace Natter.Infrastructure.Chat;
 /// </summary>
 internal static class SqliteSchema
 {
-    public const int CurrentVersion = 7;
+    public const int CurrentVersion = 8;
 
     private static void ReportWarning(string message) => MemoryMigrationDiagnostics.Report(message);
 
@@ -222,6 +222,11 @@ internal static class SqliteSchema
         if (current < 7)
         {
             current = UpgradeToLayeredMemory(connection);
+        }
+
+        if (current < 8)
+        {
+            current = UpgradeToEntryOwnership(connection);
         }
 
         using var setVersion = connection.CreateCommand();
@@ -543,6 +548,47 @@ internal static class SqliteSchema
             ReportWarning(
                 $"memory.migration_unknown_kind: {unknownKinds} v1 row(s) had an unrecognized kind and were mapped to fact.");
         }
+    }
+
+    /// <summary>
+    /// P6.7 follow-up (task-66): restores the "only the creator may archive" guarantee that v1 had
+    /// via <c>memory_items.subject_id</c>. The v7 copy did not carry that column over, but it is still
+    /// recorded in the v1 table, so the backfill reads attribution instead of guessing it.
+    /// </summary>
+    private static int UpgradeToEntryOwnership(SqliteConnection connection)
+    {
+        if (!ColumnExists(connection, "memory_entries", "owner_id"))
+            Execute(connection, "ALTER TABLE memory_entries ADD COLUMN owner_id TEXT NULL;");
+
+        Execute(connection, """
+            CREATE INDEX IF NOT EXISTS ix_memory_entries_owner ON memory_entries(owner_id);
+            """);
+
+        // v1 recorded the author in memory_items.subject_id for every write (SqliteMemoryStore
+        // passes request.User.Id). Rows that genuinely have no attribution stay NULL.
+        try
+        {
+            Execute(connection, """
+                UPDATE memory_entries
+                SET owner_id = (
+                    SELECT m.subject_id FROM memory_items m
+                    WHERE m.memory_id = memory_entries.entry_id)
+                WHERE owner_id IS NULL
+                  AND EXISTS (
+                    SELECT 1 FROM memory_items m
+                    WHERE m.memory_id = memory_entries.entry_id
+                      AND m.subject_id IS NOT NULL
+                      AND m.subject_id <> '');
+                """);
+        }
+        catch (SqliteException exception)
+        {
+            // Same policy as the v7 copy: never block startup, keep the migration diagnosable.
+            ReportWarning(
+                $"memory.owner_backfill_failed: existing entries keep owner_id = NULL ({exception.Message}).");
+        }
+
+        return 8;
     }
 
     private static string? ExistingFtsSql(SqliteConnection connection)

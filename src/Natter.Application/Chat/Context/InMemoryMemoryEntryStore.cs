@@ -70,7 +70,10 @@ public sealed class InMemoryMemoryEntryStore : IMemoryEntryStore
                 string.IsNullOrWhiteSpace(request.Sensitivity) ? "normal" : request.Sensitivity,
                 now,
                 now,
-                LastRecalledAt: null);
+                LastRecalledAt: null)
+            {
+                OwnerId = request.User.Id,
+            };
 
             _items[entry.Id] = entry;
             return ValueTask.FromResult(entry);
@@ -141,7 +144,7 @@ public sealed class InMemoryMemoryEntryStore : IMemoryEntryStore
         }
     }
 
-    public ValueTask<bool> ArchiveAsync(
+    public ValueTask<MemoryArchiveResult> ArchiveAsync(
         Source source,
         Conversation conversation,
         User user,
@@ -152,14 +155,18 @@ public sealed class InMemoryMemoryEntryStore : IMemoryEntryStore
         lock (_gate)
         {
             if (!_items.TryGetValue(id, out var entry))
-                return ValueTask.FromResult(false);
+                return ValueTask.FromResult(MemoryArchiveResult.NotFound);
 
             var visible = new MemoryEntryQuery(source, conversation, user) { IncludeArchived = true };
             if (!ScopeVisible(entry, visible))
-                return ValueTask.FromResult(false);
+                return ValueTask.FromResult(MemoryArchiveResult.NotFound);
+
+            // NULL owner = no recorded attribution; archiving is reversible so it stays allowed.
+            if (entry.OwnerId is not null && !string.Equals(entry.OwnerId, user.Id, StringComparison.Ordinal))
+                return ValueTask.FromResult(MemoryArchiveResult.NotOwner);
 
             _items[id] = entry with { Archived = true, UpdatedAt = now };
-            return ValueTask.FromResult(true);
+            return ValueTask.FromResult(MemoryArchiveResult.Archived);
         }
     }
 

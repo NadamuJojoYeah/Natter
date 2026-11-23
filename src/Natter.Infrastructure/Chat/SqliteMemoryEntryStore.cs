@@ -96,7 +96,7 @@ public sealed class SqliteMemoryEntryStore : IMemoryEntryStore
         await using (var existing = connection.CreateCommand())
         {
             existing.CommandText = """
-                SELECT entry_id, stability_days, reinforce_count, confidence, created_at, last_recalled_at
+                SELECT entry_id, stability_days, reinforce_count, confidence, created_at, last_recalled_at, owner_id
                 FROM memory_entries
                 WHERE scope_id = $scope AND type = $type AND content_hash = $hash
                 LIMIT 1;
@@ -111,6 +111,7 @@ public sealed class SqliteMemoryEntryStore : IMemoryEntryStore
             double confidence = 0;
             string? createdAt = null;
             string? lastRecalledAt = null;
+            string? existingOwner = null;
 
             await using (var reader = await existing.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
             {
@@ -122,6 +123,7 @@ public sealed class SqliteMemoryEntryStore : IMemoryEntryStore
                     confidence = reader.GetDouble(3);
                     createdAt = reader.GetString(4);
                     lastRecalledAt = reader.IsDBNull(5) ? null : reader.GetString(5);
+                    existingOwner = reader.IsDBNull(6) ? null : reader.GetString(6);
                 }
             }
 
@@ -162,7 +164,10 @@ public sealed class SqliteMemoryEntryStore : IMemoryEntryStore
                     request.Sensitivity,
                     DateTimeOffset.Parse(createdAt!, CultureInfo.InvariantCulture),
                     now,
-                    lastRecalledAt is null ? null : DateTimeOffset.Parse(lastRecalledAt, CultureInfo.InvariantCulture));
+                    lastRecalledAt is null ? null : DateTimeOffset.Parse(lastRecalledAt, CultureInfo.InvariantCulture))
+                {
+                    OwnerId = existingOwner,
+                };
             }
         }
 
@@ -182,17 +187,21 @@ public sealed class SqliteMemoryEntryStore : IMemoryEntryStore
             string.IsNullOrWhiteSpace(request.Sensitivity) ? "normal" : request.Sensitivity,
             now,
             now,
-            LastRecalledAt: null);
+            LastRecalledAt: null)
+        {
+            OwnerId = request.User.Id,
+        };
 
         await using var insert = connection.CreateCommand();
         insert.CommandText = """
             INSERT INTO memory_entries
                 (entry_id, type, scope_type, scope_id, content, content_hash, text_index,
                  stability_days, reinforce_count, confidence, archived, supersedes_id,
-                 sensitivity, source_message_ids_json, created_at, updated_at, last_recalled_at)
+                 sensitivity, source_message_ids_json, created_at, updated_at, last_recalled_at,
+                 owner_id)
             VALUES ($id, $type, $scope_type, $scope, $content, $hash, $index,
                     $stability, $count, $confidence, 0, $supersedes,
-                    $sensitivity, $sources, $created, $updated, $recalled);
+                    $sensitivity, $sources, $created, $updated, $recalled, $owner);
             """;
         AddParameters(insert, entry);
         await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
@@ -268,7 +277,7 @@ public sealed class SqliteMemoryEntryStore : IMemoryEntryStore
         return await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ? Read(reader) : null;
     }
 
-    public async ValueTask<bool> ArchiveAsync(
+    public async ValueTask<MemoryArchiveResult> ArchiveAsync(
         Source source,
         Conversation conversation,
         User user,
@@ -277,6 +286,36 @@ public sealed class SqliteMemoryEntryStore : IMemoryEntryStore
     {
         var scopes = AllScopeIds(source, conversation, user);
         await using var connection = await _database.OpenAsync(cancellationToken).ConfigureAwait(false);
+
+        // Read-then-write so "not visible", "someone else's" and "ok" stay distinguishable. A single
+        // UPDATE cannot tell the caller which of them happened (task-66).
+        string? ownerId;
+        bool visible;
+        await using (var lookup = connection.CreateCommand())
+        {
+            lookup.CommandText = """
+                SELECT owner_id FROM memory_entries
+                WHERE entry_id = $id AND scope_id IN ($s0, $s1, $s2, $s3);
+                """;
+            lookup.Parameters.AddWithValue("$id", id);
+            for (var index = 0; index < scopes.Length; index++)
+                lookup.Parameters.AddWithValue("$s" + index, scopes[index]);
+
+            await using var reader = await lookup.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                return MemoryArchiveResult.NotFound;
+            visible = true;
+            ownerId = reader.IsDBNull(0) ? null : reader.GetString(0);
+        }
+
+        if (!visible)
+            return MemoryArchiveResult.NotFound;
+
+        // NULL owner = no recorded attribution (pre-task-66 rows). Archiving is reversible, so an
+        // unattributed entry stays archivable; refusing would strand data nobody can ever clean up.
+        if (ownerId is not null && !string.Equals(ownerId, user.Id, StringComparison.Ordinal))
+            return MemoryArchiveResult.NotOwner;
+
         await using var command = connection.CreateCommand();
         command.CommandText = """
             UPDATE memory_entries SET archived = 1, updated_at = $now
@@ -286,7 +325,8 @@ public sealed class SqliteMemoryEntryStore : IMemoryEntryStore
         command.Parameters.AddWithValue("$now", UtcNow.ToString("O", CultureInfo.InvariantCulture));
         for (var index = 0; index < scopes.Length; index++)
             command.Parameters.AddWithValue("$s" + index, scopes[index]);
-        return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) > 0;
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        return MemoryArchiveResult.Archived;
     }
 
     public async ValueTask ReinforceRecallAsync(
@@ -362,10 +402,11 @@ public sealed class SqliteMemoryEntryStore : IMemoryEntryStore
                 INSERT INTO memory_entries
                     (entry_id, type, scope_type, scope_id, content, content_hash, text_index,
                      stability_days, reinforce_count, confidence, archived, supersedes_id,
-                     sensitivity, source_message_ids_json, created_at, updated_at, last_recalled_at)
+                     sensitivity, source_message_ids_json, created_at, updated_at, last_recalled_at,
+                     owner_id)
                 VALUES ($id, $type, $scope_type, $scope, $content, $hash, $index,
                         $stability, $count, $confidence, $archived, $supersedes,
-                        $sensitivity, $sources, $created, $updated, $recalled)
+                        $sensitivity, $sources, $created, $updated, $recalled, $owner)
                 ON CONFLICT(entry_id) DO UPDATE SET
                     content = excluded.content, content_hash = excluded.content_hash,
                     text_index = excluded.text_index, stability_days = excluded.stability_days,
@@ -494,7 +535,7 @@ public sealed class SqliteMemoryEntryStore : IMemoryEntryStore
             {
                 var entry = Read(reader);
                 // bm25 is the trailing column of the 16-column projection above.
-                var bm25 = reader.FieldCount > 16 && !reader.IsDBNull(16) ? reader.GetDouble(16) : 0d;
+                var bm25 = reader.FieldCount > 17 && !reader.IsDBNull(17) ? reader.GetDouble(17) : 0d;
                 // FTS5 bm25 is negative and smaller is better. The power-law retention is applied here
                 // (not in SQL) so the candidate pool stays BM25 wide (§9.1). There is no category
                 // multiplier: the per-type decay exponent already carries the prior (§9.1.1).
@@ -521,7 +562,8 @@ public sealed class SqliteMemoryEntryStore : IMemoryEntryStore
     private const string Columns = """
         m.entry_id, m.type, m.scope_type, m.scope_id, m.content, m.content_hash,
         m.stability_days, m.reinforce_count, m.confidence, m.archived, m.supersedes_id,
-        m.source_message_ids_json, m.sensitivity, m.created_at, m.updated_at, m.last_recalled_at
+        m.source_message_ids_json, m.sensitivity, m.created_at, m.updated_at, m.last_recalled_at,
+        m.owner_id
         """;
 
     /// <summary>
@@ -653,6 +695,7 @@ public sealed class SqliteMemoryEntryStore : IMemoryEntryStore
         command.Parameters.AddWithValue("$recalled", entry.LastRecalledAt is null
             ? DBNull.Value
             : entry.LastRecalledAt.Value.ToString("O", CultureInfo.InvariantCulture));
+        command.Parameters.AddWithValue("$owner", (object?)entry.OwnerId ?? DBNull.Value);
     }
 
     private static MemoryEntry Read(SqliteDataReader reader)
@@ -674,5 +717,8 @@ public sealed class SqliteMemoryEntryStore : IMemoryEntryStore
             reader.GetString(12),
             DateTimeOffset.Parse(reader.GetString(13), CultureInfo.InvariantCulture),
             DateTimeOffset.Parse(reader.GetString(14), CultureInfo.InvariantCulture),
-            reader.IsDBNull(15) ? null : DateTimeOffset.Parse(reader.GetString(15), CultureInfo.InvariantCulture));
+            reader.IsDBNull(15) ? null : DateTimeOffset.Parse(reader.GetString(15), CultureInfo.InvariantCulture))
+        {
+            OwnerId = reader.IsDBNull(16) ? null : reader.GetString(16),
+        };
 }

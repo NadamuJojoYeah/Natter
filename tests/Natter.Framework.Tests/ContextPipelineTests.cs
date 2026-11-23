@@ -224,7 +224,7 @@ public sealed class ContextPipelineTests
     }
 
     [Fact]
-    public async Task Shared_scope_delete_is_creator_only()
+    public async Task Shared_scope_archive_is_creator_only()
     {
         var source = Source.Create("discord", "discord", "bot");
         var conversation = new Conversation("c", ConversationKind.Group, GuildId: "g");
@@ -233,13 +233,21 @@ public sealed class ContextPipelineTests
         var store = new InMemoryMemoryEntryStore();
         var memory = await store.WriteAsync(new MemoryEntryWriteRequest(source, conversation, alice, MemoryType.Fact, "shared decision", MemoryScopeType.Global));
 
-        // P6.7 semantics: v2 archives instead of deleting, and archive is scope-visible (any member
-        // of the scope can retract a shared entry). The v1 "creator only" guard is gone because the
-        // v2 record carries no owner column; this is recorded as an open decision, not hidden.
-        Assert.True(await store.ArchiveAsync(source, conversation, bob, memory.Id));
+        // task-66: the creator guard is back. A different actor may still SEE a shared-scope entry,
+        // but only its owner may archive it — and the refusal is a distinct status, not "not found".
+        Assert.Equal(MemoryArchiveStatus.NotOwner, (await store.ArchiveAsync(source, conversation, bob, memory.Id)).Status);
+
+        var stillLive = await store.GetAsync(source, conversation, alice, memory.Id);
+        Assert.NotNull(stillLive);
+        Assert.False(stillLive!.Archived);
+
+        Assert.Equal(MemoryArchiveStatus.Archived, (await store.ArchiveAsync(source, conversation, alice, memory.Id)).Status);
         var archived = await store.GetAsync(source, conversation, alice, memory.Id);
         Assert.NotNull(archived);
         Assert.True(archived!.Archived);
+
+        // Unknown ids stay distinguishable from "not yours".
+        Assert.Equal(MemoryArchiveStatus.NotFound, (await store.ArchiveAsync(source, conversation, alice, "me_missing")).Status);
     }
 
     [Fact]
@@ -324,7 +332,7 @@ public sealed class ContextPipelineTests
         public ValueTask<MemoryEntry?> GetAsync(Source source, Conversation conversation, User user, string id, CancellationToken cancellationToken = default)
             => throw new InvalidOperationException("no memory");
 
-        public ValueTask<bool> ArchiveAsync(Source source, Conversation conversation, User user, string id, CancellationToken cancellationToken = default)
+        public ValueTask<MemoryArchiveResult> ArchiveAsync(Source source, Conversation conversation, User user, string id, CancellationToken cancellationToken = default)
             => throw new InvalidOperationException("no memory");
 
         public ValueTask ReinforceRecallAsync(IReadOnlyList<string> ids, CancellationToken cancellationToken = default)

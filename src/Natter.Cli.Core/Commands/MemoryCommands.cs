@@ -76,10 +76,11 @@ public sealed class ForgetCommand(IProfileMemoryStoreResolver resolver, ISummary
             ? value
             : await FindByContentAsync(selectedStore, context, value, cancellationToken).ConfigureAwait(false);
 
-        var archived = entryId is not null
-                       && await selectedStore.ArchiveAsync(
-                           context.Source, context.Conversation, context.User, entryId, cancellationToken)
-                           .ConfigureAwait(false);
+        var archive = entryId is null
+            ? MemoryArchiveResult.NotFound
+            : await selectedStore.ArchiveAsync(
+                context.Source, context.Conversation, context.User, entryId, cancellationToken)
+                .ConfigureAwait(false);
 
         var conversationKey = new Natter.Application.Chat.ConversationKey(
             context.Source.Key, context.Conversation.Id, context.Conversation.GuildId, null);
@@ -89,16 +90,26 @@ public sealed class ForgetCommand(IProfileMemoryStoreResolver resolver, ISummary
 
         if (invocation.HasFlag("json"))
         {
-            invocation.Console.Out.WriteLine(
-                JsonSerializer.Serialize(new { archived, id = entryId }, JsonOutput.CompactOptions));
-            return archived ? CliExitCodes.Success : CliExitCodes.Failure;
+            invocation.Console.Out.WriteLine(JsonSerializer.Serialize(
+                new { status = archive.Status.ToString().ToLowerInvariant(), id = entryId },
+                JsonOutput.CompactOptions));
+            return archive.Succeeded ? CliExitCodes.Success : CliExitCodes.Failure;
         }
 
-        invocation.Console.Out.WriteLine(archived
-            ? $"archived {entryId}: removed from recall, still recoverable (P6 §5.3)"
-            : "not found, or not visible to this actor");
-
-        return archived ? CliExitCodes.Success : CliExitCodes.Failure;
+        switch (archive.Status)
+        {
+            case MemoryArchiveStatus.Archived:
+                invocation.Console.Out.WriteLine(
+                    $"archived {entryId}: removed from recall, still recoverable (P6 §5.3)");
+                return CliExitCodes.Success;
+            case MemoryArchiveStatus.NotOwner:
+                invocation.Console.Error.WriteLine(
+                    "cannot archive: this memory belongs to another user (only its creator may archive it)");
+                return CliExitCodes.Failure;
+            default:
+                invocation.Console.Error.WriteLine("cannot archive: no such memory is visible to this actor");
+                return CliExitCodes.Failure;
+        }
     }
 
     private static async ValueTask<string?> FindByContentAsync(

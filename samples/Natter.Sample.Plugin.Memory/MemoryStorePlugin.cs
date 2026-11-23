@@ -75,7 +75,7 @@ public sealed class SampleMemoryStore : IMemoryEntryStore
     public ValueTask<MemoryEntry?> GetAsync(Source source, Conversation conversation, User user, string id, CancellationToken cancellationToken = default)
         => _inner.GetAsync(source, conversation, user, id, cancellationToken);
 
-    public ValueTask<bool> ArchiveAsync(Source source, Conversation conversation, User user, string id, CancellationToken cancellationToken = default)
+    public ValueTask<MemoryArchiveResult> ArchiveAsync(Source source, Conversation conversation, User user, string id, CancellationToken cancellationToken = default)
     {
         var archive = _inner.ArchiveAsync(source, conversation, user, id, cancellationToken);
         Persist();

@@ -113,8 +113,9 @@ public sealed class ChatCommandRouter(
         var store = Store(chatEvent, interaction);
         var entryId = byId ? target : await FindByContentAsync(store, chatEvent, interaction, target, cancellationToken)
             .ConfigureAwait(false);
-        var archived = entryId is not null
-            && await store.ArchiveAsync(
+        var archive = entryId is null
+            ? MemoryArchiveResult.NotFound
+            : await store.ArchiveAsync(
                 chatEvent.Source,
                 interaction.Conversation,
                 interaction.User,
@@ -134,9 +135,14 @@ public sealed class ChatCommandRouter(
         return Reply(
             chatEvent,
             interaction,
-            archived
-                ? "Archived. It no longer appears in recall but stays recoverable (P6 §5.3)."
-                : "Not found, or you are not the creator.",
+            archive.Status switch
+            {
+                MemoryArchiveStatus.Archived =>
+                    "Archived. It no longer appears in recall but stays recoverable (P6 §5.3).",
+                MemoryArchiveStatus.NotOwner =>
+                    "You can only archive memories you created.",
+                _ => "Not found.",
+            },
             ephemeral: true);
     }
 
