@@ -6,18 +6,72 @@ using Natter.Chat;
 
 namespace Natter.Infrastructure.Chat;
 
+/// <summary>Which tokenization the <c>memory_entries_fts</c> index uses.</summary>
+[System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+public enum MemoryFtsTokenization
+{
+    /// <summary>Application pre-tokenizer (CJK bi-grams + singles) indexed with unicode61. Production default.</summary>
+    Pretokenized,
+
+    /// <summary>Raw content indexed with the FTS5 <c>trigram</c> tokenizer. Measurement only: trigram cannot
+    /// match two-character Chinese words at all, which is exactly what the eval quantifies.</summary>
+    RawTrigram,
+}
+
+/// <summary>
+/// Measurement knobs for <see cref="SqliteMemoryEntryStore"/> (P6.9 calibration).
+/// <b>Not part of profile configuration</b> and never exposed through <c>config.schema.json</c>:
+/// a deployment must not be able to select "raw trigram" or disable decay.
+/// </summary>
+[System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
+public sealed record MemoryEntryStoreOptions
+{
+    public static MemoryEntryStoreOptions Default { get; } = new();
+
+    public MemoryFtsTokenization Tokenization { get; init; } = MemoryFtsTokenization.Pretokenized;
+
+    /// <summary>False makes recall ignore the forgetting curve (retention = 1).</summary>
+    public bool ApplyDecay { get; init; } = true;
+
+    /// <summary>Multiplies every entry's stability; the eval uses it to sweep 30d vs 90d-like settings.</summary>
+    public double StabilityScale { get; init; } = 1d;
+
+    /// <summary>How many BM25 candidates enter the re-rank before <c>Limit</c> is applied.</summary>
+    public int CandidatePoolMultiplier { get; init; } = 4;
+
+    /// <summary>
+    /// Pins "now" so decay and stability maths are deterministic. Measurement only: the eval seeds
+    /// entries at fixed ages relative to this instant, which makes two runs byte-identical.
+    /// </summary>
+    public DateTimeOffset? FixedNow { get; init; }
+}
+
 /// <summary>
 /// P6.5 layered memory store (docs/P6_MEMORY_SYSTEM.md §11). Owns <c>memory_entries</c> and the
 /// Trace index; shares the single <c>natter.db</c> schema owner through <see cref="SqliteSchema"/>.
 /// </summary>
 public sealed class SqliteMemoryEntryStore : IMemoryEntryStore
 {
-    private const int CandidatePoolMultiplier = 4;
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
     private readonly SqliteContextDatabase _database;
+    private readonly MemoryEntryStoreOptions _options;
 
-    public SqliteMemoryEntryStore(string databasePath) => _database = new SqliteContextDatabase(databasePath);
+    public SqliteMemoryEntryStore(string databasePath)
+        : this(databasePath, MemoryEntryStoreOptions.Default)
+    {
+    }
+
+    public SqliteMemoryEntryStore(string databasePath, MemoryEntryStoreOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        _options = options;
+        _database = new SqliteContextDatabase(databasePath);
+        ConfigureFtsTokenization();
+    }
+
+    /// <summary>Current time: pinned by <see cref="MemoryEntryStoreOptions.FixedNow"/> for measurement.</summary>
+    private DateTimeOffset UtcNow => _options.FixedNow ?? DateTimeOffset.UtcNow;
 
     /// <summary>Test/ops hook: which tokenizer the shared schema settled on.</summary>
     public static string FtsTokenizer => SqliteSchema.FtsTokenizer;
@@ -33,7 +87,7 @@ public sealed class SqliteMemoryEntryStore : IMemoryEntryStore
         var content = request.Content.Trim();
         var hash = MemoryEntryMapping.Hash(request.Type, scopeId, content);
         var textIndex = MemoryScoring.BuildIndexText(content);
-        var now = DateTimeOffset.UtcNow;
+        var now = UtcNow;
 
         await using var connection = await _database.OpenAsync(cancellationToken).ConfigureAwait(false);
 
@@ -149,14 +203,14 @@ public sealed class SqliteMemoryEntryStore : IMemoryEntryStore
         MemoryEntryQuery query,
         CancellationToken cancellationToken = default)
     {
-        var now = DateTimeOffset.UtcNow;
+        var now = UtcNow;
         var scopes = AllScopeIds(query.Source, query.Conversation, query.User);
         var limit = Math.Max(1, query.Limit);
-        var pool = Math.Max(limit, limit * CandidatePoolMultiplier);
+        var pool = Math.Max(limit, limit * Math.Max(1, _options.CandidatePoolMultiplier));
 
         await using var connection = await _database.OpenAsync(cancellationToken).ConfigureAwait(false);
 
-        var tokens = MemoryScoring.TokenizeForIndex(query.Query);
+        var tokens = BuildQueryTokens(query.Query);
         if (tokens.Count > 0)
         {
             try
@@ -229,7 +283,7 @@ public sealed class SqliteMemoryEntryStore : IMemoryEntryStore
             WHERE entry_id = $id AND scope_id IN ($s0, $s1, $s2, $s3);
             """;
         command.Parameters.AddWithValue("$id", id);
-        command.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture));
+        command.Parameters.AddWithValue("$now", UtcNow.ToString("O", CultureInfo.InvariantCulture));
         for (var index = 0; index < scopes.Length; index++)
             command.Parameters.AddWithValue("$s" + index, scopes[index]);
         return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) > 0;
@@ -251,7 +305,7 @@ public sealed class SqliteMemoryEntryStore : IMemoryEntryStore
             """;
         var idParameter = command.Parameters.Add("$id", SqliteType.Text);
         command.Parameters.AddWithValue("$factor", 1 + MemoryStability.RecallGrowth);
-        command.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture));
+        command.Parameters.AddWithValue("$now", UtcNow.ToString("O", CultureInfo.InvariantCulture));
         foreach (var id in ids)
         {
             idParameter.Value = id;
@@ -279,7 +333,7 @@ public sealed class SqliteMemoryEntryStore : IMemoryEntryStore
             },
             cancellationToken).ConfigureAwait(false);
 
-        return MemoryEntryExport.Create(items, DateTimeOffset.UtcNow);
+        return MemoryEntryExport.Create(items, UtcNow);
     }
 
     /// <summary>Imports a v2 envelope after validating its version.</summary>
@@ -406,7 +460,7 @@ public sealed class SqliteMemoryEntryStore : IMemoryEntryStore
         return pending.Count;
     }
 
-    private static async ValueTask<List<MemoryEntry>> SearchFtsAsync(
+    private async ValueTask<List<MemoryEntry>> SearchFtsAsync(
         SqliteConnection connection,
         MemoryEntryQuery query,
         string[] scopes,
@@ -441,9 +495,16 @@ public sealed class SqliteMemoryEntryStore : IMemoryEntryStore
                 var entry = Read(reader);
                 // bm25 is the trailing column of the 16-column projection above.
                 var bm25 = reader.FieldCount > 16 && !reader.IsDBNull(16) ? reader.GetDouble(16) : 0d;
-                // FTS5 bm25 is negative and smaller is better; the forgetting curve and the type
-                // prior are applied here so the candidate pool stays BM25 wide (§9.1).
-                scored.Add((entry, (-bm25) * entry.WeightAt(now)));
+                // FTS5 bm25 is negative and smaller is better. The power-law retention is applied here
+                // (not in SQL) so the candidate pool stays BM25 wide (§9.1). There is no category
+                // multiplier: the per-type decay exponent already carries the prior (§9.1.1).
+                var retention = _options.ApplyDecay
+                    ? MemoryDecay.Retention(
+                        Math.Max(0, (now - entry.UpdatedAt).TotalDays),
+                        entry.StabilityDays * _options.StabilityScale,
+                        MemoryDecay.ProfileFor(entry.Type).DecayD)
+                    : 1d;
+                scored.Add((entry, (-bm25) * retention));
             }
         }
 
@@ -462,6 +523,65 @@ public sealed class SqliteMemoryEntryStore : IMemoryEntryStore
         m.stability_days, m.reinforce_count, m.confidence, m.archived, m.supersedes_id,
         m.source_message_ids_json, m.sensitivity, m.created_at, m.updated_at, m.last_recalled_at
         """;
+
+    /// <summary>
+    /// Query-side tokenization must match the index side, otherwise nothing ever matches.
+    /// Pretokenized: same CJK bi-gram + single algorithm as the stored <c>text_index</c>.
+    /// RawTrigram: three-character sliding windows (the shortest unit a trigram index can match).
+    /// </summary>
+    private IReadOnlyList<string> BuildQueryTokens(string? query)
+    {
+        if (_options.Tokenization == MemoryFtsTokenization.Pretokenized)
+            return MemoryScoring.TokenizeForIndex(query);
+
+        if (string.IsNullOrWhiteSpace(query))
+            return [];
+
+        var normalized = query.Trim();
+        if (normalized.Length < 3)
+            return [];   // a trigram index cannot match a query shorter than its window
+
+        var windows = new List<string>(normalized.Length - 2);
+        for (var index = 0; index + 2 < normalized.Length; index++)
+            windows.Add(normalized.Substring(index, 3));
+
+        return windows.Distinct(StringComparer.Ordinal).ToArray();
+    }
+
+    /// <summary>
+    /// Rebuilds <c>memory_entries_fts</c> for the configured tokenization. Production keeps the
+    /// schema-created pretokenized index; <see cref="MemoryFtsTokenization.RawTrigram"/> is a
+    /// measurement mode that indexes raw content with the trigram tokenizer.
+    /// </summary>
+    private void ConfigureFtsTokenization()
+    {
+        if (_options.Tokenization == MemoryFtsTokenization.Pretokenized)
+            return;
+
+        using var connection = new SqliteConnection(_database.ConnectionString);
+        connection.Open();
+        SqliteSchema.Prepare(connection);
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            DROP TRIGGER IF EXISTS memory_entries_fts_ai;
+            DROP TRIGGER IF EXISTS memory_entries_fts_au;
+            DROP TRIGGER IF EXISTS memory_entries_fts_ad;
+            DROP TABLE IF EXISTS memory_entries_fts;
+            CREATE VIRTUAL TABLE memory_entries_fts USING fts5(entry_id UNINDEXED, content, tokenize='trigram');
+            CREATE TRIGGER memory_entries_fts_ai AFTER INSERT ON memory_entries BEGIN
+                INSERT INTO memory_entries_fts(entry_id, content) VALUES (new.entry_id, new.content);
+            END;
+            CREATE TRIGGER memory_entries_fts_au AFTER UPDATE OF content ON memory_entries BEGIN
+                DELETE FROM memory_entries_fts WHERE entry_id = old.entry_id;
+                INSERT INTO memory_entries_fts(entry_id, content) VALUES (new.entry_id, new.content);
+            END;
+            CREATE TRIGGER memory_entries_fts_ad AFTER DELETE ON memory_entries BEGIN
+                DELETE FROM memory_entries_fts WHERE entry_id = old.entry_id;
+            END;
+            INSERT INTO memory_entries_fts(entry_id, content) SELECT entry_id, content FROM memory_entries;
+            """;
+        command.ExecuteNonQuery();
+    }
 
     private static string Quote(string token) => "\"" + token.Replace("\"", string.Empty, StringComparison.Ordinal) + "\"";
 

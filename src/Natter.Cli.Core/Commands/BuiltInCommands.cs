@@ -300,6 +300,21 @@ internal static class BuiltInCommands
         },
         new CliCommandDescriptor
         {
+            Name = "memory eval",
+            Description = "Measure memory recall against a fixed fixture (P6.9 calibration).",
+            Options =
+            [
+                new CliOptionDescriptor("cases", "Fixture JSON path.", TakesValue: true),
+                new CliOptionDescriptor("tokenizer", "pretokenized|trigram (measurement only).", TakesValue: true),
+                new CliOptionDescriptor("decay", "default|long|off (measurement only).", TakesValue: true),
+                new CliOptionDescriptor("candidates", "Candidate limit per query.", TakesValue: true),
+                new CliOptionDescriptor("compare", "<dimension>=<v1>,<v2>; dimension is tokenizer|decay|candidates.", TakesValue: true),
+            ],
+            Origin = Origin,
+            HandlerFactory = services => services.GetRequiredService<MemoryEvalCommand>(),
+        },
+        new CliCommandDescriptor
+        {
             Name = "serve",
             Description = "Run the Natter host in long-lived mode until stopped.",
             Options =
