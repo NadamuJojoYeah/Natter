@@ -1,9 +1,10 @@
 # P6 记忆系统设计（v2：五类分层）
 
-> **状态**：设计已定 · 参数已按文献校对 · 实现分阶段
+> **状态**：设计已定 · 参数已按文献校对 · **v2 是目标态，正在切换中（v1 仍为生产召回路径，标 Obsolete 待退役）**
+> **不要**把本文读成「已全部切到 v2」：截至 2026-11-23，生产召回仍走 v1 `IMemoryStore`；v2 `IMemoryEntryStore` 已实现但仅评测工具使用，切换由 task-63 进行。
 > **日期**：2026-11-22（参数修订：同日）
 > **参数来源**：遗忘曲线采用 [FSRS-6](https://github.com/open-spaced-repetition/awesome-fsrs/wiki/The-Algorithm)（约 7 亿条复习记录拟合）；间隔乘数参考 Pimsleur/HLR（[Settles & Meeder 2016](https://2016.aclweb.org/files/p16-1-2016.pdf)）；衰减下限参考 [Mem0 Memory Decay](https://mem0.ai/blog/introducing-memory-decay-in-mem0)；事实矛盾不删除参考 Zep/Graphiti。逐项出处见 §9.1.1。
-> **定位**：取代 [P6_MEMORY_RAG.md](P6_MEMORY_RAG.md) 中关于「记忆是什么」的部分（§1-4、§7、§10）。该文档的 RAG/向量部分（§5-6、MEVD 核实、sqlite-vec 部署代价）**继续有效**。
+> **定位**：本文合并了原 `P6_MEMORY_RAG.md` 与 `CONTEXT_MEMORY_PLUGIN.md` 的现行部分：记忆模型见 §1–§14，检索与 RAG 见 §17，Core/Plugin 边界见 §18。
 > **关联**：[Prompt Compiler](PROMPT_COMPILER.md)、[Harness 责任边界](HARNESS_RESPONSIBILITY.md)、[State & Vitals](STATE_VITALS_DESIGN.md)
 
 ---
@@ -668,10 +669,109 @@ P6.9  评测校准                  用夹具定型全部参数
 - 不做多模态记忆（图片/音频）
 - 不让模型写入或删除记忆（只能读，写入归提炼管线）
 - 不做全局（per-bot）记忆——那是 StateVitals 的领域
-- RAG/向量部分见 [P6_MEMORY_RAG.md](P6_MEMORY_RAG.md) §5-6（仍有效）
+- RAG/向量部分见 §17（本文）
 
 ---
 
 ## 16. 一句话总结
 
 > **每轮从记忆重建提示词；五类各有生命周期；越重复越难忘；Policy 永不进 system message；主动注入高频小量，长尾交给 `memory_search` 工具。**
+
+---
+
+## 17. 检索与 RAG（合并自 `P6_MEMORY_RAG.md`，2026-11-23）
+
+> 原 `P6_MEMORY_RAG.md` 的「记忆是什么」部分已被本文 §1–§10 取代；其检索/RAG 部分继续有效，故并入本节。
+> 原文见 git 历史（`docs/P6_MEMORY_RAG.md`，删除前 @ `99b99cc`）。
+
+### 17.1 一个契约，两种实现
+
+| 层 | 契约 | 实现 | 现状 |
+| --- | --- | --- | --- |
+| v1（现行召回） | `IMemoryStore` | `InMemoryMemoryStore` / `SqliteMemoryStore` | **生产在用**，标 Obsolete 待退役 |
+| v2（目标态） | `IMemoryEntryStore` | `InMemoryMemoryEntryStore` / `SqliteMemoryEntryStore` | 已实现；当前仅 `natter memory eval` 与测试使用 |
+
+两种实现按「有没有 `--state-dir`」选择：有则 SQLite（`<state>/natter.db`），无则 InMemory（空页，不伪造历史）。
+
+### 17.2 作用域：默认 per-actor
+
+- 三种作用域：`conversation`（当前会话）/ `actor`（同一用户跨会话，**默认**）/ `guild`（服务器级）。
+- **跨 actor 隔离是硬要求**：actor A 的记忆在 actor B 的检索里命中数必须为 0。
+- profile 可改默认作用域；存储键为 `(scopeKind, scopeKey, memoryId)`。
+
+### 17.3 轻量线：FTS5
+
+- FTS5 虚表 `memory_fts` 由 `SqliteSchema` 统一建（唯一 DDL owner），随版本迁移。
+- 分词：`trigram`（SQLite ≥ 3.34 内置）；运行时不支持时**降级 `unicode61` 并告警**，不崩。实际使用的分词器见 `SqliteSchema.FtsTokenizer`。
+- 中文双字词是 trigram 的已知弱项，评测数据见 `P6_MEMORY_EVAL_RESULTS.md`。
+
+### 17.4 RAG 线：embedding 与 rerank 端口
+
+| 契约 | 职责 | 关键能力元数据 |
+| --- | --- | --- |
+| `IEmbeddingProvider` | 文本 → 向量 | `MaxBatchSize` / `MaxInputTokens`（调用方**必须**据此分批/截断） |
+| `IRerankProvider` | 候选重排 | `MaxCandidates` |
+| `IEmbeddingCache` | 向量缓存 | 键 `(model, dimensions, sha256(text))`；本轮仅 InMemory 实现 |
+
+- 贡献类型：`embedding.provider` / `rerank.provider`（需 `network` + `secrets:` 权限）。
+- 参考实现：`plugins/Natter.Plugin.AiEmbedding.OpenAi`（id `natter.feature.ai.embedding-openai`），走 OpenAI 兼容 `/v1/embeddings`，测试用 fake handler 不联网。
+- **任一批失败即整体失败**，不返回半成功状态，由调用方降级。
+
+### 17.5 打分与预算
+
+```text
+score = relevance(query, text) × decay(age, stability)
+decay = v1 LegacyRetention（指数，现行）/ v2 Retention（幂律，目标态，归一化到 0.9 保留率）
+```
+
+| 参数 | 默认 | 位置 |
+| --- | --- | --- |
+| `MaxCandidates` | 20 | `MemoryRetrievalOptions` |
+| `MaxInjected` | 5 | 同上 |
+| `MaxTokens` | 800 | 同上 |
+| 检索超时 | 300ms | 同上（超时返回空 + 计数，不抛、不阻塞回合） |
+| `DecayHalfLife` | 30 天 | 同上（**命名债**：v1 是半衰期，v2 语义将变成保留率区间） |
+
+**只降权不删除**：衰减只影响排序，条目不会被自动删除。
+
+### 17.6 注入路径：统一到 `prompt.fragment`
+
+记忆不再是「直接拼进消息」的旁路，而是 `prompt.fragment` 的一个来源：
+
+- 出现在 `PromptPlan.Fragments`（id / 来源 / 顺序 / hash 可诊断）；
+- 可被 `disabledFragments` 关闭；
+- 受每 provider 配额约束（16 片段 / 8000 字符），不与 PromptLibrary、StateVitals 抢额度；
+- 顺序：记忆摘要在前、召回条目在后。
+
+### 17.7 与 v1 的取舍（不美化）
+
+- v1 的 `MemoryQuery.DecayHalfLife`、`MemoryScopeType`、`MemoryItem` 在 v2 切换完成后**整体退役**；在此之前两套词汇并存是既定状态，不是遗漏。
+- v2 的 `Trace` 类只索引不注入；`Policy` 永不进 system message。
+
+## 18. Core / Plugin 边界与 NPS 契约（合并自 `CONTEXT_MEMORY_PLUGIN.md`，2026-11-23）
+
+> 原 `CONTEXT_MEMORY_PLUGIN.md` 描述的是 **P3 时代的 v1 契约**。其中「谁拥有什么」的边界划分至今有效，v1 具体类型已随 §17.7 退役。
+> 原文见 git 历史（`docs/CONTEXT_MEMORY_PLUGIN.md`，删除前 @ `99b99cc`）。
+
+### 18.1 边界：host 持有契约与数据，插件提供实现
+
+| 归 host（不开放） | 归插件（可替换） |
+| --- | --- |
+| 契约类型（`IMemoryStore` / `IPromptComposer` / `IContextAssembler`） | prompt 片段来源、记忆抽取与打分策略 |
+| 预算与配额（片段数、字符数、token 数、超时） | 具体检索算法（FTS5 / 向量 / 混合） |
+| 数据所有权与迁移（`natter.db` 的 DDL 由 host 独占） | 插件自己的库（如 StateVitals 的 `state.db`） |
+| 安全边界（跨 actor 隔离、正文不入日志/审计/诊断包） | 插件内部的缓存与索引 |
+
+### 18.2 NPS contribution
+
+- 记忆/prompt 相关贡献需 `chat.read`（粗粒度：拿到即可读 prompt 与 context 所需上下文）。
+- 缺失权限即激活失败（`phase=permission`），不静默降级。
+- 插件声明的 fragment id 自动带 owner 前缀，不产生「先到先得」冲突。
+
+### 18.3 数据所有权
+
+- 记忆正文**不进**日志、审计、诊断包（与 StateVitals 同一条规则）。
+- `memory export` 输出文件 0600。
+- 插件写自己的 state 目录，不写只读的插件目录。
+
+---

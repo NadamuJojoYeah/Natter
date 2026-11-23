@@ -1,8 +1,12 @@
 # Natter WebConsole 宿主契约缺口与适配方案
 
+> **⚠️ 归档文档 · 历史记录，勿据此实现。**
+> 本文件描述的阶段已完成或已被取代，仅用于追溯当时的决策与证据。
+> 现行文档见 [docs/README.md](../README.md)。
+
 > **状态**：Living document · G4/G5/G6/G8 已由宿主实现并接入插件（2026-11-21）
 > **日期**：2026-11-18（初版） · 2026-11-21（宿主契约落地与插件接入）
-> **关联**：[WebConsole 插件设计](WEBCONSOLE_PLUGIN_DESIGN.md)、[NPS v1 规范](PLUGIN_SPEC.md)、[Harness 架构](HARNESS_ARCHITECTURE.md)、[运维手册](OPERATIONS_RUNBOOK.md)
+> **关联**：[WebConsole 插件设计](../WEBCONSOLE_PLUGIN_DESIGN.md)、[NPS v1 规范](../PLUGIN_SPEC.md)、[Harness 架构](../HARNESS_ARCHITECTURE.md)、[运维手册](../OPERATIONS_RUNBOOK.md)
 > **约束**：本文件记录宿主（`src/`）**尚不存在**的接口与模型，以及插件侧的临时适配。按项目约束，WebConsole 实现**不修改主项目**来补齐这些契约；先文档化，再走独立提案。
 
 ---
@@ -28,7 +32,7 @@
 
 ## 1. 数据源：为什么 Phase 1 能先跑起来
 
-`natter serve --health-port <port>` 已经提供 loopback `/health`（见 [P2_RUNTIME_PROFILE](P2_RUNTIME_PROFILE.md) §health、`src/Natter.Cli.Core/Commands/HealthHttpServer.cs`）。返回的 `RuntimeHealthSnapshot` 已包含：
+`natter serve --health-port <port>` 已经提供 loopback `/health`（见 [P2_RUNTIME_PROFILE](../P2_RUNTIME_PROFILE.md) §health、`src/Natter.Cli.Core/Commands/HealthHttpServer.cs`）。返回的 `RuntimeHealthSnapshot` 已包含：
 
 - `status`、`uptimeSeconds`、`startedAt`、`sampledAt`；
 - `profiles` 数量、`conversations` 数量、`tasks` 指标；

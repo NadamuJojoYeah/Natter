@@ -1,10 +1,11 @@
-# P6 Memory：设计缺口与验收核对
+# P6 Memory：缺口与决策（Gaps）
 
-> **状态**：设计审阅（只读）
-> **日期**：2026-11-22
-> **核对基线**：`b4e91f8`（`b4e91f85415e72a9920af7fc9f12de9200602534`）
-> **定位**：`docs/P6_MEMORY_RAG.md` 尚未定清的问题清单 + §11 验收标准的实现状态核对。
-> **关联**：[P6 设计](P6_MEMORY_RAG.md)、[P6.3 RAG 插件方案](P6_RAG_PLUGIN_DESIGN.md)、[Prompt Compiler](PROMPT_COMPILER.md)
+> **状态**：**未决策项清单**（2026-11-23 由 `P6_MEMORY_OPEN_QUESTIONS.md` 改名并收窄定位）
+> **日期**：2026-11-22（改名与基线更新：2026-11-23）
+> **核对基线**：`99b99cc`（2026-11-23）；原核对基线 `b4e91f8`
+> **定位**：只保留**尚未决策**的缺口 + 理由 + 触发条件。已决项已并入 [P6 记忆系统设计](P6_MEMORY_SYSTEM.md)，此处不再重复。
+> **口径**：v2 是**目标态**、正在切换（v1 标 Obsolete 待退役）。本文中若出现「v2 已实现」字样，均指代码已存在而非生产已切换。
+> **关联**：[P6 记忆系统设计](P6_MEMORY_SYSTEM.md)（含 §17 检索与 RAG）、[P6.3 RAG 插件方案](P6_RAG_PLUGIN_DESIGN.md)、[评测数据](P6_MEMORY_EVAL_RESULTS.md)、[Prompt Compiler](PROMPT_COMPILER.md)
 
 ---
 

@@ -1,11 +1,15 @@
 # P4 Tier 1 Productization — Development Spec
 
+> **⚠️ 归档文档 · 历史记录，勿据此实现。**
+> 本文件描述的阶段已完成或已被取代，仅用于追溯当时的决策与证据。
+> 现行文档见 [docs/README.md](../README.md)。
+
 > **状态**：P4.0–P4.1 foundation implemented；P4 验收 No-Go（schema/命令 UX 阻塞，profile store/单实例/输出异常待收敛）。
 > **日期**：2026-11-15
 > **前置**：P3 已 Go（Context/Memory foundation 已归档；232/232 回归）
 > **目标**：把 Discord + DeepSeek 从“架构验证”推进到“真实用户可长期使用、可运维、可恢复”的一等公民产品。
-> **关联**：[P3 Context & Memory](P3_CONTEXT_MEMORY.md)、[P2 Runtime & Profile](P2_RUNTIME_PROFILE.md)、[Harness 架构](HARNESS_ARCHITECTURE.md)、[Discord transport](DISCORD_PLUGIN_DESIGN.md)
-> **验收处置**：[P4 验收 No-Go](testing/2026-11-15-p4-acceptance-response.md)
+> **关联**：[P3 Context & Memory](P3-CONTEXT-MEMORY.md)、[P2 Runtime & Profile](../P2_RUNTIME_PROFILE.md)、[Harness 架构](../HARNESS_ARCHITECTURE.md)、[Discord transport](../DISCORD_PLUGIN_DESIGN.md)
+> **验收处置**：[P4 验收 No-Go](../testing/2026-11-15-p4-acceptance-response.md)
 
 ---
 
@@ -454,7 +458,7 @@ deploy/
 | health uptime/Tier1 | 首次 uptime >0、startedAt/sampledAt、Tier2 缺失不降级 | `HostRuntimeClock` / `RuntimeHealth` |
 | health offline | `health --offline` 不启动 gateway | `NatterCli` |
 | upstream 诊断 | lastEvent/connected/disconnect/reconnect count | `IChatUpstreamHealth` |
-| 24h soak | **未完成**：按 [passive-soak-24h](operations/passive-soak-24h.md) §3.1 的「累计有效运行」口径，需 Σ有效运行 ≥24h 且满足单段 ≥6h／缺口归因／RSS 漂移三项护栏；截至 2026-11-22 无合格记录（现有 soak-once 0.3%、toolcheck 83.3%、p2 旧格式 0 样本均判 FAIL），不得按 PASS 计 | — |
+| 24h soak | **未完成**：按 [passive-soak-24h](../operations/passive-soak-24h.md) §3.1 的「累计有效运行」口径，需 Σ有效运行 ≥24h 且满足单段 ≥6h／缺口归因／RSS 漂移三项护栏；截至 2026-11-22 无合格记录（现有 soak-once 0.3%、toolcheck 83.3%、p2 旧格式 0 样本均判 FAIL），不得按 PASS 计 | — |
 | 真实双 guild/DM | 未执行（测试侧） | — |
 
 测试：`Natter.Framework.Tests` **245/245**；P3 232 基线未回归。

@@ -73,7 +73,7 @@ NPS v1 明确不解决：
 
 ```text
 plugins/
-└── natter.transport.discord/
+└── natter.transport.messaging.discord/
     ├── plugin.json                 # NPS v1 manifest
     ├── config.schema.json          # JSON Schema（可选但推荐）
     ├── config.json                 # 用户配置（宿主/用户维护，可不存在）
@@ -135,7 +135,7 @@ plugins/
 
 - MUST 匹配 `^[a-z0-9]+(?:[._-][a-z0-9]+)+$`；
 - MUST 全局唯一；
-- 建议使用 `natter.transport.discord`、`natter.feature.ai.openai` 这种命名；
+- 建议使用 `natter.transport.messaging.discord`、`natter.feature.ai.openai` 这种命名；
 - 禁止使用空格、路径分隔符、大小写混用作为身份。
 
 ### 4.2 Discord transport manifest 示例
@@ -143,7 +143,7 @@ plugins/
 ```json
 {
   "schemaVersion": 1,
-  "id": "natter.transport.discord",
+  "id": "natter.transport.messaging.discord",
   "name": "Discord Transport",
   "version": "0.1.0",
   "kind": "transport",
@@ -223,7 +223,7 @@ plugins/
 "loadAfter": ["natter.feature.memory"],
 "loadBefore": [],
 "conflicts": [
-  { "id": "natter.transport.discord.legacy", "version": "<0.2.0" }
+  { "id": "natter.transport.messaging.discord.legacy", "version": "<0.2.0" }
 ]
 ```
 
@@ -874,7 +874,7 @@ natter plugins config validate <plugin-id>
 {
   "phase": "dependency",
   "code": "missing-dependency",
-  "pluginId": "natter.transport.discord",
+  "pluginId": "natter.transport.messaging.discord",
   "message": "Required plugin 'natter.feature.memory' >=0.1.0 <1.0.0 was not found.",
   "detail": {
     "dependency": "natter.feature.memory",
@@ -893,7 +893,7 @@ natter plugins config validate <plugin-id>
 
 > 完整的 Discord transport 设计见 [Discord Transport Plugin Design](DISCORD_PLUGIN_DESIGN.md)。
 >
-> **实现状态**：`natter.transport.discord` 示例插件与 `Natter.Chat.Discord` 已交付消息上游、typing、编辑/删除、slash interaction、allowlist/mention 过滤、分片与 `discord status`；附件上传、按钮/Modal、stream edit 尚未交付。
+> **实现状态**：`natter.transport.messaging.discord` 示例插件与 `Natter.Chat.Discord` 已交付消息上游、typing、编辑/删除、slash interaction、allowlist/mention 过滤、分片与 `discord status`；附件上传、按钮/Modal、stream edit 尚未交付。
 
 ### 11.1 定位
 
@@ -1128,7 +1128,7 @@ v1 不做：
 
 > 详细设计见 [Discord Transport Plugin Design](DISCORD_PLUGIN_DESIGN.md)。
 
-- ✅ `natter.transport.discord` 示例插件；
+- ✅ `natter.transport.messaging.discord` 示例插件；
 - ✅ Discord Gateway/REST 抽象 + Discord.Net transport；
 - ✅ NLMP 消息/编辑/删除/interaction 映射；
 - ✅ 能力、allowlist、分片、限流、安全；
@@ -1276,8 +1276,8 @@ natter plugins list --detail
 natter plugins graph --json
 natter plugins contributions --json
 natter plugins permissions --json
-natter plugins doctor natter.sample.greetings
-natter plugins config validate natter.sample.greetings
+natter plugins doctor natter.sample.port.greetings
+natter plugins config validate natter.sample.port.greetings
 ```
 
 ## 19. 参考资料

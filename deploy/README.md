@@ -1,5 +1,10 @@
 # Natter deployment (Tier 1)
 
+> **命令校验状态（2026-11-23，基线 `99b99cc`）**：本文命令分三类——
+> - ✓ 本轮实跑通过：`natter version`/`doctor`/`ports`/`upstreams`/`plugins list`/`plugins contributions`/`plugins graph`/`plugins permissions`/`plugins inspect`/`health --offline`/`memory list`/`satori status`/`events list`/`exec`；staging 脚本 `--feature --skip-build`。
+> - 未验证（需 root/真 systemd/Docker/真机/长驻宿主/上游凭据）：`serve` 长驻、`deploy/systemd/*`、`deploy/docker/*`。
+> - 见 [../docs/REVIEW_2026-11-23_ARCHITECTURE.md §19](../docs/REVIEW_2026-11-23_ARCHITECTURE.md#19-第三部分执行结果命令实跑校验)。
+
 > 完整运维流程见 [运维手册](../docs/OPERATIONS_RUNBOOK.md)。
 > 本轮收口记录与已知风险见 [P4.5 运维收口](../docs/operations/2026-11-21-p4-5-ops-closeout-run.md)。
 
@@ -59,7 +64,7 @@ staging 布局（NPS 加载器要求）：
 ./scripts/stage-tier1-plugins.sh -o /opt/natter/plugins -c Release --feature
 
 # 2) 用修复标记验证产物确实是新的（S1-04 的 diffOmitted）
-strings /opt/natter/plugins/natter.plugin.webconsole/lib/Natter.Plugin.WebConsole.dll \
+strings /opt/natter/plugins/natter.tool.admin.webconsole/lib/Natter.Plugin.WebConsole.dll \
   | grep -q DiffOmitted || { echo "FAIL: staging 是旧产物"; exit 1; }
 
 # 3) 核对 staging 清单的时间与哈希

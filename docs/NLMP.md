@@ -1,5 +1,13 @@
 # Natter Lightweight Message Protocol (NLMP) v0.1
 
+> **核对状态（2026-11-23，基线 `99b99cc`）**：本文 11-14 定稿，之后有 100+ 提交。已核对并确认**仍然成立**的部分：`ContentFormat{Plain,Markdown}`、`MentionKind{User,Role,Channel,Everyone,Here}`、`capabilities.{markdown,maxMessageLength,streamEdit}` 语义、出站 markdown 需 capability 否则降级。
+> 11-14 之后新增、本文**未覆盖**的部分（实现已在代码中，以代码为准）：
+> - **持久化层的结构化 source 列**：`sessions`/`agent_tasks` 等表已拆出 `source_protocol` / `source_platform` / `source_self_id`（`SqliteSchema`），复合键不再只用拼接字符串；
+> - **Satori 私聊能力**：`SatoriCapabilityMapper` 无条件声明 `ConversationKind.Direct`（此前只有 Guild 会把私聊回复判成 unsupported）；
+> - **出站分片**：`ChatTextChunker` 增加超长 grapheme 硬切与 markdown 围栏跨片修复（`8e1fb04`）；
+> - **时间戳解析**：NLMP JSON 要求 RFC 3339 UTC。
+> 未逐节重写全文：正文的协议语义部分与当前代码一致，无需改动。
+
 > **状态**：Draft · v0.1 已实现（模型 / 事件 / 命令 / 能力 / Satori 映射 / 诊断）  
 > **更新时间**：2026-11-14  
 > **定位**：Natter 的轻量聊天语义模型 + 可选 JSON 投影；不是平台 wire protocol，也不是 Satori 的替代实现。  

@@ -39,7 +39,7 @@ plugin state     插件激活状态
 
 | 用途 | 取值 |
 | --- | --- |
-| 工程名 / 插件 id | `Natter.Plugin.StateVitals` / `natter.plugin.state-vitals` |
+| 工程名 / 插件 id | `Natter.Plugin.StateVitals` / `natter.feature.character.state-vitals` |
 | 代码类型名 | `StateVitalsRuntime` / `StateVitalsOptions` |
 | 人类称呼 | 「状态系统」或 states-vitals |
 
@@ -286,7 +286,7 @@ memory         按会话：但记得每个用户各自的事
 ### 8.1 自己的库
 
 ```text
-<state>/plugins/natter.plugin.state-vitals/state.db
+<state>/plugins/natter.feature.character.state-vitals/state.db
 ```
 
 理由：

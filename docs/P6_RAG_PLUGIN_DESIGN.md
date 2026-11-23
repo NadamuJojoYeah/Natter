@@ -4,7 +4,7 @@
 > **日期**：2026-11-22
 > **基线**：`b4e91f8`（P6.1 轻量检索 + P6.2 embedding/rerank 端口均已提交）
 > **定位**：在 FTS5 轻量线上叠加向量与 rerank，作为 `IMemoryStore` 的可选超集实现。
-> **关联**：[P6 设计](P6_MEMORY_RAG.md)、[设计缺口](P6_MEMORY_OPEN_QUESTIONS.md)、[Harness 责任边界](HARNESS_RESPONSIBILITY.md)
+> **关联**：[P6 设计](P6_MEMORY_SYSTEM.md)、[设计缺口](P6_MEMORY_GAPS.md)、[Harness 责任边界](HARNESS_RESPONSIBILITY.md)
 
 ---
 
@@ -375,7 +375,7 @@ query
 
 ### 5.4 与宿主既有缺陷的关系
 
-P6.1 的 `SearchFtsAsync` 存在「候选池先按纯 BM25 截断，decay 只在池内重排」的问题（见 [缺口 Q9](P6_MEMORY_OPEN_QUESTIONS.md#q9-衰减只作用于候选池之内)）。混合检索会**放大**它：两路各取 topK 后池子更窄。
+P6.1 的 `SearchFtsAsync` 存在「候选池先按纯 BM25 截断，decay 只在池内重排」的问题（见 [缺口 Q9](P6_MEMORY_GAPS.md#q9-衰减只作用于候选池之内)）。混合检索会**放大**它：两路各取 topK 后池子更窄。
 
 建议：P6.3 实现时，把 decay 应用在**融合之后、裁剪之前**，且 BM25 路的 SQL 取 `topK × 4`。否则 RAG 线会继承并加深同一个缺陷。
 

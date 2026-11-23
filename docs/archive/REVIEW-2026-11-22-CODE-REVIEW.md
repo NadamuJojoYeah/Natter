@@ -1,5 +1,9 @@
 # Natter 全仓库代码审查报告
 
+> **⚠️ 归档文档 · 历史记录，勿据此实现。**
+> 本文件描述的阶段已完成或已被取代，仅用于追溯当时的决策与证据。
+> 现行文档见 [docs/README.md](../README.md)。
+
 > **审查日期**：2026-11-22
 > **基线**：`671097b`（工作区 clean；`git status --short` 无输出）
 > **范围**：`src/`、`plugins/`、`samples/`、`tests/`、`scripts/`、`deploy/`、`.github/`、`config/`、`docs/`
@@ -7,8 +11,8 @@
 > **产物**：本报告 + 六份分领域详细报告（[附录 A](#附录-a分领域详细报告)）
 
 > **修复进度（2026-11-22 更新）**：12 项 S1 已全部修复并验收。详见
-> [最终 S1 验收报告](testing/2026-11-22-final-s1-acceptance.md) 与
-> [审查修复验收](testing/2026-11-22-review-acceptance.md)。S2/S3 未动。
+> [最终 S1 验收报告](../testing/2026-11-22-final-s1-acceptance.md) 与
+> [审查修复验收](../testing/2026-11-22-review-acceptance.md)。S2/S3 未动。
 
 ---
 
@@ -33,8 +37,8 @@
 
 | 项 | 原因 | 提交 |
 | --- | --- | --- |
-| Discord 网关静默失联 3h19m | 生产事故，见 [事故记录](operations/2026-11-22-discord-gateway-stall.md) | `c81c4c4`、`1eb283a` |
-| Prompt mandatory 语义迁移 | harness 责任边界调整，见 [责任边界](HARNESS_RESPONSIBILITY.md) | `f8f17b2` … `8673e89` |
+| Discord 网关静默失联 3h19m | 生产事故，见 [事故记录](../operations/2026-11-22-discord-gateway-stall.md) | `c81c4c4`、`1eb283a` |
+| Prompt mandatory 语义迁移 | harness 责任边界调整，见 [责任边界](../HARNESS_RESPONSIBILITY.md) | `f8f17b2` … `8673e89` |
 | 发布 staging 复核 | 旧产物会让修复在实机失效 | `aee1b0b` |
 | 发布检查增加 staging 断言 | OBS-REVIEW-STAGING | `aee1b0b` |
 
@@ -263,7 +267,7 @@ warning XA0033: Failed to get the Java SDK version ... (Android workload，本�
 
   `scripts/publish-android.sh` 默认走 Release。
 - **影响**：Android 发布包加载即无法访问 Discord / DeepSeek / 钉钉，宿主的核心能力在 Release 上不可用；而 Debug 测试一切正常，问题只会在发布后暴露。
-- **修复方向**：清单显式声明 `android.permission.INTERNET`；补前台服务/通知（见附录 [05-cli-ops.md](review/2026-11-22/05-cli-ops.md) R-51）与真机冒烟；CI 增加"Release 清单必须含 INTERNET"的断言。
+- **修复方向**：清单显式声明 `android.permission.INTERNET`；补前台服务/通知（见附录 [05-cli-ops.md](../review/2026-11-22/05-cli-ops.md) R-51）与真机冒烟；CI 增加"Release 清单必须含 INTERNET"的断言。
 
 ### S1-09 CI 漏构建/漏测试：1/4 套件与 2 个产品工程不在任何验证路径上
 
@@ -420,7 +424,7 @@ warning XA0033: Failed to get the Java SDK version ... (Android workload，本�
 
 ## 5. S3 低优先级（合并清单）
 
-> **复核状态（2026-11-22，基线 commit `eadcd77`）**：45 项已逐条复核并分级 → [S3 45 项复核与分级（Triage）](CODE_REVIEW_S3_TRIAGE.md)。汇总：仍成立 27 / 已修复 1 / 记录过期 7 / 不值得修 10。派工与取舍以 triage 文档为准，下面的原始条目保留不动。
+> **复核状态（2026-11-22，基线 commit `eadcd77`）**：45 项已逐条复核并分级 → [S3 45 项复核与分级（Triage）](REVIEW-2026-11-22-S3-TRIAGE.md)。汇总：仍成立 27 / 已修复 1 / 记录过期 7 / 不值得修 10。派工与取舍以 triage 文档为准，下面的原始条目保留不动。
 
 完整条目见附录；此处按主题给出代表项与数量：
 
@@ -561,12 +565,12 @@ warning XA0033: Failed to get the Java SDK version ... (Android workload，本�
 
 | 报告 | 范围 | 行数 | 发现数（S0/S1/S2/S3） |
 | --- | --- | --- | --- |
-| [01-core.md](review/2026-11-22/01-core.md) | Abstractions / Domain / Application / Infrastructure | 749 | 34（1/4/21/8） |
-| [02-plugins.md](review/2026-11-22/02-plugins.md) | Plugin.Abstractions / Plugin.Store / NPS / Android 宿主 | 363 | 29（1/6/12/10） |
-| [03-chat-ai.md](review/2026-11-22/03-chat-ai.md) | NLMP / Satori / Discord / DingTalk / AI provider | 707 | 57（0/8/27/22） |
-| [04-console-prompt.md](review/2026-11-22/04-console-prompt.md) | WebConsole / PromptLibrary 及其测试 | 490 | 16（0/1/5/10） |
-| [05-cli-ops.md](review/2026-11-22/05-cli-ops.md) | CLI / Android / scripts / deploy / workflows | 960 | 68（0/7/31/30） |
-| [06-tests-docs.md](review/2026-11-22/06-tests-docs.md) | 测试质量、覆盖盲区、文档一致性 | 495 | 25（0/3/13/9） |
+| [01-core.md](../review/2026-11-22/01-core.md) | Abstractions / Domain / Application / Infrastructure | 749 | 34（1/4/21/8） |
+| [02-plugins.md](../review/2026-11-22/02-plugins.md) | Plugin.Abstractions / Plugin.Store / NPS / Android 宿主 | 363 | 29（1/6/12/10） |
+| [03-chat-ai.md](../review/2026-11-22/03-chat-ai.md) | NLMP / Satori / Discord / DingTalk / AI provider | 707 | 57（0/8/27/22） |
+| [04-console-prompt.md](../review/2026-11-22/04-console-prompt.md) | WebConsole / PromptLibrary 及其测试 | 490 | 16（0/1/5/10） |
+| [05-cli-ops.md](../review/2026-11-22/05-cli-ops.md) | CLI / Android / scripts / deploy / workflows | 960 | 68（0/7/31/30） |
+| [06-tests-docs.md](../review/2026-11-22/06-tests-docs.md) | 测试质量、覆盖盲区、文档一致性 | 495 | 25（0/3/13/9） |
 
 > 分报告为原始证据（含代码片段、复现命令、"已排除的疑似问题"），本报告为其去重与分级后的汇总；两者编号可交叉追溯。
 

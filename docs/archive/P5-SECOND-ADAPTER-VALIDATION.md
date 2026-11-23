@@ -1,10 +1,14 @@
 # Second Upstream & Consumer Validation Plan：DingTalk Stream + Spark MaaS
 
+> **⚠️ 归档文档 · 历史记录，勿据此实现。**
+> 本文件描述的阶段已完成或已被取代，仅用于追溯当时的决策与证据。
+> 现行文档见 [docs/README.md](../README.md)。
+
 > **状态**：Preflight review · **实现差距已修复**（DingTalk Stream transport 已实现、Spark MaaS 参数已对齐；真实平台凭据待接入）
 > **日期**：2026-11-15
 > **实际模式**：钉钉 = **Stream 模式**；星火 = **MaaS `spark-x2.5-1.7b`**
 > **目标**：验证 Natter harness 的抽象是否成立：新增第二个 transport 和第二个 AI consumer 时，不改 core、不复制 responder、不破坏 session/memory 边界。
-> **关联**：[Harness 架构](HARNESS_ARCHITECTURE.md)、[Context & Memory 插件](CONTEXT_MEMORY_PLUGIN.md)、[AI Provider 设计](AI_PROVIDER_DESIGN.md)、[Discord transport](DISCORD_PLUGIN_DESIGN.md)
+> **关联**：[Harness 架构](../HARNESS_ARCHITECTURE.md)、[Context & Memory 插件](../P6_MEMORY_SYSTEM.md)、[AI Provider 设计](../AI_PROVIDER_DESIGN.md)、[Discord transport](../DISCORD_PLUGIN_DESIGN.md)
 
 ---
 

@@ -164,9 +164,9 @@ natter --no-plugins plugins inspect <dir> --json
 插件配置放在：
 
 ```text
-config/natter.transport.discord.json
+config/natter.transport.messaging.discord.json
 config/natter.feature.ai.deepseek.json
-config/natter.transport.dingtalk.json
+config/natter.transport.messaging.dingtalk.json
 config/natter.feature.ai.spark.json
 ```
 

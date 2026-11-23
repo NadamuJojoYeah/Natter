@@ -33,8 +33,8 @@
 | --- | --- | --- | --- | --- |
 | **A-01** | `Application/Chat/Context/ContextContracts.cs:175-185` | `MemoryQuery.DecayHalfLife` 名字是「半衰期」，但**代码注释自己承认语义已经要变**：v1 生效的是 `LegacyRetention`（`exp(-age/S)`，30 天保留 0.368），v2 将变成「保留率 0.9 的稳定度区间」。注释原文：*"The name is kept only because 61 call sites reference it; it is a naming debt to fix when v1 retires."* | 与 C-01/C-02 一起处理：v1 退役时同步改名 `StabilityWindow` 并一次性替换调用点。**不要**在语义迁移前改名（会让 v1 读者误解）。 | 中（当前 v1 名字与实现一致，但注释已预告未来撒谎） |
 | **A-02** | `plugins/Natter.Plugin.ConversationConsole/ConversationConsoleQueryGateway.cs:52`；`ConversationConsoleRequestHandler.cs:148` | `IsAvailable => _query is not null`。宿主在无 `--state-dir` 时注入 `EmptyConversationQuery`（`ChatCompositionModule.cs:111-116`），于是 **`/health` 报 `query.available=true`，而该实例结构上只能返回空页**。名字问的是「有没有数据」，实现答的是「端口有没有被授予」。 | 拆成两个诚实的字段：`granted`（端口是否注入）与 `dataAvailable`（是否接了 SQLite 实现）。health 里两个都报。名字建议 `IsGranted`。 | **高**（生产健康检查会给出误导性绿灯；这类「假可用」比报错更难查） |
-| **A-03** | `scripts/stage-tier1-plugins.sh:67-70`；`plugins/Natter.Plugin.PromptLibrary/plugin.json` | 插件 id 前缀不统一：4 个是 `natter.plugin.*`，PromptLibrary 是 **`natter.prompt.library`**。schema 的 id 正则 `^[a-z0-9]+(?:[._-][a-z0-9]+)+$` 允许它，所以不是非法，只是**族名不一致**。 | 定一条规范（建议：所有 NPS 插件 `natter.plugin.<name>`），把 PromptLibrary 改 id 并同步 staging 表与发布包；或明确写下「非 plugin 族允许自定义前缀」并说明理由。 | 低（无功能影响，影响可发现性与运维 grep） |
-| **A-04** | `scripts/stage-tier1-plugins.sh:67-70`（第 1 列 vs 第 3 列） | 产物目录名是**短名**（`webconsole/`、`conversation-console/`、`prompt-library/`、`state-vitals/`），而 manifest id 是全 id（`natter.plugin.webconsole`…）。`src/Natter.Cli` 的示例插件同理（`plugins/greetings`、`plugins/metrics`）。 | NPS 按目录扫描 + 读 manifest，短名能用；但「目录名 ≠ id」让「按 id 找目录」的排查方式失效。建议目录名=id（`plugins/natter.plugin.webconsole/`），或在 PLUGIN_SPEC 里明确写「目录名任意，唯一标识是 manifest.id」。 | 低 |
+| **A-03** | `scripts/stage-tier1-plugins.sh:67-70`；`plugins/Natter.Plugin.PromptLibrary/plugin.json` | 插件 id 前缀不统一：4 个是 `natter.plugin.*`，PromptLibrary 是 **`natter.feature.prompt.library`**。schema 的 id 正则 `^[a-z0-9]+(?:[._-][a-z0-9]+)+$` 允许它，所以不是非法，只是**族名不一致**。 | 定一条规范（建议：所有 NPS 插件 `natter.plugin.<name>`），把 PromptLibrary 改 id 并同步 staging 表与发布包；或明确写下「非 plugin 族允许自定义前缀」并说明理由。 | 低（无功能影响，影响可发现性与运维 grep） |
+| **A-04** | `scripts/stage-tier1-plugins.sh:67-70`（第 1 列 vs 第 3 列） | 产物目录名是**短名**（`webconsole/`、`conversation-console/`、`prompt-library/`、`state-vitals/`），而 manifest id 是全 id（`natter.tool.admin.webconsole`…）。`src/Natter.Cli` 的示例插件同理（`plugins/greetings`、`plugins/metrics`）。 | NPS 按目录扫描 + 读 manifest，短名能用；但「目录名 ≠ id」让「按 id 找目录」的排查方式失效。建议目录名=id（`plugins/natter.tool.admin.webconsole/`），或在 PLUGIN_SPEC 里明确写「目录名任意，唯一标识是 manifest.id」。 | 低 |
 | **A-05** | `ConversationConsoleQueryGateway.cs:53`（`Source`） | `Source` 属性在端口缺失时返回字面量 `"unavailable"`——**用数据字段承载状态**，下游任何 `Source` 渲染都会把状态当来源打印。 | 改 `string? Source`（缺失时 null），状态由 A-02 的两个布尔承载。 | 低（当前只用于 health 展示） |
 | **A-06** | `Application/Chat/Context/ContextContracts.cs:105,113`（v1）vs `MemoryEntryContracts.cs:27`（v2） | 同一领域概念两套词汇：v1 = `MemoryItem`/`MemoryScopeType`，v2 = `MemoryEntry`/`MemoryType`。v1 **没有任何 `[Obsolete]` 或「将被替代」标记**（只在注释里散落提及）。 | 与 C-01 一起：给 v1 打 `[Obsolete("superseded by IMemoryEntryStore (P6.7)")]`，让编译期就把双轨暴露给下一个人；或明确写「v1 是长期保留的兼容层」并删掉注释里的迁移承诺。 | 中（新读者会以为两套都该用） |
 
@@ -122,13 +122,14 @@
 ## 7. 第二部分预览：34 份文档的判定草案（待你确认后再执行）
 
 > **草案，不是交付**。执行前不移动、不删除、不改名任何文件。判定四项：保留 / 合并 / 归档 / 过期重写。
-> **判定分布（草案）**：保留 **22** / 合并 **4** / 归档 **6** / 过期重写 **2** = 34 份（不含本次新增的本文）。
+> **判定分布（最终，2026-11-23 执行）**：保留 **24** / 合并 **2** / 归档 **6** / 过期重写 **2** = 34 份。
+> **改判说明**：`ARCHITECTURE.md` 与 `PLUGINS.md` 由「合并」改为「保留」。理由：前者是**当前代码**架构、`HARNESS_ARCHITECTURE` 是**目标态**设计，合并会混淆两种时态；后者是 **legacy 插件模型教程**、`PLUGIN_SPEC` 是 **NPS 规范**，两套模型都仍在生产使用（README 并列声明），合并会丢掉「legacy vs NPS」的区分。二者改为保留 + 互相交叉链接。
 
 | # | 文档（行数 / 最后提交） | 判定 | 一句话理由 |
 | --- | --- | --- | --- |
 | 1 | `AI_PROVIDER_DESIGN.md` 855 / 11-15 | 保留 | 现行 provider 设计；需补一节 embedding/rerank 端口（P6 新增，本文未覆盖） |
 | 2 | `ANDROID_PLUGIN_HOST.md` 671 / 11-15 | **过期重写** | 信任根已改 embedded resource、安装后完整性复验已加，文档仍是 11-15 的旧机制 |
-| 3 | `ARCHITECTURE.md` 370 / 11-15 | **合并** → `HARNESS_ARCHITECTURE.md` | 两份架构总览，后者已更新；前者 11-15 未动 |
+| 3 | `ARCHITECTURE.md` 370 / 11-15 | 保留 | **当前代码**架构（六边形/组合根/Rx/插件加载）；与「目标态」的 HARNESS_ARCHITECTURE 是不同时态，不合并，改为互相交叉链接 |
 | 4 | `CODE_REVIEW_2026-11-22.md` 610 / 11-22 | **归档** | 一次性审查快照，结论已落地为代码与 S3 批次 |
 | 5 | `CODE_REVIEW_S3_TRIAGE.md` 242 / 11-22 | **归档** | 同上；批次 A 已提交（`3cf65ee`）、批次 B 第一项已修 |
 | 6 | `CONTEXT_MEMORY_PLUGIN.md` 597 / 11-15 | **合并** → `P6_MEMORY_SYSTEM.md` | P3 时代插件契约，已被 P6 记忆体系取代大半 |
@@ -142,7 +143,7 @@
 | 14 | `NLMP.md` 1179 / 11-14 | **过期重写** | 11-14 后 100+ 提交：`ContentFormat`、结构化 source 列、`MentionKind`、capabilities 语义均已变 |
 | 15 | `OPERATIONS_RUNBOOK.md` 677 / 11-22 | 保留 | 现行运维手册（**第三部分命令校验重点对象**） |
 | 16 | `P2_RUNTIME_PROFILE.md` 752 / 11-22 | 保留 | 现行；结论行本轮已校正 Closed·Go |
-| 17 | `P3_CONTEXT_MEMORY.md` 788 / 11-15 | **归档** | P3 阶段记录；归档时在主文档留 20 行「P3 结论」摘要即可 |
+| 17 | `P3-CONTEXT-MEMORY.md` 788 / 11-15 | **归档** | P3 阶段记录；归档时在主文档留 20 行「P3 结论」摘要即可 |
 | 18 | `P4_TIER1_PRODUCTIZATION.md` 508 / 11-22 | **归档** | P4 阶段已完成 |
 | 19 | `P5_AGENT_TASK_RUNTIME.md` 591 / 11-21 | 保留 | 现行设计 |
 | 20 | `P6_MEMORY_EVAL_RESULTS.md` 243 / 11-23 | 保留 | 数据型记录，长期有效（记忆三份之一） |
@@ -150,7 +151,7 @@
 | 22 | `P6_MEMORY_RAG.md` 468 / 11-22 | **合并** → `P6_MEMORY_SYSTEM.md` | 文件头已自标「部分被取代」；留现行部分 |
 | 23 | `P6_MEMORY_SYSTEM.md` 677 / 11-22 | 保留（**升为记忆主文档**） | 记忆三份之一「现行设计」，作为合并入口 |
 | 24 | `P6_RAG_PLUGIN_DESIGN.md` 689 / 11-22 | 保留 | 现行 RAG 插件设计；与 #23 边界需一句话说明（插件 vs 内核能力） |
-| 25 | `PLUGINS.md` 293 / 11-15 | **合并** → `PLUGIN_SPEC.md` | 「清单/适配器覆盖/生命周期」与 NPS 规范大量重叠，且 11-15 未更新 |
+| 25 | `PLUGINS.md` 293 / 11-15 | 保留 | **legacy 插件模型教程**（`IPluginModule`+`ICliCommandContributor`）；与 NPS 规范的 `INatterPlugin` 是两套并存模型，合并会丢掉区分。已在 docs/README.md 标注两者关系 |
 | 26 | `PLUGIN_SPEC.md` 1289 / 11-22 | 保留 | 唯一权威 NPS 规范 |
 | 27 | `PROMPT_COMPILER.md` 853 / 11-22 | 保留 | 现行；随 mandatory 迁移已更新 |
 | 28 | `PUBLISHING.md` 318 / 11-15 | 保留 | 现行发布指南（**第三部分命令校验对象**） |
@@ -168,7 +169,7 @@
 | `P6_MEMORY_SYSTEM.md`（现行设计） | 本体 + `CONTEXT_MEMORY_PLUGIN` + `P6_MEMORY_RAG` 现行部分 | 契约、存储、注入路径、衰减模型 |
 | `P6_MEMORY_GAPS.md`（缺口与决策） | `P6_MEMORY_OPEN_QUESTIONS` 改名 | 只留**未决策**项 + 理由 + 触发条件 |
 | `P6_MEMORY_EVAL_RESULTS.md`（评测数据） | 本体 | 只留数据与结论，不含设计 |
-| `P3_CONTEXT_MEMORY.md` | → `docs/archive/`（阶段前缀 `P3-`） | 归档，主文档留摘要 |
+| `P3-CONTEXT-MEMORY.md` | → `docs/archive/`（阶段前缀 `P3-`） | 归档，主文档留摘要 |
 
 > **前提**：C-01（v1/v2 定性）必须先做。v2 是扶正还是降级为评测专用，直接决定这 3 份写哪套接口——现在写等于把错误固化。
 
@@ -187,3 +188,78 @@
 4. **C-03 的收敛目标位置**（`Abstractions` vs `Plugin.Abstractions`）取决于 B-02 的结论，未定。
 5. **文档 34 份判定是草案**，且**未做**第三部分的命令实跑校验——`OPERATIONS_RUNBOOK.md`、`PUBLISHING.md`、`DEVELOPMENT.md` 里的命令行数很多，按你的硬要求，那些命令在第二部分执行前**一律视为未验证**。
 6. 本轮**未改动任何文件**：本文之外没有其他变更；未 commit/push。
+
+---
+
+## 19. 第三部分执行结果：命令实跑校验
+
+> **基线**：`99b99cc`（2026-11-23）。CLI 二进制：`src/Natter.Cli/bin/Debug/net10.0/natter`（本地 Debug 构建）。
+> **插件现场**：`./scripts/stage-tier1-plugins.sh -o artifacts/stage-verify --feature --skip-build`（只写入 gitignored 的 `artifacts/`，不部署、不读 secret）。
+> **规矩**：✓ = 本轮实跑并有输出；未验证 = 说明原因；✗ = 不存在（已修或删除）。
+
+### 19.1 结论
+
+| 分类 | 数量 | 说明 |
+| --- | --- | --- |
+| ✓ 实跑通过 | **19** | 见 19.2，全部有输出摘要 |
+| 未验证（前置条件） | **6** | 需 secret / 需 config / 需真机 / 需 root，见 19.3 |
+| ✗ 命令不存在 | **0** | 全库已无失效命令；`prompt list` 早已改成 `prompt explain` |
+
+**没有发现需要修的错命令**。lead 上一轮踩的 4 个坑在 HEAD 上均已消失或本身就是「前置条件」问题，逐条见 19.4。
+
+### 19.2 ✓ 已实测（输出摘要）
+
+| 命令 | 结果摘要 |
+| --- | --- |
+| `natter version` / `--json` | `0.1.0-preview.1` / `.NET 10.0.14` / `arch-x64` / `Arch Linux` |
+| `natter doctor` / `--json` | plugins: 2 total, 2 active, 0 failed；JSON 可解析 |
+| `natter ports` | 表格输出，`IConversationQuery → SqliteConversationQuery` 等绑定正确 |
+| `natter upstreams` | `No NLMP chat upstreams registered.`（未加载 transport 插件时的正确空态） |
+| `natter plugins list` / `--detail` | 输出新 id：`natter.sample.port.greetings`、`natter.sample.event.metrics` |
+| `natter plugins contributions` | `prompt.fragment/state`、`cli.command/states.validate`、`port.adapter/greeting`…（contribution id 用点号，CLI 命令名用空格） |
+| `natter plugins graph` | 列出依赖/阻塞/状态（`Activated` / `Failed`） |
+| `natter plugins permissions` | requested/granted/denied 三列齐全，denied 为空 |
+| `natter plugins inspect <dir>` | 探测 `plugins/Natter.Plugin.PromptLibrary`：`id=natter.feature.prompt.library`，`valid=False`（缺 config/assets，符合预期） |
+| `natter health --offline` | `status: offline`、`pluginActivation: not-activated`，并打印提示说明为何退化 |
+| `natter memory list --limit 3` | `count: 0`（空库正确） |
+| `natter satori status` | features `(none supplied)`、`conversations: Direct` |
+| `natter events list --limit 2` | 表头 + `(none)` |
+| `natter exec "demo --times 1" metrics` | 单宿主内串联执行，counter=1、2 个领域事件 |
+| `natter greet 世界` | `Hey 世界, this greeting came from the greetings plugin adapter` |
+| `natter metrics` | `Domain events observed by the metrics plugin: 0` |
+| `natter states validate` | `vitals=4 assertedStates=1 derivedStates=2 effects=3 triggers=1` / `errors: 0` |
+| `natter states explain core#hunger` | 命令可用；输出 `state-vitals is not enabled (config enabled=false)` |
+| `./scripts/stage-tier1-plugins.sh -o … --feature --skip-build` | 6 个插件 staged，`staging-manifest.json` 写在 **plugin root 下**（不在 `/opt/natter/` 根） |
+
+### 19.3 未验证（原因明确，不是「看起来对」）
+
+| 命令 | 阻塞原因 |
+| --- | --- |
+| `natter prompt explain` | PromptLibrary 未激活：`configure-failed: promptlibrary.not-configured`（需 `config.sample.json → config.json`）。**命令本身存在**（`plugins contributions` 显示 `cli.command/prompt.explain`） |
+| `natter web status` | WebConsole 未激活：`missing-secret: WEBCONSOLE_TOKEN` |
+| `natter discord status` / `ai status` | 需 `DISCORD_BOT_TOKEN` / `DEEPSEEK_API_KEY`（`missing-secret`） |
+| `natter conversation console`（HTTP 面） | 需 `CONVERSATION_CONSOLE_TOKEN` + 运行中宿主 |
+| `natter serve`（长驻） | 需运行中宿主 + 上游凭据；本轮不启动长驻进程（不重启/不部署约束） |
+| `deploy/systemd/*.sh`、`deploy/docker/verify-image.sh` | 需 root、真 systemd、Docker；本机 `pid1=bwrap`（既知 BLOCKED） |
+
+> **文档必须写清这些前置条件**。否则读者会以为 `natter prompt explain` 开箱可用——实测是 `Unknown command: prompt`（插件未激活时命令根本不注册）。
+
+### 19.4 lead 上一轮的 4 个坑：HEAD 上的现状
+
+| 坑 | 现状 |
+| --- | --- |
+| `/etc/natter/config/plugins/<name>/config.json` | 已不再这样写；配置路径是 `<plugin-root>/<plugin-id>/config.json`（staging 脚本保证「不写 config.json，由部署提供」） |
+| `natter prompt list` 不存在 | 全库 grep 只剩本文件与 `docs/README.md` 的反面举例；文档实际用的是 `natter prompt explain` |
+| `plugins list \| wc -l` 数行数 | 文档已改为 `--json` + jq 取长度（见 `OPERATIONS_RUNBOOK`）；表格含表头与 Failed 明细，`wc -l` 必然错 |
+| `/opt/natter/staging-manifest.json` | 实际在 **plugin root**：`/opt/natter/plugins/staging-manifest.json`（实测 `artifacts/stage-verify/staging-manifest.json`） |
+
+### 19.5 这轮校验暴露的两个「文档必须改」的点
+
+1. **插件贡献命令依赖激活**：`prompt explain` / `web status` / `discord status` / `ai status` 在对应插件未激活时**不是「报错」而是「命令不存在」**。凡是在文档中给出这些命令的地方，必须同时给激活前提（secret 或 config.json）。
+2. **`--no-plugins` 是布尔开关**，没有 `--no-plugins=false` 形式（我实测时踩了一次：`Unknown command: --no-plugins=false`）。文档若想表达「显式加载目录」，正确写法是 `--plugin-dir <dir>`。
+
+### 19.6 未做的校验（明确声明）
+
+- **未跑** `deploy/` 下任何脚本（会部署/需 root），只做了静态阅读与路径核对。
+- **未跑** `dotnet test`（不属于命令校验范围；本轮不验证测试用例数）。
+- 其余 20+ 份文档里的命令大多是 `dotnet build/test` 与 CLI 同款命令，未逐份重复实跑；已按「同一命令只验一次」处理，并通过全库 grep 确认没有其他不存在的命令。

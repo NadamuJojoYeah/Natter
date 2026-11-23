@@ -1,5 +1,10 @@
 # Natter 开发指南
 
+> **命令校验状态（2026-11-23，基线 `99b99cc`）**：本文命令分三类——
+> - ✓ 本轮实跑通过：`natter version`/`doctor`/`ports`/`upstreams`/`plugins list`/`plugins contributions`/`plugins graph`/`plugins permissions`/`plugins inspect`/`health --offline`/`memory list`/`satori status`/`events list`/`exec`；staging 脚本 `--feature --skip-build`。
+> - 未验证（需 root/真 systemd/Docker/真机/长驻宿主/上游凭据）：`serve` 长驻、`deploy/systemd/*`、`deploy/docker/*`。
+> - 见 [REVIEW_2026-11-23_ARCHITECTURE.md §19](REVIEW_2026-11-23_ARCHITECTURE.md#19-第三部分执行结果命令实跑校验)。
+
 面向第一次参与 Natter 开发、或准备在它之上搭建业务系统的工程师。目标是把“环境 → 日常循环 → 扩展点 → 测试 → 调试 → 提交”讲清楚，并给出可直接照抄的代码骨架。
 
 > 架构原理见 [架构设计](ARCHITECTURE.md)，插件细节见 [插件开发](PLUGINS.md)，发布见 [发布指南](PUBLISHING.md)。本文只讲**怎么开发**。
@@ -66,7 +71,7 @@ dotnet test tests/Natter.Framework.Tests/Natter.Framework.Tests.csproj
 | [src/Natter.Plugin.Abstractions](../src/Natter.Plugin.Abstractions) | NPS v1 Host API：manifest、插件契约、配置 schema、秘密、权限、诊断 | Abstractions + Chat + Application + Cli.Abstractions |
 | [src/Natter.Plugin.Store](../src/Natter.Plugin.Store) | 插件包校验/签名/app 私有 store | Plugin.Abstractions |
 | [src/Natter.Chat.Discord](../src/Natter.Chat.Discord) | Discord.Net transport、NLMP 映射、upstream | Chat + Abstractions |
-| [samples/Natter.Sample.Plugin.Discord](../samples/Natter.Sample.Plugin.Discord) | `natter.transport.discord` NPS 示例插件 | Chat.Discord + Plugin.Abstractions + Cli.Abstractions |
+| [samples/Natter.Sample.Plugin.Discord](../samples/Natter.Sample.Plugin.Discord) | `natter.transport.messaging.discord` NPS 示例插件 | Chat.Discord + Plugin.Abstractions + Cli.Abstractions |
 | [src/Natter.Feature.Ai.DeepSeek](../src/Natter.Feature.Ai.DeepSeek) | DeepSeek `IChatClient` + responder 插件 | Chat + Application + Plugin.Abstractions + M.E.AI |
 | [src/Natter.Feature.Ai](../src/Natter.Feature.Ai) | 共享 responder/context/memory 边界 | Chat + Application + Plugin.Abstractions + M.E.AI |
 | [src/Natter.Chat.DingTalk](../src/Natter.Chat.DingTalk) | 钉钉 Stream transport（+ legacy callback） | Chat + System.Reactive |
@@ -795,7 +800,7 @@ dotnet run --project src/Natter.Cli -- doctor
 dotnet run --project src/Natter.Cli -- exec "demo --times 3" "metrics"
 dotnet run --project src/Natter.Cli -- --verbose plugins list --failed
 dotnet run --project src/Natter.Cli -- plugins graph --json
-dotnet run --project src/Natter.Cli -- plugins doctor natter.sample.greetings
+dotnet run --project src/Natter.Cli -- plugins doctor natter.sample.port.greetings
 dotnet run --project src/Natter.Cli -- plugins store list --root /tmp/natter-store
 dotnet run --project src/Natter.Cli -- upstreams --json
 dotnet run --project src/Natter.Cli -- satori status --features message.update

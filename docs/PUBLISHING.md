@@ -210,7 +210,7 @@ natter plugins store install ./plugin.natter-plugin.zip \
 
 ### 3.5 Discord transport 插件
 
-`natter.transport.discord` 是 NPS transport 插件，不包含 AI 逻辑。构建：
+`natter.transport.messaging.discord` 是 NPS transport 插件，不包含 AI 逻辑。构建：
 
 ```bash
 dotnet build samples/Natter.Sample.Plugin.Discord/Natter.Sample.Plugin.Discord.csproj -c Release
@@ -270,7 +270,7 @@ CI 不调用真实 DeepSeek。详细设计见 [AI Provider Design](AI_PROVIDER_D
 
 ### 3.7 钉钉 / 星火验证插件
 
-**钉钉 transport**（`natter.transport.dingtalk`，Stream 模式）
+**钉钉 transport**（`natter.transport.messaging.dingtalk`，Stream 模式）
 
 - 配置 `clientId`、`clientSecret` 为 `${secret:DINGTALK_CLIENT_SECRET}`、`botId`、`robotCode`；
 - Stream 模式由客户端主动建立 WebSocket，不需要公网 callback URL；
@@ -303,7 +303,7 @@ CI 不调用真实 DeepSeek。详细设计见 [AI Provider Design](AI_PROVIDER_D
 - [ ] `dotnet test tests/Natter.Framework.Tests` 全绿；
 - [ ] 目标 RID 的可执行文件能运行 `version` / `doctor`；
 - [ ] `plugins/` 目录结构正确，NPS 插件 `plugins list --detail` 显示 `Activated`，legacy 插件显示 `Loaded`；
-- [ ] `ports` 显示插件覆盖（如 `plugin:natter.sample.greetings`）；
+- [ ] `ports` 显示插件覆盖（如 `plugin:natter.sample.port.greetings`）；
 - [ ] `exec "demo --times 2" "metrics"` 能看到事件被多个订阅者消费；
 - [ ] Android 使用正式签名并检查 `targetSdkVersion`；
 - [ ] Android dynamic 构建使用 `-c DynamicPlugins`，签名包校验通过，安装后重启能加载 active 版本；

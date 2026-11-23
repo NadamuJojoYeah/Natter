@@ -3,7 +3,7 @@
 > **状态**：Phase 1（只读诊断）+ Phase 2（配置编辑）+ Phase 3（受限命令）+ 角色/日志硬化 · 2026-11-21
 > **定位**：面向运维的 loopback Web 控制台；不修改 core，不默认启用。
 > **设计**：[WEBCONSOLE_PLUGIN_DESIGN.md](WEBCONSOLE_PLUGIN_DESIGN.md)
-> **宿主契约缺口**：[WEBCONSOLE_HOST_API_GAP.md](WEBCONSOLE_HOST_API_GAP.md)
+> **宿主契约缺口**：[WEBCONSOLE_HOST_API_GAP.md](archive/WEBCONSOLE-HOST-API-GAP.md)
 > **验收测试计划**：[WebConsole 插件验收测试计划](testing/2026-11-18-webconsole-acceptance.md)
 
 ---
@@ -17,7 +17,7 @@
 - 审计流水（登录、快照、拒绝、配置写入尝试）；
 - 插件清单、host API、服务器状态。
 
-Phase 2（配置编辑）与 Phase 3（受限命令）已接入宿主管理面（`IAdminConfigStore` / `IAdminCommandRunner` / `IAdminLogReader`，见 [缺口文档](WEBCONSOLE_HOST_API_GAP.md)）。宿主契约缺失（没有 `admin.*` 权限、宿主关闭管理面或旧版本宿主）时端点仍返回 `501 host.admin_config.unavailable` / `501 host.admin_command.unavailable`，UI 显示“未启用”，不会静默失败。
+Phase 2（配置编辑）与 Phase 3（受限命令）已接入宿主管理面（`IAdminConfigStore` / `IAdminCommandRunner` / `IAdminLogReader`，见 [缺口文档](archive/WEBCONSOLE-HOST-API-GAP.md)）。宿主契约缺失（没有 `admin.*` 权限、宿主关闭管理面或旧版本宿主）时端点仍返回 `501 host.admin_config.unavailable` / `501 host.admin_command.unavailable`，UI 显示“未启用”，不会静默失败。
 
 ---
 
@@ -46,7 +46,7 @@ wwwroot/
 宿主的插件根目录由 `NPS` 扫描（默认按宿主配置；示例部署用 `artifacts/live/plugins`）。目录布局必须是：
 
 ```text
-plugins/natter.plugin.webconsole/
+plugins/natter.tool.admin.webconsole/
 ├── plugin.json
 ├── config.schema.json
 ├── config.sample.json
@@ -207,7 +207,7 @@ $NATTER_STATE_DIR/webconsole/audit/webconsole-audit.jsonl
 3. 启动/重启宿主加载插件，日志应出现：
 
    ```text
-   Natter.Plugin.natter.plugin.webconsole: webconsole listening on http://127.0.0.1:5090/
+   Natter.Plugin.natter.tool.admin.webconsole: webconsole listening on http://127.0.0.1:5090/
    ```
 
 4. 浏览器打开 `http://127.0.0.1:5090/`，输入 token。

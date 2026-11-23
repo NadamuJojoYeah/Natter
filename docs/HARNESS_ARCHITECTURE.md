@@ -323,7 +323,7 @@ Ignore | Respond | StartTask | Queue
 
 ## 7. 上下文缓存
 
-> Prompt/Context/Memory 的插件化设计见 [Context & Memory 插件](CONTEXT_MEMORY_PLUGIN.md)。
+> Prompt/Context/Memory 的插件化设计见 [Context & Memory 插件](P6_MEMORY_SYSTEM.md)。
 
 ### 7.1 先区分上下文、缓存、记忆
 
@@ -444,7 +444,7 @@ Key 至少包含：
 
 ## 8. 记忆持久化
 
-> 记忆存储、提取、检索的插件边界见 [Context & Memory 插件](CONTEXT_MEMORY_PLUGIN.md)。
+> 记忆存储、提取、检索的插件边界见 [Context & Memory 插件](P6_MEMORY_SYSTEM.md)。
 
 ### 8.1 四层记忆
 
@@ -687,7 +687,7 @@ providerRequestId
 
 ### Phase 2：上下文与摘要
 
-> P3 的实现规格见 [P3 Context & Memory](P3_CONTEXT_MEMORY.md)。
+> P3 的实现规格见 [P3 Context & Memory](archive/P3-CONTEXT-MEMORY.md)。
 
 - `ContextAssembler`；
 - token budget；
@@ -697,9 +697,9 @@ providerRequestId
 
 ### Phase 3：第二平台
 
-> P4 的产品化计划见 [P4 Tier 1 Productization](P4_TIER1_PRODUCTIZATION.md)。
+> P4 的产品化计划见 [P4 Tier 1 Productization](archive/P4-TIER1-PRODUCTIZATION.md)。
 
-> 钉钉 + 星火的验证计划见 [第二上游/消费者验证](SECOND_ADAPTER_VALIDATION.md)。
+> 钉钉 + 星火的验证计划见 [第二上游/消费者验证](archive/P5-SECOND-ADAPTER-VALIDATION.md)。
 
 - 新 transport plugin；
 - canonical identity；

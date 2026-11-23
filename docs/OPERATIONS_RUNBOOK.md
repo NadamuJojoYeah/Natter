@@ -1,10 +1,15 @@
 # Natter 运维手册（Tier 1）
 
+> **命令校验状态（2026-11-23，基线 `99b99cc`）**：本文命令分三类——
+> - ✓ 本轮实跑通过：`natter version`/`doctor`/`ports`/`upstreams`/`plugins list`/`plugins contributions`/`plugins graph`/`plugins permissions`/`plugins inspect`/`health --offline`/`memory list`/`satori status`/`events list`/`exec`；staging 脚本 `--feature --skip-build`。
+> - 未验证（需 root/真 systemd/Docker/真机/长驻宿主/上游凭据）：`serve` 长驻、`deploy/systemd/*`、`deploy/docker/*`。
+> - 见 [REVIEW_2026-11-23_ARCHITECTURE.md §19](REVIEW_2026-11-23_ARCHITECTURE.md#19-第三部分执行结果命令实跑校验)。
+
 > **状态**：Runbook v1  
 > **适用版本**：P4 Go 基线（.NET 10 / Natter 0.1.0-preview）  
 > **适用对象**：负责 Natter Discord/DeepSeek 主链路、DingTalk/Spark 辅助链路的运维人员  
 > **目标**：让服务可部署、可观察、可备份、可恢复、可升级、可排障  
-> **关联**：[部署示例](../deploy/README.md)、[P4 产品化](P4_TIER1_PRODUCTIZATION.md)、[依赖演进策略](DEPENDENCY_EVOLUTION_POLICY.md)、[首次部署测试记录](testing/2026-11-16-first-deployment-test.md)、[P4.5 修复验证（运维）](operations/2026-11-17-p4-5-ops-verification.md)、[P4.5 实机验收交接](operations/P4.5_REAL_MACHINE_HANDOFF.md)、[P4.5 运维验收执行记录](operations/2026-11-17-p4-5-ops-verification-run.md)、[P4.5 联合复测（运维侧）](operations/2026-11-17-p4-5-retest-run.md)、[P4.5 收尾复测](operations/2026-11-17-p4-5-final-retest-run.md)
+> **关联**：[部署示例](../deploy/README.md)、[P4 产品化](archive/P4-TIER1-PRODUCTIZATION.md)、[依赖演进策略](DEPENDENCY_EVOLUTION_POLICY.md)、[首次部署测试记录](testing/2026-11-16-first-deployment-test.md)、[P4.5 修复验证（运维）](operations/2026-11-17-p4-5-ops-verification.md)、[P4.5 实机验收交接](operations/P4.5_REAL_MACHINE_HANDOFF.md)、[P4.5 运维验收执行记录](operations/2026-11-17-p4-5-ops-verification-run.md)、[P4.5 联合复测（运维侧）](operations/2026-11-17-p4-5-retest-run.md)、[P4.5 收尾复测](operations/2026-11-17-p4-5-final-retest-run.md)
 
 ---
 
@@ -35,7 +40,7 @@
 /etc/natter/
 ├── config/                     # profiles.json + 插件 config（只读）
 │   ├── profiles.json
-│   ├── natter.transport.discord.json
+│   ├── natter.transport.messaging.discord.json
 │   ├── natter.feature.ai.deepseek.json
 │   └── ...
 ├── live.env                    # 0600，secret
@@ -180,7 +185,7 @@ SPARK_API_KEY
 "memory": { "store": "host#sqlite" }
 ```
 
-Tier 2 profile 可以选 `natter.feature.ai.spark#spark` / `natter.sample.memory#file`，但不要让 Tier 2 失败影响 Tier 1。
+Tier 2 profile 可以选 `natter.feature.ai.spark#spark` / `natter.sample.memory.demo#file`，但不要让 Tier 2 失败影响 Tier 1。
 
 ### 3.4 出网代理
 

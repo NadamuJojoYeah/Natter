@@ -4,7 +4,7 @@
 > **日期**：2026-11-23
 > **定位**：用固定夹具量化 tokenizer / decay / candidates 三个参数，回答「生产默认值该取什么」。
 > **依据**：[记忆系统设计](P6_MEMORY_SYSTEM.md) §5、§6、§9.1.1、§12
-> **不复用**：[P6 Memory 缺口清单](P6_MEMORY_OPEN_QUESTIONS.md) 中 Q4 的度量缺口（本文是第一份实测数据）
+> **不复用**：[P6 Memory 缺口清单](P6_MEMORY_GAPS.md) 中 Q4 的度量缺口（本文是第一份实测数据）
 
 ---
 

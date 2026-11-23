@@ -3,7 +3,7 @@
 > **状态**：Accepted design · Phase 1 delivered；Phase 2/3 插件侧校验/策略已就绪（2026-11-18）
 > **日期**：2026-11-17（设计）/ 2026-11-18（实现决策）
 > **定位**：Natter 的独立运维/调试插件，提供 Web 诊断、配置编辑和受限命令终端；不进入 core，不默认启用。
-> **关联**：[NPS v1](PLUGIN_SPEC.md)、[运维手册](OPERATIONS_RUNBOOK.md)、[Harness 架构](HARNESS_ARCHITECTURE.md)、[P5 Agent Runtime](P5_AGENT_TASK_RUNTIME.md)、[宿主契约缺口与适配](WEBCONSOLE_HOST_API_GAP.md)、[插件使用说明](WEBCONSOLE_PLUGIN.md)
+> **关联**：[NPS v1](PLUGIN_SPEC.md)、[运维手册](OPERATIONS_RUNBOOK.md)、[Harness 架构](HARNESS_ARCHITECTURE.md)、[P5 Agent Runtime](P5_AGENT_TASK_RUNTIME.md)、[宿主契约缺口与适配](archive/WEBCONSOLE-HOST-API-GAP.md)、[插件使用说明](WEBCONSOLE_PLUGIN.md)
 
 ---
 
@@ -109,7 +109,7 @@ csproj（**实际实现**）：
 - `plugin.json` 同时作为 `EmbeddedResource`（测试可校验）和输出文件；
 - `config.schema.json`、`config.sample.json`、`wwwroot/**` 复制到输出目录，便于 staging。
 
-> **实现偏差**：Kestrel 改为 BCL `HttpListener`。这不是“简化设计”，而是宿主 ALC/runtimeconfig 当前无法提供 ASP.NET Core 共享框架的必然结果；迁移路径已写入 [缺口文档 G7](WEBCONSOLE_HOST_API_GAP.md#6-g7aspnet-core--alc-实测结论)。
+> **实现偏差**：Kestrel 改为 BCL `HttpListener`。这不是“简化设计”，而是宿主 ALC/runtimeconfig 当前无法提供 ASP.NET Core 共享框架的必然结果；迁移路径已写入 [缺口文档 G7](archive/WEBCONSOLE-HOST-API-GAP.md#6-g7aspnet-core--alc-实测结论)。
 
 ---
 
@@ -118,7 +118,7 @@ csproj（**实际实现**）：
 ```json
 {
   "schemaVersion": 1,
-  "id": "natter.plugin.webconsole",
+  "id": "natter.tool.admin.webconsole",
   "name": "Natter WebConsole",
   "version": "0.1.0",
   "kind": "admin",
@@ -160,7 +160,7 @@ admin.command
 
 第一版可以只启动 loopback server + `web status` CLI，不要求 core 先支持 `admin.ui`。
 
-> **实际 manifest 偏差**：宿主 `PluginKind` 没有 `admin`，`admin.*` contribution 也未进入 v1 词表，因此 Phase 1 使用 `"kind": "tool"` 且只声明 `cli.command/web.status`。登记见 [缺口 G1/G2](WEBCONSOLE_HOST_API_GAP.md#3-g1g2manifest-与管理面贡献点)。
+> **实际 manifest 偏差**：宿主 `PluginKind` 没有 `admin`，`admin.*` contribution 也未进入 v1 词表，因此 Phase 1 使用 `"kind": "tool"` 且只声明 `cli.command/web.status`。登记见 [缺口 G1/G2](archive/WEBCONSOLE-HOST-API-GAP.md#3-g1g2manifest-与管理面贡献点)。
 
 ---
 
@@ -292,7 +292,7 @@ public interface IAdminDiagnostics
 > 1. `natter serve --health-port` 的 `/health`（health/upstreams/providers/plugins 计数）；
 > 2. 插件 provider 中的 `IPluginRuntimeDiagnostics`（若宿主桥接，见缺口 G4）。
 >
-> 都不可用时区块返回 `available:false` + `gapCode`，不伪造数据。契约与降级表见 [WEBCONSOLE_HOST_API_GAP.md](WEBCONSOLE_HOST_API_GAP.md)。
+> 都不可用时区块返回 `available:false` + `gapCode`，不伪造数据。契约与降级表见 [WEBCONSOLE_HOST_API_GAP.md](archive/WEBCONSOLE-HOST-API-GAP.md)。
 
 ### 7.3 日志（已实现：tail + 过滤 + 分页 + 导出）
 
@@ -490,7 +490,7 @@ Phase 1 已落实：
 3. 插件新增 `KestrelWebConsoleServer` 实现同一服务器抽象，用配置切换；
 4. 两套实现跑同一组请求处理测试。
 
-详细证据与迁移步骤见 [WEBCONSOLE_HOST_API_GAP.md §6](WEBCONSOLE_HOST_API_GAP.md#6-g7aspnet-core--alc-实测结论)。
+详细证据与迁移步骤见 [WEBCONSOLE_HOST_API_GAP.md §6](archive/WEBCONSOLE-HOST-API-GAP.md#6-g7aspnet-core--alc-实测结论)。
 
 ---
 
@@ -647,7 +647,7 @@ time, user, ip, action, target, result, duration
 
 ## 15. 验收标准
 
-Phase 1 状态见 §18；未达成项都对应 [缺口文档](WEBCONSOLE_HOST_API_GAP.md) 中的 Gx 编号。
+Phase 1 状态见 §18；未达成项都对应 [缺口文档](archive/WEBCONSOLE-HOST-API-GAP.md) 中的 Gx 编号。
 
 - [x] 默认只绑定 loopback；
 - [x] 无 token 不启动；

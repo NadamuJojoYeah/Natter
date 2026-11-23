@@ -4,7 +4,7 @@
 > **迁移**：2026-11-22 已依据 [Harness 责任边界](HARNESS_RESPONSIBILITY.md) 完成 mandatory → default-removable 的代码迁移；本文描述的是当前实现。
 > **日期**：2026-11-21（mandatory 语义 2026-11-22 修订）
 > **定位**：把 prompt 从 profile 里的临时 `systemPrompt` 提升为可管理、可组合、可关闭、可版本化的 Prompt Compiler。
-> **关联**：[Context & Memory](P3_CONTEXT_MEMORY.md)、[Context/Memory 插件](CONTEXT_MEMORY_PLUGIN.md)、[Harness 架构](HARNESS_ARCHITECTURE.md)
+> **关联**：[Context & Memory](archive/P3-CONTEXT-MEMORY.md)、[Context/Memory 插件](P6_MEMORY_SYSTEM.md)、[Harness 架构](HARNESS_ARCHITECTURE.md)
 
 ---
 
@@ -298,7 +298,7 @@ public interface IPromptFragmentProvider
 
 ```json
 "prompt": {
-  "provider": "natter.prompt.library#default",
+  "provider": "natter.feature.prompt.library#default",
   "preset": "tier1-default",
   "version": "2026-11-21"
 }
@@ -453,14 +453,14 @@ host 负责最终编译；插件只提供数据。
 
 - 保留 `host#static`；
 - 把它映射为内置 preset；
-- 新 profile 使用 `natter.prompt.library#...`；
+- 新 profile 使用 `natter.feature.prompt.library#...`；
 - 默认 profile 不切换，避免回归。
 
 迁移示例：
 
 ```json
 "prompt": {
-  "provider": "natter.prompt.library#default",
+  "provider": "natter.feature.prompt.library#default",
   "preset": "tier1-default"
 }
 ```
@@ -596,7 +596,7 @@ host 负责最终编译；插件只提供数据。
 
 ```json
 "prompt": {
-  "provider": "natter.prompt.library#default",
+  "provider": "natter.feature.prompt.library#default",
   "preset": "tier1-default",
   "version": "2026-11-21",
   "locale": "zh-CN",
@@ -631,7 +631,7 @@ host 负责最终编译；插件只提供数据。
 ```bash
 cp plugins/Natter.Plugin.PromptLibrary/config.sample.json \
    plugins/Natter.Plugin.PromptLibrary/config.json
-# profile 里把 prompt.provider 改成 natter.prompt.library#default
+# profile 里把 prompt.provider 改成 natter.feature.prompt.library#default
 natter prompt explain            # 只显示 id/数量/hash，不显示正文
 natter prompt explain --json
 ```

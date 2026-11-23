@@ -1,5 +1,9 @@
 # S3 45 项复核与分级（Triage）
 
+> **⚠️ 归档文档 · 历史记录，勿据此实现。**
+> 本文件描述的阶段已完成或已被取代，仅用于追溯当时的决策与证据。
+> 现行文档见 [docs/README.md](../README.md)。
+
 > **复核基线**：`git archive HEAD` → **commit `eadcd77`**（`eadcd77e4b4c804a301353c2aa4fc8f90dcd54be`，2026-11-22 18:43）。
 > **复核对象**：`docs/CODE_REVIEW_2026-11-22.md` §5「S3 低优先级（合并清单）」的 45 项（6+5+7+12+6+9）。
 > **方法**：只读。所有行号与代码片段均来自 `git archive HEAD` 导出的干净副本（`artifacts/review-s3/head/`），**未采信工作区任何未提交改动**。

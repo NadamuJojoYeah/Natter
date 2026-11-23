@@ -6,7 +6,7 @@
 > 当前无合格记录，按「未完成」计，不得写成 PASS）。
 
 > **日期**：2026-11-15
-> **被测对象**：`natter.transport.discord`（`Natter.Sample.Plugin.Discord` + `Natter.Chat.Discord`）、`natter.feature.ai.deepseek`（`Natter.Feature.Ai.DeepSeek`）
+> **被测对象**：`natter.transport.messaging.discord`（`Natter.Sample.Plugin.Discord` + `Natter.Chat.Discord`）、`natter.feature.ai.deepseek`（`Natter.Feature.Ai.DeepSeek`）
 > **入口**：`tests/Natter.Live.Tests`、`scripts/live-test.sh`
 > **关联**：[Discord 传输设计](DISCORD_PLUGIN_DESIGN.md)、[AI Provider 设计](AI_PROVIDER_DESIGN.md)、[NPS v1](PLUGIN_SPEC.md)
 
@@ -14,7 +14,7 @@
 
 ## 0. 一句话结论
 
-> 第二上游/消费者（钉钉 + 星火）的验证见 [第二上游/消费者验证](SECOND_ADAPTER_VALIDATION.md)；当前为 fake/HTTP 契约与 NPS 交叉验证，真实平台凭据未接入。
+> 第二上游/消费者（钉钉 + 星火）的验证见 [第二上游/消费者验证](archive/P5-SECOND-ADAPTER-VALIDATION.md)；当前为 fake/HTTP 契约与 NPS 交叉验证，真实平台凭据未接入。
 
 两个插件在 **真实 Discord 网关 + 真实 DeepSeek Chat Completions** 上完成了「入站 → NLMP → responder → 出站」的完整链路。开发修复后已从正式修复构建重跑全部自动 live：**27/27 通过**（L1 8、L2 9、L2b 2、L3/L3b/L3c 3、L4 5），**214/214 框架回归通过**；L5 人工闸门修复后复测通过（见下方链接）。过程中记录并修复了 2 个会直接导致 CLI 无法加载插件的真实缺陷（见 §7）。
 
@@ -164,7 +164,7 @@ text=natter-live-ingress-56e5d1e0764545189242e70504615fa3
 ### 5.4 L3 端到端（1/1 通过，12s）
 
 ```text
-plugin natter.transport.discord      state=Activated trust=bundled
+plugin natter.transport.messaging.discord      state=Activated trust=bundled
 plugin natter.feature.ai.deepseek    state=Activated trust=bundled
 upstream discord:discord:1571154023493410836 connected=True
 reply author=1571154023493410836 chars=14 text=17 + 25 is 42.
@@ -180,7 +180,7 @@ ai status: requests=1 errors=0 p50LatencyMs=678 inputTokens=35 outputTokens=8
 staged .../discord from samples/Natter.Sample.Plugin.Discord/bin/Debug/net10.0
 staged .../deepseek from src/Natter.Feature.Ai.DeepSeek/bin/Debug/net10.0
 plugin natter.feature.ai.deepseek  state=Activated trust=local
-plugin natter.transport.discord    state=Activated trust=local
+plugin natter.transport.messaging.discord    state=Activated trust=local
 file-plugin reply chars=11 text=6 × 7 = 42.
 discord status: connected=true guildCount=1 channelCount=4 latencyMs=497
 ```
@@ -229,7 +229,7 @@ Live re-run after fixes: L1 8/8, L2 9/9, L2b 2/2, L3/L3b 2/2, L4 5/5 = 26/26
 ### BUG-001 · 插件加载上下文把所有 `Natter.*` / `Microsoft.Extensions.*` 当作宿主共享
 
 - **现象**：把插件目录放进 CLI 后，`plugins list` 显示
-  - `natter.transport.discord` → `load-failed: Could not load file or assembly 'Natter.Chat.Discord'`
+  - `natter.transport.messaging.discord` → `load-failed: Could not load file or assembly 'Natter.Chat.Discord'`
   - `natter.feature.ai.deepseek` → `load-failed: Could not load file or assembly 'Microsoft.Extensions.AI.Abstractions, Version=10.11.0.0'`
 - **根因**：`PluginLoadContext.SharedPrefixes` 用 `Natter.` / `Microsoft.Extensions.` 前缀判定为「宿主共享」，返回 `null` 交给默认 ALC；但宿主（`Natter.Cli`）并不引用这两个程序集，默认 ALC 里没有，于是加载失败。插件目录里明明带着这两个 DLL。
 - **测试侧临时处置**（不是修复，待开发评审）：
