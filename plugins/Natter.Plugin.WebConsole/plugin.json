@@ -13,6 +13,12 @@
   "author": "Natter",
   "license": "MIT",
   "homepage": "https://github.com/natter-framework/natter",
+  "dataDirs": [
+    {
+      "path": "audit",
+      "purpose": "Audit trail for authenticated admin actions. Written by the service user, so the deployment must hand this directory to User= with mode 0750."
+    }
+  ],
   "permissions": [
     "network",
     "secrets:WEBCONSOLE_TOKEN",

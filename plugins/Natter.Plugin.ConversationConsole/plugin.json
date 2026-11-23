@@ -13,6 +13,12 @@
   "author": "Natter",
   "license": "MIT",
   "homepage": "https://github.com/natter-framework/natter",
+  "dataDirs": [
+    {
+      "path": "audit",
+      "purpose": "Read-only console access audit. Written by the service user; the deployment hands this directory to User= with mode 0750."
+    }
+  ],
   "permissions": [
     "network",
     "chat.read",

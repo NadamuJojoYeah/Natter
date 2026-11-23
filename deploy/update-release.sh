@@ -155,16 +155,63 @@ if [[ -n "$TMP_KEEP" ]]; then
   rm -rf "$TMP_KEEP"
 fi
 
-# The WebConsole audit drop-in may still point inside the install root; keep it valid.
-AUDIT_DIR="$TARGET/plugins/natter.plugin.webconsole/audit"
-if [[ -d "$TARGET/plugins/natter.plugin.webconsole" ]]; then
-  run install -d -m 0755 "$AUDIT_DIR" || true
-fi
-
 # Plugins are read by the service user; a stray 0600 plugin.json breaks activation.
 # Normalise ownership too: cp -a keeps the publisher's uid, which is not what the unit expects.
 run chown -R root:root "$TARGET" || die "chown failed" 5
 run chmod -R a+rX "$TARGET" || die "chmod failed" 5
+
+# Plugin-owned data directories must stay writable by the service user.
+#
+# Rationale: a plugin owns its own data (audit logs, caches, plugin-local databases) and keeping it
+# next to the plugin means "uninstall = delete the directory". The blanket `chown -R root:root` above
+# is correct for CODE (a compromised service must not be able to rewrite its own or its plugins'
+# binaries) but it also took away the one directory plugins legitimately write to. That contradiction
+# is what produced the 2026-11-23 crash loop: the WebConsole audit directory ended up root-owned on a
+# ProtectSystem=strict mount, so the scanner could not even enumerate it.
+#
+# So: code stays root-owned and read-only; only the `audit` subdirectory is handed to the service
+# user, with 0750 so it is writable by natter and readable by admin groups.
+SERVICE_USER="${NATTER_SERVICE_USER:-}"
+if [[ -z "$SERVICE_USER" ]]; then
+  # Prefer the unit's User= so the handover cannot drift from what systemd actually runs.
+  SERVICE_USER="$(sed -n 's/^User=//p' "$TARGET/natter.service" 2>/dev/null | head -1 || true)"
+fi
+[[ -n "$SERVICE_USER" ]] || SERVICE_USER="natter"
+
+# Plugins declare their writable data directories in plugin.json (`dataDirs`). Declaring them in the
+# manifest keeps the deployment honest: adding a writing plugin no longer means editing this script,
+# and the unit's ReadWritePaths can be checked against the same list.
+PLUGIN_DATA_DIRS=()
+shopt -s nullglob
+for plugin_dir in "$TARGET"/plugins/*/; do
+  plugin_dir="${plugin_dir%/}"
+  manifest="$plugin_dir/plugin.json"
+  [[ -f "$manifest" ]] || continue
+
+  # `grep -qa` on the raw manifest avoids a JSON parser here (no jq dependency at deploy time).
+  grep -qa '"dataDirs"' "$manifest" 2>/dev/null || continue
+
+  while IFS= read -r rel; do
+    [[ -n "$rel" ]] || continue
+    case "$rel" in
+      /*|*..*) echo "  WARNING: $manifest declares an unsafe dataDir '$rel' (must be a relative subpath); skipped" >&2; continue ;;
+    esac
+    PLUGIN_DATA_DIRS+=("$plugin_dir/$rel")
+  done < <(sed -n '/"dataDirs"/,/\]/p' "$manifest" | sed -n 's/.*"path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+done
+shopt -u nullglob
+
+for data_dir in ${PLUGIN_DATA_DIRS[@]+"${PLUGIN_DATA_DIRS[@]}"}; do
+  run install -d -o "$SERVICE_USER" -g "$SERVICE_USER" -m 0750 "$data_dir" \
+    || die "cannot prepare plugin data dir $data_dir" 5
+  echo "  plugin data: $data_dir ($SERVICE_USER:0750)"
+  # A service-owned directory must not be readable by everyone; lib/ stays 0755 via chmod -R a+rX.
+  run chmod 0750 "$data_dir" || true
+done
+
+if [[ ${#PLUGIN_DATA_DIRS[@]} -eq 0 ]]; then
+  echo "  plugin data: (no plugin declared dataDirs)"
+fi
 
 echo "verify: release marker files"
 [[ $DRY_RUN -eq 1 ]] || {
