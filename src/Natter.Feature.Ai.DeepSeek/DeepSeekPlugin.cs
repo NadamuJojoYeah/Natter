@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net.Http;
 using System.Text.Json;
 using Microsoft.Extensions.AI;
@@ -181,7 +182,8 @@ public sealed class DeepSeekStatusCommandHandler(
             options.HistoryMaxMessages,
             options.HistoryMaxCharacters,
             historyCount,
-            metrics.Snapshot());
+            metrics.Snapshot(),
+            DeepSeekEffectiveParameters.Build(options));
 
         if (invocation.HasFlag("json"))
         {
@@ -204,6 +206,8 @@ public sealed class DeepSeekStatusCommandHandler(
         invocation.Console.Out.WriteLine($"cachedInputTokens: {snapshot.Metrics.CachedInputTokens}");
         invocation.Console.Out.WriteLine($"reasoningTokens: {snapshot.Metrics.ReasoningTokens}");
         invocation.Console.Out.WriteLine($"lastError: {snapshot.Metrics.LastError ?? "-"}");
+        foreach (var parameter in snapshot.Effective)
+            invocation.Console.Out.WriteLine($"{parameter.Name}: {parameter.Value} ({parameter.Source})");
 
         return CliExitCodes.Success;
     }
@@ -219,4 +223,29 @@ public sealed record DeepSeekStatusSnapshot(
     int HistoryMaxMessages,
     int HistoryMaxCharacters,
     int HistoryConversations,
-    DeepSeekMetricsSnapshot Metrics);
+    DeepSeekMetricsSnapshot Metrics,
+    IReadOnlyList<DeepSeekEffectiveParameter> Effective);
+
+/// <summary>One effective parameter plus where the value came from ("default" or "config").</summary>
+public sealed record DeepSeekEffectiveParameter(string Name, string Value, string Source);
+
+internal static class DeepSeekEffectiveParameters
+{
+    public static IReadOnlyList<DeepSeekEffectiveParameter> Build(DeepSeekOptions options)
+    {
+        static string Source(bool overridden) => overridden ? "config" : "default";
+        return
+        [
+            new("maxOutputTokens", options.MaxOutputTokens.ToString(CultureInfo.InvariantCulture),
+                Source(options.MaxOutputTokens != DeepSeekDefaults.MaxOutputTokens)),
+            new("maxInputCharacters", options.MaxInputCharacters.ToString(CultureInfo.InvariantCulture),
+                Source(options.MaxInputCharacters != DeepSeekDefaults.MaxInputCharacters)),
+            new("temperature", options.Temperature.ToString("0.###", CultureInfo.InvariantCulture),
+                Source(!options.Temperature.Equals(DeepSeekDefaults.Temperature))),
+            new("timeoutSeconds", options.TimeoutSeconds.ToString(CultureInfo.InvariantCulture),
+                Source(options.TimeoutSeconds != DeepSeekDefaults.TimeoutSeconds)),
+            new("maxRetries", options.MaxRetries.ToString(CultureInfo.InvariantCulture),
+                Source(options.MaxRetries != DeepSeekDefaults.MaxRetries)),
+        ];
+    }
+}

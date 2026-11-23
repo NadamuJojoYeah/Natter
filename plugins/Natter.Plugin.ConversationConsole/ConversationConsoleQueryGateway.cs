@@ -49,16 +49,28 @@ public sealed class ConversationConsoleQueryGateway
     public ConversationConsoleQueryGateway(IConversationQuery? query)
         => _query = query;
 
-    public bool IsAvailable => _query is not null;
+    /// <summary>The host injected a port. This is not the same as "the port can return data".</summary>
+    public bool IsInjected => _query is not null;
 
-    public string Source => _query is null ? "unavailable" : "host.conversation-query";
+    /// <summary>The injected port has a real data source (not the empty fallback).</summary>
+    public bool HasDataSource => _query is not null && _query.HasDataSource;
+
+    /// <summary>
+    /// True only when the port is injected AND backed by data. An empty port is "injected but
+    /// unavailable"; reporting it as available was a fake-green health check (A-02).
+    /// </summary>
+    public bool IsAvailable => HasDataSource;
+
+    public string Source => _query is null
+        ? "unavailable"
+        : _query.HasDataSource ? "host.conversation-query" : "empty";
 
     /// <summary>Lists conversations. Returns null when the host port is unavailable.</summary>
     public async ValueTask<ConversationConsolePage?> ListAsync(
         ConversationFilter filter,
         CancellationToken cancellationToken = default)
     {
-        if (_query is null)
+        if (_query is null || !_query.HasDataSource)
             return null;
 
         var page = await _query.ListAsync(filter, cancellationToken).ConfigureAwait(false);
@@ -90,7 +102,7 @@ public sealed class ConversationConsoleQueryGateway
         int limit,
         CancellationToken cancellationToken = default)
     {
-        if (_query is null)
+        if (_query is null || !_query.HasDataSource)
             return null;
 
         var messages = await _query

@@ -377,7 +377,10 @@ public sealed class ConversationQueryTests
     [Fact]
     public void Port_surface_is_read_only_by_type()
     {
-        var methods = typeof(IConversationQuery).GetMethods(BindingFlags.Public | BindingFlags.Instance);
+        var methods = typeof(IConversationQuery)
+            .GetMethods(BindingFlags.Public | BindingFlags.Instance)
+            .Where(method => !method.IsSpecialName)
+            .ToArray();
 
         Assert.Equal(2, methods.Length);
         Assert.Equal(
@@ -393,8 +396,12 @@ public sealed class ConversationQueryTests
             Assert.Equal(typeof(ValueTask<>), method.ReturnType.GetGenericTypeDefinition());
         }
 
-        // No writer can be smuggled in through a property either.
-        Assert.Empty(typeof(IConversationQuery).GetProperties(BindingFlags.Public | BindingFlags.Instance));
+        // No writer can be smuggled in through a property either. The only property is the
+        // read-only data-source capability flag (A-02).
+        var properties = typeof(IConversationQuery).GetProperties(BindingFlags.Public | BindingFlags.Instance);
+        var property = Assert.Single(properties);
+        Assert.Equal("HasDataSource", property.Name);
+        Assert.False(property.CanWrite);
     }
 
     [Fact]

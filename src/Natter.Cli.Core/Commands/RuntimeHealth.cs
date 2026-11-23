@@ -22,12 +22,16 @@ public static class CliHealthExitCodes
 /// <summary>Single health snapshot builder shared by `natter health` and `/health`.</summary>
 public static class RuntimeHealth
 {
-    private static readonly Regex SecretPattern = new(
-        @"(sk-[A-Za-z0-9_\-]{8,}|ak-[A-Za-z0-9_\-]{8,}|Bearer\s+[A-Za-z0-9._\-]{8,})",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
-
+    /// <summary>
+    /// One shared redaction core (C-03): /health and --json are operator-facing, so a rule that
+    /// exists only here would leak whatever the shared core already learned to catch.
+    /// </summary>
     public static string Sanitize(string message)
-        => string.IsNullOrEmpty(message) ? message : SecretPattern.Replace(message, "[redacted]");
+        => string.IsNullOrEmpty(message)
+            ? message
+            : Natter.Application.Redaction.SecretRedaction.Apply(
+                message,
+                Natter.Application.Redaction.SecretRedactionOptions.Admin);
 
     /// <summary>
     /// Maps the raw facts onto one of four health states. Kept pure so every combination is testable

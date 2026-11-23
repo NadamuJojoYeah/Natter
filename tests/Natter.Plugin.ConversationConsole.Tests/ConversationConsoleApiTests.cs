@@ -198,6 +198,28 @@ public sealed class ConversationConsoleApiTests
         Assert.Equal("unavailable", document.RootElement.GetProperty("query").GetProperty("source").GetString());
     }
 
+    [Fact]
+    public async Task Empty_fallback_port_is_injected_but_not_available()
+    {
+        using var workspace = new ConversationConsoleWorkspace();
+        var (handler, _) = ConversationConsoleTestFactory.CreateHandler(
+            workspace,
+            query: new Natter.Application.Chat.EmptyConversationQuery());
+
+        var health = await handler.HandleAsync(ConversationConsoleTestFactory.Request("/api/health"));
+        Assert.Equal(200, health.StatusCode);
+        using var document = JsonDocument.Parse(health.Body);
+        var query = document.RootElement.GetProperty("query");
+        Assert.False(query.GetProperty("available").GetBoolean());
+        Assert.True(query.GetProperty("injected").GetBoolean());
+        Assert.False(query.GetProperty("hasDataSource").GetBoolean());
+        Assert.Equal("empty", query.GetProperty("source").GetString());
+
+        var list = await handler.HandleAsync(ConversationConsoleTestFactory.Request("/api/sessions"));
+        Assert.Equal(501, list.StatusCode);
+        Assert.Contains("host.conversation-query.unavailable", Encoding.UTF8.GetString(list.Body), StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData("limit=abc")]
     [InlineData("since=not-a-date")]

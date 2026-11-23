@@ -151,6 +151,8 @@ public sealed class ConversationConsoleRequestHandler
             {
                 source = _query.Source,
                 available = _query.IsAvailable,
+                injected = _query.IsInjected,
+                hasDataSource = _query.HasDataSource,
             },
             pageSize = _options.PageSize,
             messagePageSize = _options.MessagePageSize,

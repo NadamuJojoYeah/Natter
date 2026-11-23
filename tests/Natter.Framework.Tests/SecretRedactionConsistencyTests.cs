@@ -77,6 +77,7 @@ public sealed class SecretRedactionConsistencyTests(ITestOutputHelper output)
         AssertClean("DiscordLogRedaction", DiscordLogRedaction.Redact(item.Input), item);
         AssertClean("SecretRedaction.Admin", SecretRedaction.Apply(item.Input, SecretRedactionOptions.Admin), item);
         AssertClean("SecretRedaction.Discord", SecretRedaction.Apply(item.Input, SecretRedactionOptions.Discord), item);
+        AssertClean("RuntimeHealth", Natter.Cli.Core.Commands.RuntimeHealth.Sanitize(item.Input), item);
     }
 
     [Fact]

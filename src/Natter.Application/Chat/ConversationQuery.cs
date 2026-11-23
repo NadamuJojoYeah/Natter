@@ -104,6 +104,12 @@ public static class ConversationQueryLimits
 /// </summary>
 public interface IConversationQuery
 {
+    /// <summary>
+    /// False when the port is structurally incapable of returning data (for example the in-memory
+    /// host without --state-dir). Health checks must not report this as "available".
+    /// </summary>
+    bool HasDataSource => true;
+
     /// <summary>Lists conversations newest-first, with cursor pagination and the filters above.</summary>
     ValueTask<ConversationPage> ListAsync(
         ConversationFilter filter,
@@ -127,6 +133,8 @@ public interface IConversationQuery
 /// </summary>
 public sealed class EmptyConversationQuery : IConversationQuery
 {
+    public bool HasDataSource => false;
+
     public ValueTask<ConversationPage> ListAsync(
         ConversationFilter filter,
         CancellationToken cancellationToken = default)
