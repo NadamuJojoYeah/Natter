@@ -2,6 +2,8 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 
+using Natter.Application.Redaction;
+
 namespace Natter.Plugin.WebConsole;
 
 /// <summary>Sanitized view of the plugin's own configuration (design §7/§8).</summary>
@@ -146,50 +148,19 @@ public static class WebConsoleRedaction
         return (JsonSerializer.SerializeToElement(node), redacted);
     }
 
+    /// <summary>
+    /// C-03: shares the core rules with admin/Discord. Differences that stay intentional:
+    /// <list type="bullet">
+    /// <item>marker is <c>[redacted]</c> (console UI/JSON diagnostics);</item>
+    /// <item>no URL-credential or Bot-header rules (the console does not print adapters' auth);
+    /// and <c>${secret:NAME}</c> references are preserved verbatim (S1-04b).</item>
+    /// </list>
+    /// The shared core also gives this pass the 64 KiB scan cap and 1s regex timeout it lacked.
+    /// </summary>
     public static string RedactSecrets(string? value)
-    {
-        if (string.IsNullOrEmpty(value))
-            return value ?? string.Empty;
+        => SecretRedaction.Apply(value, WebConsoleRedactionOptions);
 
-        var redacted = PemBlockPattern.Replace(value, "[redacted]");
-        redacted = PemDanglingPattern.Replace(redacted, "[redacted]");
-
-        // Protect `${secret:NAME}` references so no later rule can rewrite them.
-        var references = new List<string>();
-        redacted = SecretReferenceTokenPattern.Replace(redacted, match =>
-        {
-            references.Add(match.Value);
-            return ReferencePlaceholder + (references.Count - 1).ToString(System.Globalization.CultureInfo.InvariantCulture)
-                   + ReferencePlaceholder;
-        });
-
-        redacted = SensitiveValuePattern.Replace(redacted, "[redacted]");
-        var result = SensitivePairPattern.Replace(
-            redacted,
-            match =>
-            {
-                var value = match.Groups["value"].Value;
-
-                // A protected reference placeholder: keep it so the restore step can put the
-                // `${secret:NAME}` token back verbatim.
-                if (value.Contains(ReferencePlaceholder, StringComparison.Ordinal))
-                    return match.Value;
-
-                return SecretReferencePattern.IsMatch(value)
-                    ? match.Value
-                    : match.Groups["prefix"].Value + "[redacted]";
-            });
-
-        for (var index = 0; index < references.Count; index++)
-        {
-            result = result.Replace(
-                ReferencePlaceholder + index.ToString(System.Globalization.CultureInfo.InvariantCulture) + ReferencePlaceholder,
-                references[index],
-                StringComparison.Ordinal);
-        }
-
-        return result;
-    }
+    private static readonly SecretRedactionOptions WebConsoleRedactionOptions = SecretRedactionOptions.Admin;
 
     public static string SanitizeText(string? value, int maxLength = 300)
     {

@@ -15,6 +15,9 @@
 
   <ItemGroup>
     <ProjectReference Include="../Natter.Chat/Natter.Chat.csproj" />
+    <!-- C-03: shared redaction core (Natter.Application/Redaction). Application does not reference
+         the Discord adapter, so this edge cannot create a cycle. -->
+    <ProjectReference Include="../Natter.Application/Natter.Application.csproj" />
     <ProjectReference Include="../Natter.Abstractions/Natter.Abstractions.csproj" />
   </ItemGroup>
 

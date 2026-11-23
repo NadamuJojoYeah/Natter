@@ -1,4 +1,4 @@
-using System.Text.RegularExpressions;
+using Natter.Application.Redaction;
 
 namespace Natter.Chat.Discord;
 
@@ -10,34 +10,21 @@ namespace Natter.Chat.Discord;
 /// </summary>
 public static class DiscordLogRedaction
 {
-    private static readonly Regex UrlCredentials = new(
-        @"\b(https?://)([^/@\s]+)@",
-        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-
-    private static readonly Regex BotAuthorization = new(
-        @"\bBot\s+[A-Za-z0-9._\-]{12,}",
-        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-
-    private static readonly Regex SecretAssignment = new(
-        @"(?<key>(?:token|authorization|bearer|api[_-]?key|secret|password|passwd)\s*[=:]\s*)(?<value>[^\s,;""']+)",
-        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-
     /// <summary>
-    /// Removes credentials from a diagnostic string. <paramref name="secret"/> is an optional
-    /// known secret (the bot token) replaced literally so it can never leak through a template.
+    /// C-03: shared rules (assignment pairs, literal keys, PEM) + Discord-only rules (URL credentials,
+    /// Bot header), with the <c>***</c> marker kept so existing log formats/tests do not change.
+    /// This class used to run unbounded regexes over whole log lines; the shared core now caps the
+    /// scan at 64 KiB and gives every regex a one-second timeout.
     /// </summary>
     public static string Redact(string? value, string? secret = null)
     {
         if (string.IsNullOrWhiteSpace(value))
             return value ?? string.Empty;
 
-        var result = UrlCredentials.Replace(value, "$1***@");
-        result = BotAuthorization.Replace(result, "Bot ***");
-        result = SecretAssignment.Replace(result, "${key}***");
+        var options = secret is { Length: > 0 }
+            ? SecretRedactionOptions.Discord with { KnownSecret = secret }
+            : SecretRedactionOptions.Discord;
 
-        if (!string.IsNullOrEmpty(secret))
-            result = result.Replace(secret, "***", StringComparison.Ordinal);
-
-        return result;
+        return SecretRedaction.Apply(value, options);
     }
 }
