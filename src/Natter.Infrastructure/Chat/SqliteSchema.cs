@@ -11,6 +11,8 @@ internal static class SqliteSchema
 {
     public const int CurrentVersion = 7;
 
+    private static void ReportWarning(string message) => MemoryMigrationDiagnostics.Report(message);
+
     /// <summary>Tokenizer actually used by memory_fts (trigram when the runtime supports it).</summary>
     public static string FtsTokenizer { get; private set; } = "trigram";
 
@@ -412,7 +414,18 @@ internal static class SqliteSchema
             CREATE VIRTUAL TABLE memory_turns_fts USING fts5(message_id UNINDEXED, text_index, tokenize='unicode61');
             """);
 
-        MigrateLegacyMemoryItems(connection);
+        try
+        {
+            MigrateLegacyMemoryItems(connection);
+        }
+        catch (SqliteException exception)
+        {
+            // Degrade to "v2 empty + warning" instead of failing the whole database open. The v1
+            // rows stay untouched in memory_items, so nothing is lost and a later attempt can retry.
+            ReportWarning(
+                $"memory.migration_failed: v1 rows were not copied into memory_entries ({exception.Message}); "
+                + "layered recall starts empty and v1 data is preserved.");
+        }
 
         return 7;
     }
@@ -492,8 +505,11 @@ internal static class SqliteSchema
         var createdParameter = insert.Parameters.Add("$created", SqliteType.Text);
         var updatedParameter = insert.Parameters.Add("$updated", SqliteType.Text);
 
+        var unknownKinds = 0;
         foreach (var row in rows)
         {
+            if (!MemoryEntryMapping.IsKnownLegacyKind(row.Kind))
+                unknownKinds++;
             var type = MemoryEntryMapping.FromLegacyKind(row.Kind);
             var archived = row.ExpiresAt is not null
                            && DateTimeOffset.TryParse(
@@ -518,6 +534,14 @@ internal static class SqliteSchema
             createdParameter.Value = row.CreatedAt;
             updatedParameter.Value = row.UpdatedAt;
             insert.ExecuteNonQuery();
+        }
+
+        if (unknownKinds > 0)
+        {
+            // Counted, not logged per row: the kind text comes from old user data and the log must
+            // not carry identifiers (§10.2). Mapping is Fact, the most conservative long-lived type.
+            ReportWarning(
+                $"memory.migration_unknown_kind: {unknownKinds} v1 row(s) had an unrecognized kind and were mapped to fact.");
         }
     }
 

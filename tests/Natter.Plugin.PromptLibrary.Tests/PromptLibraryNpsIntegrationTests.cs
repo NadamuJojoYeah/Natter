@@ -12,7 +12,7 @@ namespace Natter.Plugin.PromptLibrary.Tests;
 
 /// <summary>
 /// End-to-end P2 check: the Prompt Library plugin is staged as a real NPS package (<c>lib/</c>
-/// layout), loaded through the plugin ALC, registers <c>natter.prompt.library#default</c> and the
+/// layout), loaded through the plugin ALC, registers <c>natter.feature.prompt.library#default</c> and the
 /// <c>prompt explain</c> command, and compiles the library preset as configured.
 /// </summary>
 public sealed class PromptLibraryNpsIntegrationTests
@@ -50,13 +50,13 @@ public sealed class PromptLibraryNpsIntegrationTests
             Assert.Equal(PluginState.Activated, descriptor.State);
 
             var components = host.Services.GetRequiredService<IContextComponentCatalog>();
-            Assert.True(components.TryGetPrompt("natter.prompt.library#default", out var promptProvider));
+            Assert.True(components.TryGetPrompt("natter.feature.prompt.library#default", out var promptProvider));
 
             var bundle = await promptProvider!.GetAsync(new PromptRequest(
                 new RuntimeProfile
                 {
                     Id = "tier1-default",
-                    Prompt = new ProfilePrompt { Provider = "natter.prompt.library#default" },
+                    Prompt = new ProfilePrompt { Provider = "natter.feature.prompt.library#default" },
                 },
                 Source.Create("discord", "discord", "bot"),
                 new Conversation("c1", ConversationKind.Direct),
@@ -85,7 +85,7 @@ public sealed class PromptLibraryNpsIntegrationTests
             Assert.DoesNotContain("先回答结论", console.Output);
 
             await host.StopAsync();
-            Assert.False(components.TryGetPrompt("natter.prompt.library#default", out _));
+            Assert.False(components.TryGetPrompt("natter.feature.prompt.library#default", out _));
         }
         finally
         {

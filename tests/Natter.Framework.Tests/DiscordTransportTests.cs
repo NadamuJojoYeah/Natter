@@ -433,7 +433,7 @@ public sealed class DiscordTransportTests
     public void Sample_manifest_declares_the_transport_contract()
     {
         var manifest = DiscordPlugin.Manifest;
-        Assert.Equal("natter.transport.discord", manifest.Id);
+        Assert.Equal("natter.transport.messaging.discord", manifest.Id);
         Assert.Equal(PluginKind.Transport, manifest.Kind);
         Assert.Contains(manifest.Permissions!, permission => permission == "chat.read");
         Assert.Contains(manifest.Permissions!, permission => permission == "chat.send");

@@ -851,6 +851,9 @@ public sealed class FinalS1AcceptanceTests
         public ValueTask<IReadOnlyList<AgentTask>> ListRecoverableAsync(CancellationToken cancellationToken = default)
             => _inner.ListRecoverableAsync(cancellationToken);
 
+        public ValueTask<IReadOnlyList<AgentTask>> ListRecentAsync(int limit, CancellationToken cancellationToken = default)
+            => _inner.ListRecentAsync(limit, cancellationToken);
+
         public ValueTask<bool> TryAcquireLeaseAsync(string taskId, string owner, TimeSpan ttl, CancellationToken cancellationToken = default)
             => ValueTask.FromResult(false);
 

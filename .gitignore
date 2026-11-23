@@ -24,3 +24,6 @@ __pycache__/
 ui/node_modules/
 ui/dist/
 plugins/*/wwwroot/
+
+# UI build lock (flock file created by ui/scripts/build-target.sh)
+ui/.ui-build.lock

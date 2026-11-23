@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Sockets;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Natter.Abstractions.Composition;
 using Natter.Abstractions.Plugins;
 using Natter.Abstractions.Ports;
@@ -124,10 +125,30 @@ public sealed class ChatCompositionModule : ICompositionModule
                 provider.GetRequiredService<Natter.Application.Chat.IPromptComposer>(),
                 provider.GetRequiredService<Natter.Application.Chat.IPromptFragmentSource>()));
         services.AddSingleton<Natter.Application.Chat.IContextAssembler, Natter.Application.Chat.HostRecentWindowContextAssembler>();
+        // P6.7: the layered store is the production memory path. The v1 IMemoryStore stays
+        // registered for one release so an operator can roll back by changing profile.memory.store,
+        // but nothing on the recall path depends on it any more.
+        // P6.7 rollback path: the v1 store stays registered for one release so an operator (or a
+        // plugin written against the old contract) can still resolve it. Nothing on the recall path
+        // depends on it — HostContextPipeline, the command router and the CLI all use the layered
+        // store. Delete this registration together with the Obsolete v1 types.
         services.AddSingleton<Natter.Application.Chat.IMemoryStore>(_ =>
             string.IsNullOrWhiteSpace(context.Options.StateDirectory)
                 ? new Natter.Application.Chat.InMemoryMemoryStore()
                 : new SqliteMemoryStore(Path.Combine(Path.GetFullPath(context.Options.StateDirectory), "natter.db")));
+        // Migration diagnostics go to the host log once; natter health reads the same value.
+        services.AddSingleton<Natter.Application.Chat.IMemoryEntryStore>(provider =>
+        {
+            var logger = provider.GetService<Microsoft.Extensions.Logging.ILoggerFactory>()
+                ?.CreateLogger("Natter.Memory");
+            if (Natter.Application.Chat.MemoryMigrationDiagnostics.WarningSink is null)
+                Natter.Application.Chat.MemoryMigrationDiagnostics.WarningSink =
+                    message => logger?.Log(LogLevel.Warning, "{MemoryMigration}", message);
+
+            return string.IsNullOrWhiteSpace(context.Options.StateDirectory)
+                ? new Natter.Application.Chat.InMemoryMemoryEntryStore()
+                : new SqliteMemoryEntryStore(Path.Combine(Path.GetFullPath(context.Options.StateDirectory), "natter.db"));
+        });
         services.AddSingleton<Natter.Application.Chat.ISummaryStore>(_ =>
             string.IsNullOrWhiteSpace(context.Options.StateDirectory)
                 ? new Natter.Application.Chat.InMemorySummaryStore()
@@ -140,7 +161,7 @@ public sealed class ChatCompositionModule : ICompositionModule
                 new Natter.Application.Chat.DeferredPromptProvider(
                     () => provider.GetRequiredService<Natter.Application.Chat.IPromptProvider>()));
             catalog.RegisterAssembler("host#recent-window", provider.GetRequiredService<Natter.Application.Chat.IContextAssembler>());
-            var memory = provider.GetRequiredService<Natter.Application.Chat.IMemoryStore>();
+            var memory = provider.GetRequiredService<Natter.Application.Chat.IMemoryEntryStore>();
             catalog.RegisterMemory("host#inline", memory);
             // Without --state-dir the SQLite name resolves to the in-memory fallback; this keeps
             // the sample profiles runnable while making persistence explicit.
@@ -154,7 +175,7 @@ public sealed class ChatCompositionModule : ICompositionModule
             var catalog = provider.GetRequiredService<Natter.Application.Chat.ContextComponentCatalog>();
             return new Natter.Application.Chat.HostContextPipeline(
                 provider.GetRequiredService<Natter.Application.Chat.IConversationStore>(),
-                provider.GetRequiredService<Natter.Application.Chat.IMemoryStore>(),
+                provider.GetRequiredService<Natter.Application.Chat.IMemoryEntryStore>(),
                 provider.GetRequiredService<Natter.Application.Chat.ISummaryStore>(),
                 provider.GetRequiredService<Natter.Application.Chat.IPromptProvider>(),
                 provider.GetRequiredService<Natter.Application.Chat.IContextAssembler>(),
@@ -181,6 +202,12 @@ public sealed class ChatCompositionModule : ICompositionModule
             string.IsNullOrWhiteSpace(context.Options.StateDirectory)
                 ? new Natter.Application.Chat.InMemoryTaskStore()
                 : new SqliteTaskStore(Path.Combine(Path.GetFullPath(context.Options.StateDirectory), "natter.db")));
+        // task-65: structured task inspection for the consoles (read-only; never mutates tasks).
+        services.AddSingleton<Natter.Application.Chat.IAgentTaskInspection>(provider =>
+            new TaskInspectionService(
+                provider.GetRequiredService<Natter.Application.Chat.ITaskStore>(),
+                // TimeProvider is optional in stripped-down hosts (tests, embedded plugins).
+                provider.GetService<TimeProvider>()));
         services.AddSingleton<Natter.Application.Chat.ITool, Natter.Application.Chat.ClockTool>();
         services.AddSingleton<Natter.Application.Chat.ITool, Natter.Application.Chat.TextTransformTool>();
         // A21: configurable handler/factory instead of a bare singleton HttpClient. Pooled
@@ -236,7 +263,7 @@ public sealed class ChatCompositionModule : ICompositionModule
                 provider.GetRequiredService<Natter.Application.Chat.TaskMetrics>()));
         services.AddSingleton<Natter.Application.Chat.IChatCommandRouter>(provider =>
             new Natter.Application.Chat.ChatCommandRouter(
-                provider.GetRequiredService<Natter.Application.Chat.IMemoryStore>(),
+                provider.GetRequiredService<Natter.Application.Chat.IMemoryEntryStore>(),
                 provider.GetRequiredService<Natter.Application.Chat.ISummaryStore>(),
                 provider.GetRequiredService<Natter.Application.Chat.IConversationStore>(),
                 provider.GetRequiredService<ChatCommandFactory>(),

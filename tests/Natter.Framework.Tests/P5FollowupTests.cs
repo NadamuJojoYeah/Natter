@@ -786,7 +786,7 @@ public sealed partial class P5FollowupTests
 
     private static ChatCommandRouter NewRouter(ITaskStore? tasks = null, ITaskDispatcher? dispatcher = null)
         => new(
-            new InMemoryMemoryStore(),
+            new InMemoryMemoryEntryStore(),
             new InMemorySummaryStore(),
             new InMemoryConversationStore(),
             new ChatCommandFactory(new TestClock()),

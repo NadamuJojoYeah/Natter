@@ -21,11 +21,11 @@ public sealed class PluginLoadingTests
         var result = new PluginProbe().Probe(GreetingsDirectory);
 
         Assert.True(result.IsValid, result.Error);
-        Assert.Equal("natter.sample.greetings", result.Id);
+        Assert.Equal("natter.sample.port.greetings", result.Id);
         Assert.Equal("Natter.Sample.Plugin.Greetings.dll", result.EntryAssembly);
         Assert.Contains("cli:greet", result.Capabilities!);
         Assert.Equal(1, result.SchemaVersion);
-        Assert.Equal("feature", result.Kind);
+        Assert.Equal("sample", result.Kind);
     }
 
     [Fact]
@@ -40,7 +40,7 @@ public sealed class PluginLoadingTests
         await host.StartAsync();
 
         var catalog = host.Services.GetRequiredService<IPluginCatalog>();
-        var descriptor = Assert.Single(catalog.Plugins, plugin => plugin.Id == "natter.sample.greetings");
+        var descriptor = Assert.Single(catalog.Plugins, plugin => plugin.Id == "natter.sample.port.greetings");
         Assert.Equal(PluginState.Activated, descriptor.State);
         Assert.Contains("port:IGreetingPort", descriptor.Capabilities!);
 
@@ -49,11 +49,11 @@ public sealed class PluginLoadingTests
 
         var registry = host.Services.GetRequiredService<CliCommandRegistry>();
         Assert.True(registry.TryGet("greet", out var command));
-        Assert.Equal("plugin:natter.sample.greetings", command.Origin);
+        Assert.Equal("plugin:natter.sample.port.greetings", command.Origin);
 
         var adapters = host.Services.GetRequiredService<IPortAdapterCatalog>();
         Assert.Contains(adapters.Adapters, adapter =>
-            adapter.Origin == "plugin:natter.sample.greetings"
+            adapter.Origin == "plugin:natter.sample.port.greetings"
             && adapter.Port.EndsWith(nameof(IGreetingPort), StringComparison.Ordinal));
 
         await host.StopAsync();

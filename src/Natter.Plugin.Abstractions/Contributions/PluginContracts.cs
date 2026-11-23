@@ -131,8 +131,16 @@ public interface IContributionRegistry
     void AddContextAssembler<TAssembler>(string id)
         where TAssembler : class, IContextAssembler;
 
+    /// <summary>
+    /// Contributes the host memory store (<c>memory.store</c>).
+    /// <para>
+    /// <b>Host API break (P6.7):</b> the contract changed from <c>IMemoryStore</c> to
+    /// <c>IMemoryEntryStore</c>. A plugin built against the old interface no longer activates; it
+    /// must implement the five-kind entry contract. See <c>docs/PLUGIN_SPEC.md</c>.
+    /// </para>
+    /// </summary>
     void AddMemoryStore<TStore>(string id)
-        where TStore : class, IMemoryStore;
+        where TStore : class, IMemoryEntryStore;
 
     /// <summary>
     /// Contributes a text-embedding provider. The host namespaces the contribution as

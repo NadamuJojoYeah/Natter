@@ -448,7 +448,7 @@ internal sealed class AcceptanceHarness : IDisposable
         var tokens = new WebConsoleTokenAuthenticator(Token);
         var assets = WebConsoleStaticAssets.Load(wwwroot);
         var audit = new WebConsoleAuditStore(Path.Combine(directory, "audit"), clock);
-        var surface = new WebConsoleAdminSurface(store, commandRunner, new AcceptanceLogReader(), new AcceptanceRedactor());
+        var surface = new WebConsoleAdminSurface(store, commandRunner, new AcceptanceLogReader(), new AcceptanceRedactor(), null);
         var admin = new WebConsoleAdminGateway(surface, options, clock);
         var status = new WebConsoleServerStatusHolder();
         status.Set(WebConsoleServerStatus.Listening($"http://127.0.0.1:{options.Port}"));

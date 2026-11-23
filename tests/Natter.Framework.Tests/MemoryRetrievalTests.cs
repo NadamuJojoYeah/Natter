@@ -95,8 +95,8 @@ public sealed class MemoryRetrievalTests
     public async Task Other_actor_memories_never_enter_the_pipeline_prompt()
     {
         using var temp = new TempDirectory();
-        var store = new SqliteMemoryStore(temp.Combine("natter.db"));
-        await Write(store, Alice, MemoryScopeType.User, "UNIQUE_ALICE_SECRET_MARKER");
+        var store = new SqliteMemoryEntryStore(temp.Combine("natter.db"));
+        await WriteEntry(store, Alice, MemoryScopeType.User, "UNIQUE_ALICE_SECRET_MARKER");
 
         var bundle = await Assemble(store, Bob, new MemoryRetrievalOptions(), new MemoryRetrievalMetrics());
 
@@ -294,9 +294,9 @@ public sealed class MemoryRetrievalTests
     [Fact]
     public async Task Injection_and_token_budgets_truncate_and_are_counted()
     {
-        var store = new InMemoryMemoryStore();
+        var store = new InMemoryMemoryEntryStore();
         for (var index = 0; index < 6; index++)
-            await Write(store, Alice, MemoryScopeType.User, $"deploy window alpha {index} " + new string('x', 120));
+            await WriteEntry(store, Alice, MemoryScopeType.User, $"deploy window alpha {index} " + new string('x', 120));
 
         var metrics = new MemoryRetrievalMetrics();
         var bundle = await Assemble(
@@ -318,8 +318,8 @@ public sealed class MemoryRetrievalTests
     public async Task Memory_appears_in_prompt_plan_and_can_be_disabled()
     {
         using var temp = new TempDirectory();
-        var store = new SqliteMemoryStore(temp.Combine("natter.db"));
-        await Write(store, Alice, MemoryScopeType.User, "deploy window prefers concise answers");
+        var store = new SqliteMemoryEntryStore(temp.Combine("natter.db"));
+        await WriteEntry(store, Alice, MemoryScopeType.User, "deploy window prefers concise answers");
 
         var enabled = await Assemble(store, Alice, new MemoryRetrievalOptions(), new MemoryRetrievalMetrics());
         Assert.Contains(enabled.Diagnostics.PromptFragments ?? [], fragment => fragment.Id.StartsWith("host#memory", StringComparison.Ordinal));
@@ -332,7 +332,7 @@ public sealed class MemoryRetrievalTests
     [Fact]
     public async Task Default_profile_output_has_no_memory_fragments_and_matches_baseline()
     {
-        var bundle = await Assemble(new InMemoryMemoryStore(), Alice, new MemoryRetrievalOptions(), new MemoryRetrievalMetrics());
+        var bundle = await Assemble(new InMemoryMemoryEntryStore(), Alice, new MemoryRetrievalOptions(), new MemoryRetrievalMetrics());
 
         Assert.DoesNotContain(bundle.Diagnostics.PromptFragments ?? [], fragment => fragment.Id.Contains("memory", StringComparison.Ordinal));
         Assert.Contains("You are Natter, a concise assistant.", bundle.Messages[0].Text, StringComparison.Ordinal);
@@ -414,27 +414,8 @@ public sealed class MemoryRetrievalTests
             "power law should retain far more than the exponential at 3× the interval");
     }
 
-    [Fact]
-    public void Live_recall_path_still_uses_the_v1_contract()
-    {
-        // SCOPE GATE (docs/P6_MEMORY_SYSTEM.md §13 P6.5): memory_entries is not on the live path
-        // until P6.7. HostContextPipeline must keep depending on IMemoryStore (memory_items), and no
-        // production type may depend on IMemoryEntryStore; otherwise reads and writes split across
-        // two tables with different liveness semantics (expires_at vs archived).
-        // DELETE this assertion in the same change that switches the write path.
-        var constructors = typeof(HostContextPipeline).GetConstructors();
-        var pipelineParameters = constructors.SelectMany(constructor => constructor.GetParameters()).ToArray();
-        Assert.Contains(pipelineParameters, parameter => parameter.ParameterType == typeof(IMemoryStore));
-        Assert.DoesNotContain(pipelineParameters, parameter => parameter.ParameterType == typeof(IMemoryEntryStore));
-
-        var consumers = typeof(HostContextPipeline).Assembly.GetTypes()
-            .Concat(typeof(SqliteMemoryEntryStore).Assembly.GetTypes())
-            .Where(type => type.GetConstructors().Any(constructor => constructor.GetParameters()
-                .Any(parameter => parameter.ParameterType == typeof(IMemoryEntryStore))))
-            .Select(type => type.FullName)
-            .ToArray();
-        Assert.Empty(consumers);
-    }
+    // P6.7: the SCOPE GATE assertion (production must not depend on IMemoryEntryStore) is retired.
+    // Production now depends on it; the v1 types stay for one release as an Obsolete rollback path.
 
     // ------------------------------------------------------------------ helpers
 
@@ -449,6 +430,14 @@ public sealed class MemoryRetrievalTests
 
     private static ToolLoopOptions Unused() => new();
 
+    private static async Task<MemoryEntry> WriteEntry(
+        IMemoryEntryStore store,
+        User user,
+        MemoryScopeType scope,
+        string text,
+        MemoryType type = MemoryType.Fact)
+        => await store.WriteAsync(new MemoryEntryWriteRequest(Discord, Direct, user, type, text, scope));
+
     private static async Task<MemoryItem> Write(IMemoryStore store, User user, MemoryScopeType scope, string text)
         => await store.WriteAsync(new MemoryWriteRequest(Discord, Direct, user, scope, "fact", text));
 
@@ -456,7 +445,7 @@ public sealed class MemoryRetrievalTests
         => await store.SearchAsync(new MemoryQuery(Discord, Direct, user, 20) { Query = query, Scope = scope });
 
     private static async Task<ContextBundle> Assemble(
-        IMemoryStore store,
+        IMemoryEntryStore store,
         User user,
         MemoryRetrievalOptions options,
         MemoryRetrievalMetrics metrics,
@@ -475,24 +464,30 @@ public sealed class MemoryRetrievalTests
         return await pipeline.AssembleAsync(Discord, Direct, user, "latest deploy window policy", cancellationToken: default);
     }
 
-    private sealed class SlowMemoryStore : IMemoryStore
+    private sealed class SlowMemoryStore : IMemoryEntryStore
     {
-        public async ValueTask<IReadOnlyList<MemoryItem>> SearchAsync(MemoryQuery query, CancellationToken cancellationToken = default)
+        public async ValueTask<IReadOnlyList<MemoryEntry>> SearchAsync(MemoryEntryQuery query, CancellationToken cancellationToken = default)
         {
             await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken);
             return [];
         }
 
-        public ValueTask<MemoryItem> WriteAsync(MemoryWriteRequest request, CancellationToken cancellationToken = default)
+        public ValueTask<MemoryEntry> WriteAsync(MemoryEntryWriteRequest request, CancellationToken cancellationToken = default)
             => throw new NotSupportedException();
 
-        public ValueTask<bool> DeleteAsync(MemoryDeleteRequest request, CancellationToken cancellationToken = default)
+        public ValueTask<MemoryEntry?> GetAsync(Source source, Conversation conversation, User user, string id, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public ValueTask<bool> ArchiveAsync(Source source, Conversation conversation, User user, string id, CancellationToken cancellationToken = default)
             => ValueTask.FromResult(false);
 
-        public ValueTask<MemoryExport> ExportAsync(MemoryExportRequest request, CancellationToken cancellationToken = default)
-            => ValueTask.FromResult(new MemoryExport(1, DateTimeOffset.UtcNow, []));
+        public ValueTask ReinforceRecallAsync(IReadOnlyList<string> ids, CancellationToken cancellationToken = default)
+            => ValueTask.CompletedTask;
 
-        public ValueTask<int> ImportAsync(MemoryImportRequest request, CancellationToken cancellationToken = default)
+        public ValueTask<MemoryEntryExport> ExportAsync(Source source, Conversation conversation, User user, bool includePrivate, CancellationToken cancellationToken = default)
+            => ValueTask.FromResult(MemoryEntryExport.Create([], DateTimeOffset.UtcNow));
+
+        public ValueTask<int> ImportAsync(Source source, Conversation conversation, User user, MemoryEntryExport export, CancellationToken cancellationToken = default)
             => ValueTask.FromResult(0);
     }
 

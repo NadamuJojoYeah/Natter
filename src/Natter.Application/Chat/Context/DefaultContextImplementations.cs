@@ -122,7 +122,7 @@ public sealed class HostRecentWindowContextAssembler : IContextAssembler
             .ToList();
         var memoryText = memories.Count == 0
             ? string.Empty
-            : "[Memory]\n" + string.Join("\n", memories.Select(memory => "- " + memory.Text));
+            : "[Memory]\n" + string.Join("\n", memories.Select(memory => "- " + memory.Content));
         var memoryBudget = Math.Min(request.Budget.MaxSummaryCharacters, remaining / 3);
         if (memoryText.Length > memoryBudget)
             memoryText = memoryText[..Math.Max(0, memoryBudget)];
@@ -171,7 +171,7 @@ public sealed class HostRecentWindowContextAssembler : IContextAssembler
         combined.AddRange(recent);
         combined.Add(new ChatMessage(ChatRole.User, userText));
 
-        used.AddRange(memories.Select(memory => memory.MemoryId));
+        used.AddRange(memories.Select(memory => memory.Id));
         var estimated = combined.Sum(message => message.Text?.Length ?? 0);
         var trimmed = 0;
         while (estimated > max && combined.Count > 2)

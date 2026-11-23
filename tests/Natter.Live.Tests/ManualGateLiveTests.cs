@@ -41,7 +41,7 @@ public sealed class ManualGateLiveTests(ITestOutputHelper output)
         File.WriteAllText(Path.Combine(deepSeekDir, "config.schema.json"), ReadEmbedded(
             typeof(DeepSeekPlugin).Assembly, "Natter.Feature.Ai.DeepSeek.config.schema.json"));
 
-        File.WriteAllText(Path.Combine(configDir, "natter.transport.discord.json"), $$"""
+        File.WriteAllText(Path.Combine(configDir, "natter.transport.messaging.discord.json"), $$"""
             {
               "token": "${secret:DISCORD_BOT_TOKEN}",
               "selfId": "{{Settings.BotUserId}}",

@@ -186,7 +186,7 @@ public sealed class NpsCliTests
         Assert.Equal(CliExitCodes.Success, exitCode);
         using var document = JsonDocument.Parse(console.Output);
         var rows = document.RootElement.EnumerateArray()
-            .Where(item => item.GetProperty("owner").GetString() == "natter.sample.memory")
+            .Where(item => item.GetProperty("owner").GetString() == "natter.sample.memory.demo")
             .ToArray();
         Assert.Single(rows);
         Assert.Equal("memory.store", rows[0].GetProperty("type").GetString());

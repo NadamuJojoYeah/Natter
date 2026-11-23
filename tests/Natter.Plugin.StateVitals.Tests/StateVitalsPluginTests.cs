@@ -23,7 +23,7 @@ public sealed class StateVitalsPluginTests
     {
         var manifest = StateVitalsPlugin.Manifest;
 
-        Assert.Equal("natter.plugin.state-vitals", manifest.Id);
+        Assert.Equal("natter.feature.character.state-vitals", manifest.Id);
         Assert.Equal(PluginKind.Feature, manifest.Kind);
         Assert.Equal("lib/Natter.Plugin.StateVitals.dll", manifest.Entry?.Assembly);
         Assert.Equal("Natter.Plugin.StateVitals.StateVitalsPlugin", manifest.Entry?.Type);
@@ -154,7 +154,7 @@ public sealed class StateVitalsPluginTests
 
             var resolved = StateVitalsPaths.ResolveStateDirectory(new StateVitalsOptions());
 
-            Assert.Equal(Path.Combine(root, "plugins", "natter.plugin.state-vitals"), resolved);
+            Assert.Equal(Path.Combine(root, "plugins", "natter.feature.character.state-vitals"), resolved);
             Assert.Equal("state.db", Path.GetFileName(StateVitalsPaths.ResolveDatabasePath(resolved)));
             Assert.DoesNotContain("natter.db", resolved, StringComparison.Ordinal);
         }
@@ -284,7 +284,7 @@ public sealed class StateVitalsPluginTests
         Assert.Equal(1, result.ProviderCount);
 
         var fragment = Assert.Single(result.Fragments);
-        Assert.Equal("natter.plugin.state-vitals#state", fragment.Id);
+        Assert.Equal("natter.feature.character.state-vitals#state", fragment.Id);
         Assert.Equal(PromptFragmentSource.Plugin, fragment.Source);
         Assert.Equal(StateVitalsDefaults.FragmentOrder, fragment.Order);
         Assert.InRange(fragment.Order, 0, PromptCompilerDefaults.PluginFragmentOrderMax);

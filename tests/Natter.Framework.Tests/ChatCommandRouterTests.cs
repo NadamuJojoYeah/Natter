@@ -12,7 +12,7 @@ public sealed class ChatCommandRouterTests
     public async Task Remember_list_forget_and_reset_are_host_handled()
     {
         var clock = new TestClock();
-        var memories = new InMemoryMemoryStore();
+        var memories = new InMemoryMemoryEntryStore();
         var summaries = new InMemorySummaryStore();
         var conversations = new InMemoryConversationStore();
         var router = new ChatCommandRouter(memories, summaries, conversations, new ChatCommandFactory(clock));
@@ -29,16 +29,16 @@ public sealed class ChatCommandRouterTests
         Assert.True(remember.Payload.Ephemeral);
         Assert.Contains("Remembered", remember.Payload.Content.Text);
 
-        var memory = Assert.Single(await memories.SearchAsync(new MemoryQuery(source, conversation, user)));
+        var memory = Assert.Single(await memories.SearchAsync(new MemoryEntryQuery(source, conversation, user)));
         var listed = Assert.IsType<InteractionRespondCommand>(await router.TryHandleAsync(
             Event(source, conversation, user, "memory", new())));
-        Assert.Contains(memory.MemoryId, listed.Payload.Content.Text);
+        Assert.Contains(memory.Id, listed.Payload.Content.Text);
         Assert.Contains("likes tea", listed.Payload.Content.Text);
 
         var forgotten = Assert.IsType<InteractionRespondCommand>(await router.TryHandleAsync(
-            Event(source, conversation, user, "forget", new() { ["target"] = memory.MemoryId })));
-        Assert.Contains("successful", forgotten.Payload.Content.Text);
-        Assert.Empty(await memories.SearchAsync(new MemoryQuery(source, conversation, user)));
+            Event(source, conversation, user, "forget", new() { ["target"] = memory.Id })));
+        Assert.Contains("Archived", forgotten.Payload.Content.Text);
+        Assert.Empty(await memories.SearchAsync(new MemoryEntryQuery(source, conversation, user)));
 
         await router.TryHandleAsync(Event(source, conversation, user, "reset", new()));
         Assert.Empty(await conversations.GetRecentAsync(key, 20, 24000));
@@ -50,7 +50,7 @@ public sealed class ChatCommandRouterTests
         var store = new InMemoryTaskStore();
         var dispatcher = new RecordingTaskDispatcher();
         var router = new ChatCommandRouter(
-            new InMemoryMemoryStore(),
+            new InMemoryMemoryEntryStore(),
             new InMemorySummaryStore(),
             new InMemoryConversationStore(),
             new ChatCommandFactory(new TestClock()),
@@ -112,7 +112,7 @@ public sealed class ChatCommandRouterTests
     {
         var clock = new TestClock();
         var router = new ChatCommandRouter(
-            new InMemoryMemoryStore(),
+            new InMemoryMemoryEntryStore(),
             new InMemorySummaryStore(),
             new InMemoryConversationStore(),
             new ChatCommandFactory(clock));
@@ -129,8 +129,8 @@ public sealed class ChatCommandRouterTests
     [Fact]
     public async Task Remember_uses_the_profile_selected_memory_store()
     {
-        var hostStore = new InMemoryMemoryStore();
-        var selected = new InMemoryMemoryStore();
+        var hostStore = new InMemoryMemoryEntryStore();
+        var selected = new InMemoryMemoryEntryStore();
         var catalog = new ContextComponentCatalog();
         catalog.RegisterMemory("sample#file", selected);
         var router = new ChatCommandRouter(
@@ -152,8 +152,8 @@ public sealed class ChatCommandRouterTests
         using (ProfileContext.Push(profile))
             await router.TryHandleAsync(Event(source, conversation, user, "remember", new() { ["text"] = "selected" }));
 
-        Assert.Single(await selected.SearchAsync(new MemoryQuery(source, conversation, user)));
-        Assert.Empty(await hostStore.SearchAsync(new MemoryQuery(source, conversation, user)));
+        Assert.Single(await selected.SearchAsync(new MemoryEntryQuery(source, conversation, user)));
+        Assert.Empty(await hostStore.SearchAsync(new MemoryEntryQuery(source, conversation, user)));
     }
 
     private static InteractionCreatedEvent Event(

@@ -127,7 +127,7 @@ internal sealed class TestContributionRegistry(IServiceCollection services) : IC
     public void AddContextAssembler<TAssembler>(string id) where TAssembler : class, IContextAssembler
         => throw new NotSupportedException();
 
-    public void AddMemoryStore<TStore>(string id) where TStore : class, IMemoryStore
+    public void AddMemoryStore<TStore>(string id) where TStore : class, IMemoryEntryStore
         => throw new NotSupportedException();
 }
 

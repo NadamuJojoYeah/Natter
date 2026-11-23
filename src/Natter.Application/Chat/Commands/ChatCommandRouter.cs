@@ -14,7 +14,7 @@ public interface IChatCommandRouter
 }
 
 public sealed class ChatCommandRouter(
-    IMemoryStore memories,
+    IMemoryEntryStore memories,
     ISummaryStore summaries,
     IConversationStore conversations,
     ChatCommandFactory commands,
@@ -89,16 +89,15 @@ public sealed class ChatCommandRouter(
         }
 
         var item = await Store(chatEvent, interaction).WriteAsync(
-            new MemoryWriteRequest(
+            new MemoryEntryWriteRequest(
                 chatEvent.Source,
                 interaction.Conversation,
                 interaction.User,
-                MemoryScopeType.User,
-                "preference",
+                MemoryType.Preference,
                 text.Trim(),
-                UserConfirmed: true),
+                Scope: MemoryScopeType.User),
             cancellationToken).ConfigureAwait(false);
-        return Reply(chatEvent, interaction, $"Remembered {item.MemoryId}.", ephemeral: true);
+        return Reply(chatEvent, interaction, $"Remembered {item.Id}.", ephemeral: true);
     }
 
     private async ValueTask<ChatCommand> ForgetAsync(
@@ -110,15 +109,17 @@ public sealed class ChatCommandRouter(
         if (string.IsNullOrWhiteSpace(target))
             return Reply(chatEvent, interaction, "Usage: /forget target:<id|text>", ephemeral: true);
 
-        var byId = target.StartsWith("mem_", StringComparison.Ordinal);
-        var deleted = await Store(chatEvent, interaction).DeleteAsync(
-            new MemoryDeleteRequest(
+        var byId = target.StartsWith("mem_", StringComparison.Ordinal) || target.StartsWith("me_", StringComparison.Ordinal);
+        var store = Store(chatEvent, interaction);
+        var entryId = byId ? target : await FindByContentAsync(store, chatEvent, interaction, target, cancellationToken)
+            .ConfigureAwait(false);
+        var archived = entryId is not null
+            && await store.ArchiveAsync(
                 chatEvent.Source,
                 interaction.Conversation,
                 interaction.User,
-                MemoryId: byId ? target : null,
-                Text: byId ? null : target),
-            cancellationToken).ConfigureAwait(false);
+                entryId,
+                cancellationToken).ConfigureAwait(false);
 
         var conversationKey = new ConversationKey(
             chatEvent.Source.Key,
@@ -133,7 +134,9 @@ public sealed class ChatCommandRouter(
         return Reply(
             chatEvent,
             interaction,
-            deleted ? "Forget successful." : "Not found, or you are not the creator.",
+            archived
+                ? "Archived. It no longer appears in recall but stays recoverable (P6 §5.3)."
+                : "Not found, or you are not the creator.",
             ephemeral: true);
     }
 
@@ -148,12 +151,11 @@ public sealed class ChatCommandRouter(
             limit = Math.Clamp(parsed, 1, 50);
 
         var items = await Store(chatEvent, interaction).SearchAsync(
-            new MemoryQuery(
-                chatEvent.Source,
-                interaction.Conversation,
-                interaction.User,
-                limit,
-                IncludePrivate: interaction.Conversation.Kind is ConversationKind.Direct or ConversationKind.Group),
+            new MemoryEntryQuery(chatEvent.Source, interaction.Conversation, interaction.User)
+            {
+                Limit = limit,
+                IncludePrivate = interaction.Conversation.Kind is ConversationKind.Direct or ConversationKind.Group,
+            },
             cancellationToken).ConfigureAwait(false);
         var userItems = items.Where(item => item.ScopeType == MemoryScopeType.User).ToArray();
         if (userItems.Length == 0)
@@ -161,7 +163,7 @@ public sealed class ChatCommandRouter(
 
         var builder = new StringBuilder();
         foreach (var item in userItems)
-            builder.AppendLine($"{item.MemoryId} [{item.ScopeType.ToString().ToLowerInvariant()}] {item.Text}");
+            builder.AppendLine($"{item.Id} [{item.ScopeType.ToString().ToLowerInvariant()}] {item.Content}");
         return Reply(chatEvent, interaction, builder.ToString(), ephemeral: true);
     }
 
@@ -428,7 +430,27 @@ public sealed class ChatCommandRouter(
     private static string Truncate(string value, int max)
         => value.Length <= max ? value : value[..max] + "...";
 
-    private IMemoryStore Store(InteractionCreatedEvent chatEvent, Interaction interaction)
+    /// <summary>Resolves an entry id for the legacy "forget by text" form (v2 archives by id).</summary>
+    private static async ValueTask<string?> FindByContentAsync(
+        IMemoryEntryStore store,
+        InteractionCreatedEvent chatEvent,
+        Interaction interaction,
+        string text,
+        CancellationToken cancellationToken)
+    {
+        var matches = await store.SearchAsync(
+            new MemoryEntryQuery(chatEvent.Source, interaction.Conversation, interaction.User)
+            {
+                Query = text,
+                Limit = 5,
+            },
+            cancellationToken).ConfigureAwait(false);
+        return matches
+            .FirstOrDefault(entry => string.Equals(entry.Content, text, StringComparison.OrdinalIgnoreCase))
+            ?.Id;
+    }
+
+    private IMemoryEntryStore Store(InteractionCreatedEvent chatEvent, Interaction interaction)
     {
         if (memoryResolver is not null)
             return memoryResolver.Resolve(chatEvent.Source, interaction.Conversation, interaction.User);

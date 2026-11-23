@@ -44,8 +44,8 @@ LogsDirectory=natter
 StateDirectoryMode=0700
 LogsDirectoryMode=0700
 ReadWritePaths=/var/lib/natter /var/log/natter \
-               -/opt/natter/plugins/natter.plugin.webconsole/audit \
-               -/opt/natter/plugins/natter.plugin.conversation-console/audit
+               -/opt/natter/plugins/natter.tool.admin.webconsole/audit \
+               -/opt/natter/plugins/natter.tool.conversation.conversation-console/audit
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes

@@ -72,7 +72,7 @@ public sealed record ContextRequest(
     User User,
     string UserText,
     IReadOnlyList<StoredMessage> RecentMessages,
-    IReadOnlyList<MemoryItem> Memories,
+    IReadOnlyList<MemoryEntry> Memories,
     ConversationSummary? Summary,
     ContextBudget Budget);
 
@@ -110,6 +110,7 @@ public enum MemoryScopeType
     Global,
 }
 
+    [Obsolete("v1 memory store retired at P6.7; use IMemoryEntryStore")]
 public sealed record MemoryItem(
     string MemoryId,
     MemoryScopeType ScopeType,
@@ -127,6 +128,7 @@ public sealed record MemoryItem(
     DateTimeOffset? ExpiresAt,
     int Version);
 
+    [Obsolete("v1 memory store retired at P6.7; use IMemoryEntryStore")]
 public sealed record MemoryWriteRequest(
     Source Source,
     Conversation Conversation,
@@ -150,6 +152,7 @@ public sealed record MemoryWriteRequest(
     }
 }
 
+    [Obsolete("v1 memory store retired at P6.7; use IMemoryEntryStore")]
 public sealed record MemoryQuery(
     Source Source,
     Conversation Conversation,
@@ -185,6 +188,7 @@ public sealed record MemoryQuery(
     public TimeSpan DecayHalfLife { get; init; } = TimeSpan.FromDays(30);
 }
 
+    [Obsolete("v1 memory store retired at P6.7; use IMemoryEntryStore")]
 public sealed record MemoryDeleteRequest(
     Source Source,
     Conversation Conversation,
@@ -192,13 +196,16 @@ public sealed record MemoryDeleteRequest(
     string? MemoryId = null,
     string? Text = null);
 
+    [Obsolete("v1 memory store retired at P6.7; use IMemoryEntryStore")]
 public sealed record MemoryExportRequest(Source Source, Conversation Conversation, User User);
 
+    [Obsolete("v1 memory store retired at P6.7; use IMemoryEntryStore")]
 public sealed record MemoryExport(
     int SchemaVersion,
     DateTimeOffset ExportedAt,
     IReadOnlyList<MemoryItem> Items);
 
+    [Obsolete("v1 memory store retired at P6.7; use IMemoryEntryStore")]
 public sealed record MemoryImportRequest(
     Source Source,
     Conversation Conversation,
@@ -206,6 +213,7 @@ public sealed record MemoryImportRequest(
     MemoryExport Export,
     bool Overwrite = false);
 
+    [Obsolete("v1 memory store retired at P6.7; use IMemoryEntryStore")]
 public interface IMemoryStore
 {
     ValueTask<MemoryItem> WriteAsync(MemoryWriteRequest request, CancellationToken cancellationToken = default);

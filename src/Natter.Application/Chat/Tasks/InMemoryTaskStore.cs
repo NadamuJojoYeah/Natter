@@ -142,6 +142,19 @@ public sealed class InMemoryTaskStore : ITaskStore
         }
     }
 
+    public ValueTask<IReadOnlyList<AgentTask>> ListRecentAsync(int limit, CancellationToken cancellationToken = default)
+    {
+        lock (_gate)
+        {
+            return ValueTask.FromResult<IReadOnlyList<AgentTask>>(
+                _tasks.Values
+                    .OrderByDescending(task => task.UpdatedAt)
+                    .ThenByDescending(task => task.TaskId, StringComparer.Ordinal)
+                    .Take(Math.Max(1, limit))
+                    .ToArray());
+        }
+    }
+
     public ValueTask<IReadOnlyList<TaskEvent>> GetEventsAsync(string taskId, CancellationToken cancellationToken = default)
     {
         lock (_gate)

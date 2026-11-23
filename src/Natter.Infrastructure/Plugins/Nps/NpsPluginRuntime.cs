@@ -676,7 +676,9 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
         if (candidate.Permissions?.Granted.Contains(PluginPermissions.Storage) == true)
         {
             services.AddSingleton(_hostProvider.GetRequiredService<Natter.Application.Chat.IConversationStore>());
-            services.AddSingleton(_hostProvider.GetRequiredService<Natter.Application.Chat.IMemoryStore>());
+            // P6.7: plugins receive the layered store; the v1 IMemoryStore is no longer registered
+            // in the host container, so resolving it here would fail plugin activation.
+            services.AddSingleton(_hostProvider.GetRequiredService<Natter.Application.Chat.IMemoryEntryStore>());
             services.AddSingleton(_hostProvider.GetRequiredService<Natter.Application.Chat.ISummaryStore>());
         }
 
@@ -722,6 +724,11 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
             // re-implement the host's redaction rules (and they drift).
             if (_hostProvider.GetService<IAdminRedactor>() is { } redactor)
                 services.AddSingleton(redactor);
+
+            // task-65: structured task inspection so the console renders a timeline from persisted
+            // task events instead of parsing the /status text.
+            if (_hostProvider.GetService<Natter.Application.Chat.IAgentTaskInspection>() is { } taskInspection)
+                services.AddSingleton(taskInspection);
         }
 
         if (granted.Contains(PluginPermissions.AdminConfigWrite)
@@ -801,7 +808,7 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
                             catalog.RegisterAssembler(reference, (Natter.Application.Chat.IContextAssembler)implementation);
                             break;
                         case PluginContributionTypes.MemoryStore:
-                            catalog.RegisterMemory(reference, (Natter.Application.Chat.IMemoryStore)implementation);
+                            catalog.RegisterMemory(reference, (Natter.Application.Chat.IMemoryEntryStore)implementation);
                             break;
                     }
                     active.ContextComponents.Add(reference);

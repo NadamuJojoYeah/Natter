@@ -71,6 +71,12 @@ public interface ITaskStore
 
     ValueTask<IReadOnlyList<TaskEvent>> GetEventsAsync(string taskId, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Most recently updated tasks, newest first (task-65). Read-only inspection helper: the console
+    /// never mutates task state.
+    /// </summary>
+    ValueTask<IReadOnlyList<AgentTask>> ListRecentAsync(int limit, CancellationToken cancellationToken = default);
+
     /// <summary>Appends one trace event (P5.3). seq is allocated by the store monotonically.</summary>
     ValueTask AppendEventAsync(
         string taskId,

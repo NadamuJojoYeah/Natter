@@ -307,7 +307,7 @@ public sealed class TaskRuntimeHardeningTests
     {
         var pipeline = new HostContextPipeline(
             new InMemoryConversationStore(),
-            new InMemoryMemoryStore(),
+            new InMemoryMemoryEntryStore(),
             new InMemorySummaryStore(),
             new CancellingPromptProvider(),
             new HostRecentWindowContextAssembler());

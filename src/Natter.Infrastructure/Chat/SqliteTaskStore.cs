@@ -166,6 +166,26 @@ public sealed class SqliteTaskStore : ITaskStore
         await AddEventAsync(connection, taskId, kind, payloadJson, cancellationToken).ConfigureAwait(false);
     }
 
+    public async ValueTask<IReadOnlyList<AgentTask>> ListRecentAsync(int limit, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await _database.OpenAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        // SELECT * keeps the row mapping identical to GetAsync (columns evolved with schema v4).
+        command.CommandText = """
+            SELECT * FROM agent_tasks
+            ORDER BY updated_at DESC, task_id DESC
+            LIMIT $limit;
+            """;
+        command.Parameters.AddWithValue("$limit", Math.Clamp(limit, 1, 200));
+
+        var tasks = new List<AgentTask>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            tasks.Add(Read(reader));
+
+        return tasks;
+    }
+
     public async ValueTask<IReadOnlyList<TaskEvent>> GetEventsAsync(string taskId, CancellationToken cancellationToken = default)
     {
         await using var connection = await _database.OpenAsync(cancellationToken).ConfigureAwait(false);

@@ -22,7 +22,7 @@ public interface IContextComponentCatalog
 
     void RegisterAssembler(string reference, IContextAssembler assembler);
 
-    void RegisterMemory(string reference, IMemoryStore store);
+    void RegisterMemory(string reference, IMemoryEntryStore store);
 
     /// <summary>Registers an NPS <c>prompt.fragment</c> provider under <c>owner#id</c>.</summary>
     void RegisterFragmentProvider(string reference, IPromptFragmentProvider provider);
@@ -33,7 +33,7 @@ public interface IContextComponentCatalog
 
     bool TryGetAssembler(string reference, out IContextAssembler? assembler);
 
-    bool TryGetMemory(string reference, out IMemoryStore? store);
+    bool TryGetMemory(string reference, out IMemoryEntryStore? store);
 
     /// <summary>Snapshot of registered fragment providers (unsorted; the aggregator sorts by reference).</summary>
     IReadOnlyList<(string Reference, IPromptFragmentProvider Provider)> FragmentProviders { get; }
@@ -49,7 +49,7 @@ public sealed class ContextComponentCatalog : IContextComponentCatalog
 {
     private readonly Dictionary<string, IPromptProvider> _prompts = new(StringComparer.Ordinal);
     private readonly Dictionary<string, IContextAssembler> _assemblers = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, IMemoryStore> _memories = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, IMemoryEntryStore> _memories = new(StringComparer.Ordinal);
     private readonly Dictionary<string, IPromptFragmentProvider> _fragmentProviders = new(StringComparer.Ordinal);
     private readonly Lock _gate = new();
     private readonly List<ContextComponentDescriptor> _components = [];
@@ -77,7 +77,7 @@ public sealed class ContextComponentCatalog : IContextComponentCatalog
         }
     }
 
-    public void RegisterMemory(string reference, IMemoryStore store)
+    public void RegisterMemory(string reference, IMemoryEntryStore store)
     {
         lock (_gate)
         {
@@ -120,7 +120,7 @@ public sealed class ContextComponentCatalog : IContextComponentCatalog
         lock (_gate) return _assemblers.TryGetValue(reference, out assembler);
     }
 
-    public bool TryGetMemory(string reference, out IMemoryStore? store)
+    public bool TryGetMemory(string reference, out IMemoryEntryStore? store)
     {
         lock (_gate) return _memories.TryGetValue(reference, out store);
     }

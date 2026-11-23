@@ -222,6 +222,22 @@ public sealed class WebConsoleRequestHandler
                 return await HandleLogExportAsync(request, startedAt, cancellationToken).ConfigureAwait(false);
             }
 
+            case "trace":
+            {
+                RequireMethod(request, "GET");
+                return await TraceListAsync(request, startedAt, cancellationToken).ConfigureAwait(false);
+            }
+
+            case var traceRoute when traceRoute.StartsWith("trace/", StringComparison.Ordinal):
+            {
+                RequireMethod(request, "GET");
+                return await TraceDetailAsync(
+                    request,
+                    traceRoute["trace/".Length..],
+                    startedAt,
+                    cancellationToken).ConfigureAwait(false);
+            }
+
             case "diagnostics":
             {
                 RequireMethod(request, "GET");
@@ -503,6 +519,60 @@ public sealed class WebConsoleRequestHandler
             nextOffset = page.NextOffset,
             hostLogs = snapshot.Logs with { Data = page.Entries },
             audit,
+        });
+    }
+
+    /// <summary>Recent tasks (task-65). Data comes from the host task store, never from text.</summary>
+    private async ValueTask<WebConsoleHttpResponse> TraceListAsync(
+        WebConsoleHttpRequest request,
+        DateTimeOffset startedAt,
+        CancellationToken cancellationToken)
+    {
+        if (_admin.Surface.Tasks is not { } tasks)
+        {
+            Audit(request, "trace.list", "unavailable", startedAt);
+            return Error(501, "host.tasks.unavailable", "The host did not grant task inspection (admin.read).");
+        }
+
+        var limit = ReadLimit(request, 50);
+        var recent = await tasks.GetRecentAsync(limit, cancellationToken).ConfigureAwait(false);
+        Audit(request, "trace.list", "ok", startedAt, $"limit={limit} count={recent.Count}");
+
+        return WebConsoleHttpResponse.Json(200, new
+        {
+            available = true,
+            limit,
+            count = recent.Count,
+            tasks = recent,
+        });
+    }
+
+    /// <summary>Full structured trace for one task (header + entries).</summary>
+    private async ValueTask<WebConsoleHttpResponse> TraceDetailAsync(
+        WebConsoleHttpRequest request,
+        string taskId,
+        DateTimeOffset startedAt,
+        CancellationToken cancellationToken)
+    {
+        if (_admin.Surface.Tasks is not { } tasks)
+        {
+            Audit(request, "trace.view", "unavailable", startedAt, taskId);
+            return Error(501, "host.tasks.unavailable", "The host did not grant task inspection (admin.read).");
+        }
+
+        var trace = await tasks.GetTraceAsync(Uri.UnescapeDataString(taskId), cancellationToken).ConfigureAwait(false);
+        if (trace is null)
+        {
+            Audit(request, "trace.view", "not_found", startedAt, taskId);
+            return Error(404, "task.not_found", $"Task '{taskId}' was not found.");
+        }
+
+        Audit(request, "trace.view", "ok", startedAt, taskId);
+        return WebConsoleHttpResponse.Json(200, new
+        {
+            available = true,
+            task = trace.Task,
+            entries = trace.Entries,
         });
     }
 

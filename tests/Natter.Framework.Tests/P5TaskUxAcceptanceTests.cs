@@ -530,7 +530,7 @@ public sealed class P5TaskUxAcceptanceTests
 
     private static ChatCommandRouter Router(ITaskStore store, ITaskDispatcher dispatcher, string sessionId)
         => new(
-            new InMemoryMemoryStore(),
+            new InMemoryMemoryEntryStore(),
             new InMemorySummaryStore(),
             new InMemoryConversationStore(),
             new ChatCommandFactory(new TestClock()),
@@ -741,6 +741,9 @@ public sealed class P5TaskUxAcceptanceTests
 
         public ValueTask<IReadOnlyList<AgentTask>> ListRecoverableAsync(CancellationToken cancellationToken = default)
             => inner.ListRecoverableAsync(cancellationToken);
+
+        public ValueTask<IReadOnlyList<AgentTask>> ListRecentAsync(int limit, CancellationToken cancellationToken = default)
+            => inner.ListRecentAsync(limit, cancellationToken);
 
         public ValueTask<bool> TryAcquireLeaseAsync(string taskId, string owner, TimeSpan ttl, CancellationToken cancellationToken = default)
             => inner.TryAcquireLeaseAsync(taskId, owner, ttl, cancellationToken);

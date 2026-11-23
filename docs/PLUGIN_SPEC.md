@@ -1287,3 +1287,48 @@ natter plugins config validate natter.sample.port.greetings
 - [架构设计](ARCHITECTURE.md)
 - DSH：Cordis loader、插件配置 schema、peer dependency、HMR、plugin manager、version exemption
 - RimWorld：`About.xml`、`packageId`、`modDependencies`、`loadAfter` / `loadBefore`、`supportedVersions`、Harmony/Defs/Patches
+
+---
+
+## 16. P6.7 破坏性变更：`memory.store` 从 `IMemoryStore` 改为 `IMemoryEntryStore`
+
+> **影响面**：所有实现 `memory.store` 的第三方插件。
+> **性质**：host API 破坏性变更。**二进制与源码均不兼容**，插件必须重新编译。
+
+### 16.1 为什么改
+
+v1 的 `IMemoryStore` 是单层扁平模型（`kind` 自由字符串 + `expires_at` 硬过期）。
+v2 是五类分层（`Policy` / `Preference` / `Fact` / `Episodic` / `Trace`），核心是**每条记忆有自己的稳定度 S 与遗忘曲线**，以及**归档而不是删除**。
+两者不是加字段能兼容的关系：`expires_at`（到点消失）与 `archived`（仍可检索）是互斥语义。
+
+### 16.2 旧契约 → 新契约
+
+| v1 | v2 |
+| --- | --- |
+| `AddMemoryStore<TStore>(id)` where `TStore : IMemoryStore` | where `TStore : IMemoryEntryStore` |
+| `WriteAsync(MemoryWriteRequest)`（`kind: string`） | `WriteAsync(MemoryEntryWriteRequest)`（`MemoryType` 五枚举） |
+| `SearchAsync(MemoryQuery)` | `SearchAsync(MemoryEntryQuery)`（多 `Types` 过滤、`IncludeArchived`） |
+| `DeleteAsync(MemoryDeleteRequest)`（硬删） | `ArchiveAsync(source, conversation, user, id)`（归档，可恢复） |
+| `ExportAsync/ImportAsync`（v1 信封） | 同签名（v2 信封，`MemoryExportVersions`） |
+| — | `GetAsync` / `ReinforceRecallAsync`（新增） |
+
+`MemoryItem` → `MemoryEntry`：`Text` → `Content`，`MemoryId` → `Id`，新增
+`Type` / `ContentHash` / `StabilityDays` / `ReinforceCount` / `Archived` / `SupersedesId` / `LastRecalledAt`。
+
+### 16.3 第三方迁移清单
+
+```text
+1. 实现 IMemoryEntryStore（7 个成员，见上表）
+2. kind 字符串改成 MemoryType：policy / preference / fact / episodic / trace
+3. 删除改为归档：DeleteAsync → ArchiveAsync；不要再实现物理删除
+4. 导出格式升级到 MemoryExportVersions.Current（=2）；读旧导出用 MemoryExportBridge.Upgrade
+5. 重新编译并对 `hostApi` 范围做版本约束（旧 host 仍只认 v1）
+```
+
+参考实现：`samples/Natter.Sample.Plugin.Memory/MemoryStorePlugin.cs`（JSON 文件 + v1 文件自动升级）。
+
+### 16.4 v1 保留期
+
+`IMemoryStore` / `MemoryItem` / `MemoryQuery` / `MemoryWriteRequest` / `MemoryDeleteRequest` / `MemoryExport*` **仍在**，标记
+`[Obsolete("v1 memory store retired at P6.7; use IMemoryEntryStore")]`，并保留一个 release 供回滚。
+宿主仍注册 v1 store（`ChatCompositionModule`），但**recall 路径已全部切到 v2**；不要在 v1 上做新的开发。

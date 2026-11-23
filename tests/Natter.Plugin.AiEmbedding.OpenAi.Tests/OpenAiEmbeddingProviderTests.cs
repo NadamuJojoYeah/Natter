@@ -133,7 +133,7 @@ public sealed class OpenAiEmbeddingProviderTests
     {
         var manifest = OpenAiEmbeddingPlugin.Manifest;
 
-        Assert.Equal("natter.plugin.ai-embedding.openai", manifest.Id);
+        Assert.Equal("natter.feature.ai.embedding-openai", manifest.Id);
         Assert.Contains(manifest.Permissions!, permission => permission == PluginPermissions.Network);
         Assert.Contains(manifest.Permissions!, permission => permission.StartsWith(PluginPermissions.SecretsPrefix, StringComparison.Ordinal));
         Assert.Contains(manifest.Contributions!, contribution =>
@@ -357,7 +357,7 @@ public sealed class OpenAiEmbeddingProviderTests
             where TImplementation : class, TService => throw new NotSupportedException();
         public void AddPromptProvider<TProvider>(string id) where TProvider : class, IPromptProvider => throw new NotSupportedException();
         public void AddContextAssembler<TAssembler>(string id) where TAssembler : class, IContextAssembler => throw new NotSupportedException();
-        public void AddMemoryStore<TStore>(string id) where TStore : class, IMemoryStore => throw new NotSupportedException();
+        public void AddMemoryStore<TStore>(string id) where TStore : class, IMemoryEntryStore => throw new NotSupportedException();
     }
 
     private sealed class NoopDisposable : IDisposable

@@ -182,6 +182,24 @@ internal static class LoopbackPortPool
     }
 }
 
+/// <summary>In-memory task inspection for handler tests (task-65).</summary>
+internal sealed class FakeTaskInspection : Natter.Application.Chat.IAgentTaskInspection
+{
+    public List<Natter.Application.Chat.AgentTaskSummary> Recent { get; } = [];
+
+    public Dictionary<string, Natter.Application.Chat.AgentTaskTrace> Traces { get; } = new(StringComparer.Ordinal);
+
+    public ValueTask<IReadOnlyList<Natter.Application.Chat.AgentTaskSummary>> GetRecentAsync(
+        int limit,
+        CancellationToken cancellationToken = default)
+        => ValueTask.FromResult<IReadOnlyList<Natter.Application.Chat.AgentTaskSummary>>(Recent.Take(limit).ToArray());
+
+    public ValueTask<Natter.Application.Chat.AgentTaskTrace?> GetTraceAsync(
+        string taskId,
+        CancellationToken cancellationToken = default)
+        => ValueTask.FromResult(Traces.TryGetValue(taskId, out var trace) ? trace : null);
+}
+
 internal sealed class WebConsoleHarness : IDisposable
 {
     public const string Token = "test-token-0123456789abcdef";
@@ -196,7 +214,8 @@ internal sealed class WebConsoleHarness : IDisposable
         FakeAdminConfigStore? adminConfig,
         FakeAdminCommandRunner? adminCommand,
         FakeAdminLogReader? logReader,
-        Natter.Application.Admin.IAdminRedactor? redactor)
+        Natter.Application.Admin.IAdminRedactor? redactor,
+        Natter.Application.Chat.IAgentTaskInspection? tasks)
     {
         Options = options;
         Clock = new FakeTimeProvider(new DateTimeOffset(2026, 11, 18, 2, 0, 0, TimeSpan.Zero));
@@ -226,7 +245,7 @@ internal sealed class WebConsoleHarness : IDisposable
         AdminCommand = adminCommand;
         LogReader = logReader;
         HostRedactor = redactor;
-        var surface = new WebConsoleAdminSurface(adminConfig, adminCommand, logReader, redactor);
+        var surface = new WebConsoleAdminSurface(adminConfig, adminCommand, logReader, redactor, tasks);
         Admin = new WebConsoleAdminGateway(surface, options, Clock);
 
         Diagnostics = new WebConsoleDiagnostics(
@@ -293,7 +312,8 @@ internal sealed class WebConsoleHarness : IDisposable
         FakeAdminCommandRunner? adminCommand = null,
         FakeAdminLogReader? logReader = null,
         Natter.Application.Admin.IAdminRedactor? redactor = null,
-        string? wwwrootSource = null)
+        string? wwwrootSource = null,
+        Natter.Application.Chat.IAgentTaskInspection? tasks = null)
     {
         options ??= new WebConsoleOptions { Port = 5090 };
         var directory = Path.Combine(Path.GetTempPath(), "natter-webconsole-tests", Guid.NewGuid().ToString("N"));
@@ -326,7 +346,8 @@ internal sealed class WebConsoleHarness : IDisposable
             adminConfig,
             adminCommand,
             logReader,
-            redactor);
+            redactor,
+            tasks);
     }
 
     /// <summary>Copies the real <c>wwwroot</c> (modules included) into the harness plugin directory.</summary>

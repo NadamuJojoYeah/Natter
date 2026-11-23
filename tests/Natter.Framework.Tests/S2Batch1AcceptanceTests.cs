@@ -248,7 +248,7 @@ public sealed class S2Batch1AcceptanceTests
         // change makes it pass; on HEAD without that change this assertion fails on purpose, so the
         // defect cannot silently come back.
         using var temp = new TempDirectory();
-        var pluginDirectory = temp.Combine("plugins", "natter.sample.greetings");
+        var pluginDirectory = temp.Combine("plugins", "natter.sample.port.greetings");
         Directory.CreateDirectory(pluginDirectory);
         var sourceDirectory = Path.Combine(RepoRoot(), "samples", "Natter.Sample.Plugin.Greetings");
         File.Copy(Path.Combine(sourceDirectory, "plugin.json"), Path.Combine(pluginDirectory, "plugin.json"));

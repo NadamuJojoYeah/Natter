@@ -35,7 +35,7 @@ public sealed class PromptLibraryPluginTests
             new RuntimeProfile
             {
                 Id = "tier1-default",
-                Prompt = new ProfilePrompt { Provider = "natter.prompt.library#default" },
+                Prompt = new ProfilePrompt { Provider = "natter.feature.prompt.library#default" },
             },
             Source.Create("discord", "discord", "bot"),
             new Conversation("c1", ConversationKind.Direct),
@@ -48,7 +48,7 @@ public sealed class PromptLibraryPluginTests
     {
         var manifest = PromptLibraryPlugin.Manifest;
 
-        Assert.Equal("natter.prompt.library", manifest.Id);
+        Assert.Equal("natter.feature.prompt.library", manifest.Id);
         Assert.Equal(PluginKind.Feature, manifest.Kind);
         Assert.NotNull(manifest.FindContribution(PluginContributionTypes.PromptProvider, "default"));
         Assert.NotNull(manifest.FindContribution(PluginContributionTypes.CliCommand, "prompt.explain"));
@@ -85,7 +85,7 @@ public sealed class PromptLibraryPluginTests
 
         using var provider = services.BuildServiceProvider();
         var runtime = provider.GetRequiredService<PromptLibraryRuntime>();
-        Assert.Equal("natter.prompt.library", runtime.PluginId);
+        Assert.Equal("natter.feature.prompt.library", runtime.PluginId);
         var promptProvider = provider.GetRequiredService<PromptLibraryProvider>();
         var bundle = await promptProvider.GetAsync(Request());
         Assert.Contains("你是 Natter", bundle.SystemPrompt);

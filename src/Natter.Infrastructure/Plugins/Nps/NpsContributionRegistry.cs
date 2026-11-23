@@ -152,12 +152,12 @@ internal sealed class NpsContributionRegistry : IContributionRegistry
     }
 
     public void AddMemoryStore<TStore>(string id)
-        where TStore : class, IMemoryStore
+        where TStore : class, IMemoryEntryStore
     {
         Require(PluginContributionTypes.MemoryStore, id);
         RequirePermissions(PluginContributionTypes.MemoryStore, id);
         _services.Collection.TryAddSingleton<TStore>();
-        Stage(PluginContributionTypes.MemoryStore, id, 0, typeof(IMemoryStore), typeof(TStore), ServiceLifetime.Singleton, null);
+        Stage(PluginContributionTypes.MemoryStore, id, 0, typeof(IMemoryEntryStore), typeof(TStore), ServiceLifetime.Singleton, null);
     }
 
     public void AddEmbeddingProvider<TProvider>(string id)

@@ -337,7 +337,11 @@ public sealed class S2Batch2AcceptanceTests
         var livePlan = File.ReadAllText(Path.Combine(root, "docs", "LIVE_TEST_PLAN.md"));
         Assert.Contains("待人工", livePlan, StringComparison.Ordinal);
         Assert.Contains("passive-soak-24h", livePlan, StringComparison.Ordinal);
-        var productization = File.ReadAllText(Path.Combine(root, "docs", "P4_TIER1_PRODUCTIZATION.md"));
+        // The P4 productization doc was archived on 2026-11-23 (docs/REVIEW_2026-11-23_ARCHITECTURE.md
+        // part 2). The claim it locks down — that a "done" soak still needs cumulative 24h evidence —
+        // is still the operative rule, so keep asserting the content, at its archived path.
+        var productization = File.ReadAllText(
+            Path.Combine(root, "docs", "archive", "P4-TIER1-PRODUCTIZATION.md"));
         Assert.Contains("累计有效运行", productization, StringComparison.Ordinal);
 
         // F9: README must not hardcode a stale count.

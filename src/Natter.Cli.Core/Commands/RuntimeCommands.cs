@@ -165,6 +165,12 @@ public sealed class HealthCommand(
             invocation.Console.Out.WriteLine($"upstream {upstream.Source} connected={upstream.Connected}");
         foreach (var provider in snapshot.Providers)
             invocation.Console.Out.WriteLine($"provider {provider.Id} available={provider.Available} tier={provider.SupportTier}");
+        if (snapshot.Memory is { } memory)
+        {
+            invocation.Console.Out.WriteLine(
+                $"memory: store={memory.Store} migrationWarning={(memory.MigrationWarning is null ? "none" : memory.MigrationWarning)}");
+        }
+
         invocation.Console.Out.WriteLine($"plugins: activated={snapshot.Plugins.Activated} failed={snapshot.Plugins.Failed}");
         foreach (var failure in snapshot.Plugins.Failures)
             invocation.Console.Out.WriteLine(

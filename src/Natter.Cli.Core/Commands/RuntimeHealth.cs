@@ -138,7 +138,11 @@ public static class RuntimeHealth
                 plugins.Plugins.Count(plugin => plugin.State == PluginState.Activated),
                 failedPlugins.Length,
                 failedPlugins),
-            taskMetrics.Snapshot());
+            taskMetrics.Snapshot(),
+            PluginActivation: null,
+            Memory: new RuntimeHealthMemory(
+                "layered",
+                Natter.Application.Chat.MemoryMigrationDiagnostics.Warning));
     }
 }
 
@@ -157,7 +161,13 @@ public sealed record RuntimeHealthSnapshot(
     /// "activated" when the host ran and activated plugins, "not-activated" for `health --offline`.
     /// An offline snapshot must not look like a disconnected runtime (S2-E2).
     /// </summary>
-    string? PluginActivation = null);
+    string? PluginActivation = null,
+    /// <summary>
+    /// Layered memory diagnostics (P6.7). Null when memory is not part of this snapshot (offline).
+    /// A non-null <see cref="RuntimeHealthMemory.MigrationWarning"/> means the v1 → v2 copy failed and
+    /// layered recall is running empty while v1 rows are preserved.
+    /// </summary>
+    RuntimeHealthMemory? Memory = null);
 
 public sealed record RuntimeHealthUpstream(
     string Source,
@@ -173,6 +183,9 @@ public sealed record RuntimeHealthUpstream(
     string? LastDisconnectCode = null);
 
 public sealed record RuntimeHealthProvider(string Id, bool Available, string Profile, int SupportTier);
+
+/// <summary>Layered memory state. Never carries memory text (§10.2).</summary>
+public sealed record RuntimeHealthMemory(string Store, string? MigrationWarning);
 
 public sealed record RuntimeHealthPlugins(int Activated, int Failed, IReadOnlyList<RuntimeHealthPlugin> Failures);
 

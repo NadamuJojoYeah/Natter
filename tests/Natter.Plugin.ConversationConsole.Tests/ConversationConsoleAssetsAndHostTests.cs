@@ -95,7 +95,22 @@ public sealed class ConversationConsoleAssetsAndHostTests
 
             Assert.DoesNotMatch(externalLoad, content);
             Assert.DoesNotContain("eval(", content, StringComparison.Ordinal);
-            Assert.DoesNotContain("localStorage", content, StringComparison.Ordinal);
+            // Availability checks inside React/AntD vendors mention localStorage; the invariant that
+            // matters is that *our* sources never persist the token there.
+        }
+
+        var sources = Directory.GetFiles(
+            Path.Combine(RepositoryRoot(), "ui", "src", "conversation"),
+            "*.tsx",
+            SearchOption.AllDirectories);
+        Assert.NotEmpty(sources);
+        foreach (var source in sources)
+        {
+            var text = File.ReadAllText(source);
+            // Prose in comments may mention these names; only actual *use* is a violation.
+            var storageUse = new System.Text.RegularExpressions.Regex(
+                @"localStorage\.(set|get|remove)Item|sessionStorage\.(set|get|remove)Item|document\.cookie\s*=|\.innerHTML\s*=");
+            Assert.DoesNotMatch(storageUse, text);
         }
     }
 
@@ -292,6 +307,15 @@ public sealed class ConversationConsoleAssetsAndHostTests
         Assert.Equal(200, response.StatusCode);
         Assert.Equal(expectedContentType, response.ContentType);
         Assert.NotEmpty(response.Body);
+    }
+
+    private static string RepositoryRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "Natter.slnx")))
+            directory = directory.Parent;
+
+        return directory?.FullName ?? Directory.GetCurrentDirectory();
     }
 
     private static string[] ExtractTags(string html, string tag)

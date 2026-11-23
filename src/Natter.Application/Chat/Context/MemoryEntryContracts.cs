@@ -2,21 +2,6 @@ using System.Security.Cryptography;
 using System.Text;
 using Natter.Chat;
 
-// ===================================================================================================
-// P6.5 layered memory contract (docs/P6_MEMORY_SYSTEM.md §11).
-//
-// SCOPE GATE — read before consuming anything in this file:
-//   `memory_entries` (the table these types describe) is NOT on the live path until P6.7.
-//   The live chain is still: HostContextPipeline -> IMemoryStore -> `memory_items`.
-//   Until P6.7 switches it, this file's types and <c>SqliteMemoryEntryStore</c> serve ONLY tests and
-//   the v1 -> v2 migration. Wiring IMemoryEntryStore into the context pipeline early would split
-//   reads and writes across two tables with different liveness semantics (`expires_at` hard expiry
-//   vs `archived` soft archival), which is exactly the divergence this gate prevents.
-//   Guard test: MemoryContractTests.Live_recall_path_still_uses_the_v1_contract
-//   (delete that assertion in the same change that flips the write path).
-//
-//   Do not describe layered memory as "upgraded"/"shipped" in docs, logs or diagnostics until then.
-// ===================================================================================================
 
 namespace Natter.Application.Chat;
 
@@ -199,6 +184,29 @@ public interface IMemoryEntryStore
     ValueTask ReinforceRecallAsync(
         IReadOnlyList<string> ids,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Writes a portable envelope at <see cref="MemoryExportVersions.Current"/>. Archived entries are
+    /// included: export is a backup, not a recall result.
+    /// </summary>
+    ValueTask<MemoryEntryExport> ExportAsync(
+        Source source,
+        Conversation conversation,
+        User user,
+        bool includePrivate,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Restores an envelope. Honours the version policy: one version back is upgraded via
+    /// <see cref="MemoryExportBridge"/>, a newer envelope is refused rather than silently truncated.
+    /// Entries outside the caller's visible scopes are skipped, not imported.
+    /// </summary>
+    ValueTask<int> ImportAsync(
+        Source source,
+        Conversation conversation,
+        User user,
+        MemoryEntryExport export,
+        CancellationToken cancellationToken = default);
 }
 
 /// <summary>Mapping and normalization shared by both stores, so the v1 → v2 migration is testable.</summary>
@@ -219,6 +227,11 @@ public static class MemoryEntryMapping
             "trace" or "turn" or "message" => MemoryType.Trace,
             _ => MemoryType.Fact,
         };
+
+    /// <summary>True when <paramref name="kind"/> maps to an explicit type (not the Fact fallback).</summary>
+    public static bool IsKnownLegacyKind(string? kind)
+        => kind?.Trim().ToLowerInvariant() is
+            "policy" or "preference" or "fact" or "episodic" or "episode" or "event" or "trace" or "turn" or "message";
 
     public static string ToStorageValue(MemoryType type) => type.ToString().ToLowerInvariant();
 
@@ -268,6 +281,34 @@ public static class MemoryEntryMapping
 /// back; writing always emits the current version; a newer envelope is refused loudly instead of
 /// silently dropping the fields this build does not know about.
 /// </summary>
+/// <summary>
+/// Migration diagnostics for the v1 → v2 memory copy (P6.7). Surfaces exactly one fact: whether the
+/// copy succeeded. It never carries memory text (§10.2).
+/// </summary>
+public static class MemoryMigrationDiagnostics
+{
+    /// <summary>Non-null when the copy failed; layered recall then runs empty while v1 rows survive.</summary>
+    public static string? Warning { get; private set; }
+
+    /// <summary>Optional log sink, set once during composition.</summary>
+    public static Action<string>? WarningSink { get; set; }
+
+    /// <summary>Records the first warning only; later ones would repeat the same startup fault.</summary>
+    public static void Report(string message)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(message);
+        Warning ??= message;
+        WarningSink?.Invoke(message);
+    }
+
+    /// <summary>Test hook: clears the recorded warning between cases.</summary>
+    public static void Reset()
+    {
+        Warning = null;
+        WarningSink = null;
+    }
+}
+
 public static class MemoryExportVersions
 {
     /// <summary>Version written by this build.</summary>

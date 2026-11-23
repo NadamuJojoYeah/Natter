@@ -163,7 +163,7 @@ internal sealed class TestContributionRegistry(IServiceCollection services) : IC
     public void AddContextAssembler<TAssembler>(string id) where TAssembler : class, Natter.Application.Chat.IContextAssembler
         => throw new NotSupportedException();
 
-    public void AddMemoryStore<TStore>(string id) where TStore : class, Natter.Application.Chat.IMemoryStore
+    public void AddMemoryStore<TStore>(string id) where TStore : class, Natter.Application.Chat.IMemoryEntryStore
         => throw new NotSupportedException();
 }
 

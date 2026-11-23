@@ -47,20 +47,13 @@
           Outputs="$(MSBuildThisFileDirectory)wwwroot/index.html">
     <PropertyGroup>
       <UiDirectory>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../../ui/'))</UiDirectory>
-      <UiHasVite>$([System.IO.Directory]::Exists('$(UiDirectory)node_modules/.bin/vite'))</UiHasVite>
     </PropertyGroup>
 
     <Error Condition="!Exists('$(UiDirectory)package.json')"
            Text="UI workspace not found at '$(UiDirectory)'; the plugin needs ui/ to build its wwwroot." />
 
-    <!-- Dependency install is keyed on the vite shim: a partial node_modules still gets repaired.
-         RemoveDir first: npm's own `ci` cleanup hits ENOTEMPTY on overlay filesystems. -->
-    <RemoveDir Directories="$(UiDirectory)node_modules" Condition="'$(UiHasVite)' != 'True'" />
-    <Exec Command="npm ci --no-audit --no-fund"
-          WorkingDirectory="$(UiDirectory)"
-          Condition="'$(UiHasVite)' != 'True'"
-          StandardOutputImportance="normal" />
-    <Exec Command="npm run build:conversation" WorkingDirectory="$(UiDirectory)" />
+    <!-- One script owns install + build + the cross-process lock (two plugins share ui/node_modules). -->
+    <Exec Command="bash &quot;$(UiDirectory)scripts/build-target.sh&quot; conversation" WorkingDirectory="$(UiDirectory)" />
 
     <ItemGroup>
       <None Include="$(MSBuildThisFileDirectory)wwwroot/**"

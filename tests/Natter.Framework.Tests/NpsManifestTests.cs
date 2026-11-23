@@ -36,7 +36,7 @@ public sealed class NpsManifestTests
         var json = """
             {
               "schemaVersion": 1,
-              "id": "natter.transport.discord",
+              "id": "natter.transport.messaging.discord",
               "name": "Discord Transport",
               "version": "0.1.0",
               "kind": "transport",
@@ -52,7 +52,7 @@ public sealed class NpsManifestTests
         var result = PluginManifestReader.Parse(json);
 
         Assert.True(result.IsValid, string.Join("; ", result.Errors.Select(error => error.Message)));
-        Assert.Equal("natter.transport.discord", result.Manifest!.Id);
+        Assert.Equal("natter.transport.messaging.discord", result.Manifest!.Id);
         Assert.Equal(PluginKind.Transport, result.Manifest.Kind);
         Assert.Equal("discord", result.Manifest.FindContribution(PluginContributionTypes.ChatUpstream, "discord")!.Id);
     }

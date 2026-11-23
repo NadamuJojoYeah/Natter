@@ -11,7 +11,7 @@ namespace Natter.Application.Chat;
 /// </summary>
 public sealed class HostContextPipeline(
     IConversationStore conversations,
-    IMemoryStore memories,
+    IMemoryEntryStore memories,
     ISummaryStore summaries,
     IPromptProvider prompts,
     IContextAssembler assembler,
@@ -102,7 +102,7 @@ public sealed class HostContextPipeline(
             ? allMessages.TakeLast(windowSize).ToArray()
             : allMessages;
 
-        IReadOnlyList<MemoryItem> memoryItems = [];
+        IReadOnlyList<MemoryEntry> memoryItems = [];
         string? fallback = null;
         if (string.Equals(profile.Memory.Scope?.Trim(), "global", StringComparison.OrdinalIgnoreCase))
         {
@@ -118,17 +118,13 @@ public sealed class HostContextPipeline(
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(_memoryOptions.RetrievalTimeout);
             memoryItems = await memoryStore.SearchAsync(
-                new MemoryQuery(
-                    source,
-                    conversation,
-                    user,
-                    _memoryOptions.MaxCandidates,
-                    IncludePrivate: conversation.Kind is ConversationKind.Direct or ConversationKind.Group)
+                new MemoryEntryQuery(source, conversation, user)
                 {
                     // P6 §3: retrieval visibility is the union of all visible scopes; actor
                     // isolation comes from the scope id, not from a default strict filter.
                     Query = userText,
-                    DecayHalfLife = _memoryOptions.DecayHalfLife,
+                    Limit = _memoryOptions.MaxCandidates,
+                    IncludePrivate = conversation.Kind is ConversationKind.Direct or ConversationKind.Group,
                 },
                 timeout.Token).ConfigureAwait(false);
         }
@@ -254,7 +250,7 @@ public sealed class HostContextPipeline(
 
     private IReadOnlyList<PromptFragment> BuildMemoryFragments(
         ConversationSummary? summary,
-        IReadOnlyList<MemoryItem> items,
+        IReadOnlyList<MemoryEntry> items,
         RuntimeProfile profile)
     {
         var fragments = new List<PromptFragment>();
@@ -281,7 +277,7 @@ public sealed class HostContextPipeline(
                 break;
             }
 
-            var text = "[Memory]\n- " + item.Text;
+            var text = "[Memory]\n- " + item.Content;
             var estimate = MemoryTokens.Estimate(text);
             if (tokens + estimate > _memoryOptions.MaxTokens)
             {

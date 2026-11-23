@@ -27,7 +27,7 @@ public sealed class PromptLibraryProviderTests
         var load = PromptLibraryLoader.Load(options, AppContext.BaseDirectory);
         Assert.True(load.Success, load.Code + ": " + load.Message);
         log = new TestLog();
-        return new PromptLibraryRuntime("natter.prompt.library", "0.1.0", load.Library!, log);
+        return new PromptLibraryRuntime("natter.feature.prompt.library", "0.1.0", load.Library!, log);
     }
 
     private static PromptLibraryRuntime RuntimeFromOptions(PromptLibraryOptions options, out TestLog log)
@@ -35,7 +35,7 @@ public sealed class PromptLibraryProviderTests
         var load = PromptLibraryLoader.Load(options, AppContext.BaseDirectory);
         Assert.True(load.Success, load.Code + ": " + load.Message);
         log = new TestLog();
-        return new PromptLibraryRuntime("natter.prompt.library", "0.1.0", load.Library!, log);
+        return new PromptLibraryRuntime("natter.feature.prompt.library", "0.1.0", load.Library!, log);
     }
 
     private static PromptRequest Request(
@@ -49,7 +49,7 @@ public sealed class PromptLibraryProviderTests
                 Id = "tier1-default",
                 Prompt = new ProfilePrompt
                 {
-                    Provider = "natter.prompt.library#default",
+                    Provider = "natter.feature.prompt.library#default",
                     Preset = profilePreset,
                     DisabledFragments = disabled ?? [],
                 },
@@ -154,7 +154,7 @@ public sealed class PromptLibraryProviderTests
             DisabledFragments: [],
             MissingVariables: PromptMissingVariableBehavior.Warning,
             Warnings: []);
-        var provider = new PromptLibraryProvider(new PromptLibraryRuntime("natter.prompt.library", "0.1.0", library, log));
+        var provider = new PromptLibraryProvider(new PromptLibraryRuntime("natter.feature.prompt.library", "0.1.0", library, log));
 
         var bundle = await provider.GetAsync(Request());
 
