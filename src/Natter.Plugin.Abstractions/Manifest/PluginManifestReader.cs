@@ -222,6 +222,23 @@ public static partial class PluginManifestReader
             errors.Add(new PluginManifestIssue("/configSchema", "invalid-path", schemaError!));
         }
 
+        // dataDirs become writable by the service user at deploy time, so a hostile or careless
+        // manifest must not be able to point that grant at an arbitrary absolute path or at `..`.
+        if (manifest.DataDirs is { Count: > 0 } dataDirs)
+        {
+            for (var index = 0; index < dataDirs.Count; index++)
+            {
+                var declared = dataDirs[index];
+                if (!IsSafeRelativePath(declared?.Path, pluginDirectory, out var dataDirError))
+                {
+                    errors.Add(new PluginManifestIssue(
+                        $"/dataDirs/{index}/path",
+                        "invalid-path",
+                        dataDirError ?? "dataDirs path must be a relative subpath of the plugin directory."));
+                }
+            }
+        }
+
         ValidateDependencies(manifest.DependsOn, "/dependsOn", required: true, errors);
         ValidateDependencies(manifest.OptionalDependsOn, "/optionalDependsOn", required: false, errors);
         ValidateConflicts(manifest.Conflicts, errors);

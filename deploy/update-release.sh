@@ -188,25 +188,33 @@ for plugin_dir in "$TARGET"/plugins/*/; do
   manifest="$plugin_dir/plugin.json"
   [[ -f "$manifest" ]] || continue
 
-  # `grep -qa` on the raw manifest avoids a JSON parser here (no jq dependency at deploy time).
-  grep -qa '"dataDirs"' "$manifest" 2>/dev/null || continue
-
-  while IFS= read -r rel; do
+  # Parse with python3 (already required elsewhere in this script); grep-based extraction breaks as
+  # soon as the manifest is pretty-printed differently or gains another "path" key.
+  while IFS=$'\t' read -r rel purpose; do
     [[ -n "$rel" ]] || continue
     case "$rel" in
-      /*|*..*) echo "  WARNING: $manifest declares an unsafe dataDir '$rel' (must be a relative subpath); skipped" >&2; continue ;;
+      /*|*..*) echo "  WARNING: $manifest declares an unsafe dataDir '$rel'; skipped" >&2; continue ;;
     esac
     PLUGIN_DATA_DIRS+=("$plugin_dir/$rel")
-  done < <(sed -n '/"dataDirs"/,/\]/p' "$manifest" | sed -n 's/.*"path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+  done < <(python3 - "$manifest" <<'PYEOF'
+import json,sys
+try:
+    m=json.load(open(sys.argv[1], encoding="utf-8"))
+except Exception:
+    sys.exit(0)
+for d in (m.get("dataDirs") or []):
+    if isinstance(d, dict) and d.get("path"):
+        print(f'{d["path"]}\t{d.get("purpose","")}')
+PYEOF
+)
 done
 shopt -u nullglob
 
 for data_dir in ${PLUGIN_DATA_DIRS[@]+"${PLUGIN_DATA_DIRS[@]}"}; do
   run install -d -o "$SERVICE_USER" -g "$SERVICE_USER" -m 0750 "$data_dir" \
     || die "cannot prepare plugin data dir $data_dir" 5
-  echo "  plugin data: $data_dir ($SERVICE_USER:0750)"
-  # A service-owned directory must not be readable by everyone; lib/ stays 0755 via chmod -R a+rX.
   run chmod 0750 "$data_dir" || true
+  echo "  plugin data: $data_dir ($SERVICE_USER:0750)"
 done
 
 if [[ ${#PLUGIN_DATA_DIRS[@]} -eq 0 ]]; then
