@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using Natter.Abstractions.Plugins;
 using Natter.Application.Chat;
+using Natter.Application.Redaction;
 using Natter.Chat;
 
 namespace Natter.Cli.Core.Commands;
@@ -106,10 +107,10 @@ public static class RuntimeHealth
                         value.LastConnectedAt,
                         value.LastDisconnectAt,
                         value.ReconnectCount,
-                        Sanitize(value.LastError),
+                        RedactedText.FromNullable(value.LastError),
                         value.SendFailures,
-                        Sanitize(value.LastSendError),
-                        Sanitize(value.LastDisconnectError),
+                        RedactedText.FromNullable(value.LastSendError),
+                        RedactedText.FromNullable(value.LastDisconnectError),
                         value.LastDisconnectCode);
                 }
                 return new RuntimeHealthUpstream(upstream.Source.Key, upstream.IsConnected);
@@ -180,10 +181,10 @@ public sealed record RuntimeHealthUpstream(
     DateTimeOffset? LastConnectedAt = null,
     DateTimeOffset? LastDisconnectAt = null,
     int ReconnectCount = 0,
-    string? LastError = null,
+    RedactedText? LastError = null,
     int SendFailures = 0,
-    string? LastSendError = null,
-    string? LastDisconnectError = null,
+    RedactedText? LastSendError = null,
+    RedactedText? LastDisconnectError = null,
     string? LastDisconnectCode = null);
 
 public sealed record RuntimeHealthProvider(string Id, bool Available, string Profile, int SupportTier);

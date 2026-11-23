@@ -141,6 +141,12 @@ public sealed class SparkStatusCommandHandler(SparkOptions options, SparkMetrics
     public async ValueTask<int> ExecuteAsync(CliInvocation invocation, CancellationToken cancellationToken = default)
     {
         var historyCount = await history.CountAsync(cancellationToken).ConfigureAwait(false);
+        var metricsSnapshot = metrics.Snapshot();
+        metricsSnapshot = metricsSnapshot with
+        {
+            LastError = Natter.Application.Redaction.SecretRedaction.Apply(
+                metricsSnapshot.LastError, Natter.Application.Redaction.SecretRedactionOptions.Admin),
+        };
         var host = Uri.TryCreate(options.BaseUrl, UriKind.Absolute, out var uri) ? uri.Host : "invalid";
         var snapshot = new SparkStatusSnapshot(
             "iflytek-spark",
@@ -150,7 +156,7 @@ public sealed class SparkStatusCommandHandler(SparkOptions options, SparkMetrics
             options.Streaming,
             options.HistoryMaxMessages,
             historyCount,
-            metrics.Snapshot());
+            metricsSnapshot);
 
         if (invocation.HasFlag("json"))
         {
@@ -169,7 +175,8 @@ public sealed class SparkStatusCommandHandler(SparkOptions options, SparkMetrics
         invocation.Console.Out.WriteLine($"p95LatencyMs: {snapshot.Metrics.P95LatencyMs?.ToString() ?? "-"}");
         invocation.Console.Out.WriteLine($"inputTokens: {snapshot.Metrics.InputTokens}");
         invocation.Console.Out.WriteLine($"outputTokens: {snapshot.Metrics.OutputTokens}");
-        invocation.Console.Out.WriteLine($"lastError: {snapshot.Metrics.LastError ?? "-"}");
+        invocation.Console.Out.WriteLine(
+            $"lastError: {Natter.Application.Redaction.SecretRedaction.Apply(snapshot.Metrics.LastError, Natter.Application.Redaction.SecretRedactionOptions.Admin)}");
         return CliExitCodes.Success;
     }
 }

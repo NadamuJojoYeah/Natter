@@ -415,14 +415,20 @@ public sealed class HealthEndpointHostPort : IWebConsoleHostPort, IDisposable
                 ReadDateTime(upstream, "lastConnectedAt"),
                 ReadDateTime(upstream, "lastDisconnectAt"),
                 ReadInt32(upstream, "reconnectCount"),
-                ReadString(upstream, "lastError"),
+                ReadRedacted(upstream, "lastError"),
                 ReadInt32(upstream, "sendFailures"),
-                ReadString(upstream, "lastSendError"),
-                ReadString(upstream, "lastDisconnectError"),
+                ReadRedacted(upstream, "lastSendError"),
+                ReadRedacted(upstream, "lastDisconnectError"),
                 ReadString(upstream, "lastDisconnectCode")));
         }
 
         return upstreams;
+    }
+
+    private static string? ReadRedacted(JsonElement element, string name)
+    {
+        var value = ReadString(element, name);
+        return value is null ? null : WebConsoleRedaction.RedactSecrets(value);
     }
 
     private static string? ReadString(JsonElement element, string name)

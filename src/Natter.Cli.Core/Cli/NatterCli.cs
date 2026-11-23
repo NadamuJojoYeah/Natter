@@ -44,6 +44,10 @@ public static class NatterCli
         ArgumentNullException.ThrowIfNull(console);
         ArgumentNullException.ThrowIfNull(options);
 
+        // C-03 / task-69: one decorator at the CLI boundary covers every current and future
+        // command, including status/health JSON and plugin-provided command handlers.
+        console = RedactingConsole.Wrap(console);
+
         options.AddDefaultPluginLocations();
 
         var durationSeconds = ReadServeDuration(args);
@@ -93,7 +97,7 @@ public static class NatterCli
         builder.ConfigureLogging(logging =>
         {
             logging.SetMinimumLevel(options.Verbose ? LogLevel.Debug : LogLevel.Warning);
-            logging.AddProvider(new CliLoggerProvider(console));
+            logging.AddProvider(new RedactingLoggerProvider(new CliLoggerProvider(console)));
         });
 
         configure?.Invoke(builder);

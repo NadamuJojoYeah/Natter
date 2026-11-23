@@ -172,6 +172,12 @@ public sealed class DeepSeekStatusCommandHandler(
     {
         var historyCount = await history.CountAsync(cancellationToken).ConfigureAwait(false);
         var baseHost = Uri.TryCreate(options.BaseUrl, UriKind.Absolute, out var uri) ? uri.Host : "invalid";
+        var metricsSnapshot = metrics.Snapshot();
+        metricsSnapshot = metricsSnapshot with
+        {
+            LastError = Natter.Application.Redaction.SecretRedaction.Apply(
+                metricsSnapshot.LastError, Natter.Application.Redaction.SecretRedactionOptions.Admin),
+        };
         var snapshot = new DeepSeekStatusSnapshot(
             "deepseek",
             options.Model,
@@ -205,7 +211,8 @@ public sealed class DeepSeekStatusCommandHandler(
         invocation.Console.Out.WriteLine($"outputTokens: {snapshot.Metrics.OutputTokens}");
         invocation.Console.Out.WriteLine($"cachedInputTokens: {snapshot.Metrics.CachedInputTokens}");
         invocation.Console.Out.WriteLine($"reasoningTokens: {snapshot.Metrics.ReasoningTokens}");
-        invocation.Console.Out.WriteLine($"lastError: {snapshot.Metrics.LastError ?? "-"}");
+        invocation.Console.Out.WriteLine(
+            $"lastError: {Natter.Application.Redaction.SecretRedaction.Apply(snapshot.Metrics.LastError, Natter.Application.Redaction.SecretRedactionOptions.Admin)}");
         foreach (var parameter in snapshot.Effective)
             invocation.Console.Out.WriteLine($"{parameter.Name}: {parameter.Value} ({parameter.Source})");
 

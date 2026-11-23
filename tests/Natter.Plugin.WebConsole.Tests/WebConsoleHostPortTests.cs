@@ -45,6 +45,23 @@ public sealed class WebConsoleHostPortTests
         """;
 
     [Fact]
+    public async Task Health_endpoint_redacts_upstream_diagnostic_text()
+    {
+        const string canary = "sk-live-ABCDEFGHIJKLMNOPQRSTUV";
+        var handler = new StaticJsonHandler(HealthJson.Replace(
+            "\"lastError\": null",
+            "\"lastError\": \"" + canary + "\"",
+            StringComparison.Ordinal));
+        using var client = new HttpClient(handler);
+        using var port = new HealthEndpointHostPort(new Uri("http://127.0.0.1:5099/health"), client, new FakeTimeProvider(Now));
+
+        var snapshot = await port.ReadAsync();
+
+        Assert.DoesNotContain(canary, snapshot.Upstreams.Data![0].LastError!, StringComparison.Ordinal);
+        Assert.Contains("[redacted]", snapshot.Upstreams.Data[0].LastError!, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Health_endpoint_maps_sections()
     {
         var handler = new StaticJsonHandler(HealthJson);

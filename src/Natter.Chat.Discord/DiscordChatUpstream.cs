@@ -168,7 +168,8 @@ public sealed class DiscordChatUpstream : IChatUpstream, IChatUpstreamHealth, ID
             if (!IsConnected)
             {
                 await _transport.DisconnectAsync(cancellationToken).ConfigureAwait(false);
-                throw new InvalidOperationException($"Discord transport failed to become ready: {LastError ?? "no Ready event"}");
+                throw new InvalidOperationException(
+                    $"Discord transport failed to become ready: {RedactForLog(LastError) ?? "no Ready event"}");
             }
 
             // A caller-driven connect is the clean slate: drop watchdog counters from earlier
@@ -809,7 +810,7 @@ public sealed class DiscordChatUpstream : IChatUpstream, IChatUpstreamHealth, ID
 
             _logger?.LogWarning(
                 "Discord gateway watchdog rebuilding transport (source={Source}, attempt={Attempt}, "
-                + "maxAttempts={MaxAttempts}, downForMs={DownForMs}, lastCode={LastCode}, lastError={LastError}).",
+                + "maxAttempts={MaxAttempts}, downForMs={DownForMs}, lastCode={LastCode}, lastError={RedactForLog(LastError)}).",
                 Source.Key,
                 attempt,
                 _options.ReconnectMaxAttempts,
@@ -878,7 +879,7 @@ public sealed class DiscordChatUpstream : IChatUpstream, IChatUpstreamHealth, ID
             Volatile.Write(ref _reconnectExhausted, 1);
             _logger?.LogError(
                 "Discord gateway reconnect exhausted after {Attempts} attempt(s); manual intervention required "
-                + "(source={Source}, lastCode={LastCode}, errorType={ErrorType}, lastError={LastError}). "
+                + "(source={Source}, lastCode={LastCode}, errorType={ErrorType}, lastError={RedactForLog(LastError)}). "
                 + "The watchdog stopped retrying.",
                 attempt,
                 Source.Key,
@@ -895,7 +896,7 @@ public sealed class DiscordChatUpstream : IChatUpstream, IChatUpstreamHealth, ID
 
         _logger?.LogWarning(
             "Discord gateway reconnect attempt {Attempt} failed; retrying in {DelayMs}ms "
-            + "(source={Source}, lastCode={LastCode}, errorType={ErrorType}, lastError={LastError}).",
+            + "(source={Source}, lastCode={LastCode}, errorType={ErrorType}, lastError={RedactForLog(LastError)}).",
             attempt,
             (long)delay.TotalMilliseconds,
             Source.Key,
@@ -1084,9 +1085,12 @@ public sealed class DiscordChatUpstream : IChatUpstream, IChatUpstreamHealth, ID
             Sequence = _sequence,
             OccurredAt = _clock.UtcNow,
             ReceivedAt = _clock.UtcNow,
-            Payload = new UpstreamStatusPayload(state, detail),
+            Payload = new UpstreamStatusPayload(state, RedactForLog(detail)),
         });
     }
+
+    private static string? RedactForLog(string? value)
+        => value is null ? null : DiscordLogRedaction.Redact(value);
 
     private void SetError(string code, string message, bool fatal = true)
     {
