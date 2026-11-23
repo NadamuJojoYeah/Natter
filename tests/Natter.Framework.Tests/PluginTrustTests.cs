@@ -383,4 +383,31 @@ public sealed class PluginTrustTests
             }
         }
     }
+    [Fact]
+    public void Unreadable_plugin_subdirectory_does_not_abort_the_sensitive_file_scan()
+    {
+        // Regression: Directory.EnumerateFiles is lazy, so a try/catch around the call alone lets the
+        // UnauthorizedAccessException escape from the foreach. On a real host a root-owned 0700
+        // subdirectory (the WebConsole audit dir) therefore aborted the whole process at startup.
+        var root = Path.Combine(Path.GetTempPath(), "natter-inspector-" + Guid.NewGuid().ToString("N"));
+        var locked = Path.Combine(root, "audit");
+        Directory.CreateDirectory(locked);
+        File.WriteAllText(Path.Combine(root, "plugin.json"), "{}");
+        File.WriteAllText(Path.Combine(root, "secrets.json"), "{}");   // must still be found
+
+        try
+        {
+            File.SetUnixFileMode(locked, UnixFileMode.None);
+
+            var matches = PluginPackageInspector.FindSensitiveFiles(root);
+
+            Assert.Contains("secrets.json", matches);
+        }
+        finally
+        {
+            File.SetUnixFileMode(locked, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
 }
