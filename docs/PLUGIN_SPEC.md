@@ -276,7 +276,33 @@ plugins/
 - `Natter.Chat.Discord` 不再引用 `Natter.Application`；`Natter.Chat.DingTalk` 引用 `Natter.Abstractions`，并对 `UpstreamStatusPayload.Detail` 做共享脱敏（`[redacted]`）。
 - `Natter.Plugin.AiEmbedding.OpenAi` 不再直接引用 `Natter.Application`。
 
-B-02b（新建 `Natter.Contracts` / `Natter.Prompting`，搬 Prompt/Memory 契约）不在本批范围；完成时会在本节追加第二轮迁移清单。
+B-02b（新建 `Natter.Contracts` / `Natter.Prompting`，搬 Prompt/Memory 契约）见 4.5.2。
+
+#### 4.5.2 程序集迁移：B-02b（2026-11-24）
+
+B-02b 让 `Natter.Plugin.Abstractions` **不再引用 `Natter.Application`**，并新增两个程序集：
+
+| 程序集 | 作用 | 依赖 |
+| --- | --- | --- |
+| `Natter.Contracts` | 插件可见的 Prompt / Memory / Context / Profile 契约 | `Natter.Abstractions`、`Natter.Chat` |
+| `Natter.Prompting` | `PromptComposer` / `PromptSafety` 实现，供宿主与 Prompt Library 共用 | `Natter.Contracts`、`Natter.Abstractions`、`Natter.Chat` |
+
+搬迁的类型（命名空间均不变）：
+
+- **Prompt/Context**：`PromptRequest`、`PromptBundle`、`PromptSection`、`IPromptProvider`、`ContextBudget`、`ContextRequest`、`ContextBundle`、`ContextDiagnostics`、`IContextAssembler`、`PromptPlan`、`PromptFragment`、`PromptFragmentContext`、`IPromptFragmentProvider`、`PromptFragmentSourceOptions/Result`、`IPromptFragmentSource`、`PromptFragmentContexts`、`PromptCompilerDefaults/Codes/Exception`、`ConversationScope`。
+- **Memory/Profile**：`IMemoryEntryStore` 及其 v2 record/enum、`MemoryScope`、`MemoryType`、`MemoryEntryExport`、`IMemoryStore`（v1，保留兼容）、`RuntimeProfile` 及 `Profile*` 模型、`StoredMessage`、`ConversationKey`、`IChatResponder`。
+- `PromptComposer` / `PromptSafety` 的实现位于 `Natter.Prompting`；Application 与 `Natter.Plugin.PromptLibrary` 均引用该程序集。
+- `Sample.Memory` 改为自带 `SampleMemoryEntryStore`（约 200 行），不再引用 `Application` / `Chat`；`PromptLibrary` 不再引用 Application，也不再 `new` Application 里的宿主实现（改为引用 `Natter.Prompting`）。
+
+对第三方插件的具体影响（五步迁移）：
+
+1. **必须重新编译。** 契约类型的定义程序集从 `Natter.Application` 变为 `Natter.Contracts`，旧二进制里的类型引用无法解析。
+2. 把只用到契约的 `Natter.Application` ProjectReference 改为 `Natter.Contracts`；如果用到 `PromptComposer`，再加 `Natter.Prompting`。
+3. `using` 不变（命名空间仍是 `Natter.Application.Chat` / `Natter.Application.Redaction`）。
+4. **不要把 `Natter.Contracts` / `Natter.Prompting` 的 DLL 放进插件目录作为私有依赖**：宿主把它们列为共享契约程序集（`PluginContractAssemblies`），保证类型标识一致；插件目录里同名的本地副本会被忽略或造成诊断混淆。
+5. `hostApi` **不收紧数值**：本次没有改变公开 API 形状，也没有新增 API 版本常量；兼容性由“重新编译 + 共享契约程序集”保证。若未来需要让旧二进制显式失败，再提升 `hostApi` minor 并写进 manifest 迁移说明。
+
+已知取舍：`Natter.Contracts` 里仍有少量**无 I/O 的 pure helper**（`MemoryDecay` 数学、`MemoryEntryMapping`、`ProfileContext` AsyncLocal、`PromptPluginFragmentRules` 正则），它们被 record 的便捷方法直接引用，拆出去会造成契约→实现的循环；当前它们不含持久化、catalog 或宿主服务，后续若要彻底纯化需把这些方法改为 Application/Prompting 的扩展方法。
 
 ### 4.6 权限
 

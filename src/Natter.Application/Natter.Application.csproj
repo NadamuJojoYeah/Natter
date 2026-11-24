@@ -18,6 +18,8 @@
     <ProjectReference Include="../Natter.Abstractions/Natter.Abstractions.csproj" />
     <ProjectReference Include="../Natter.Domain/Natter.Domain.csproj" />
     <ProjectReference Include="../Natter.Chat/Natter.Chat.csproj" />
+    <ProjectReference Include="../Natter.Prompting/Natter.Prompting.csproj" />
+    <ProjectReference Include="../Natter.Contracts/Natter.Contracts.csproj" />
   </ItemGroup>
 
 </Project>

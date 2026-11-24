@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Natter.Prompting</RootNamespace>
+    <AssemblyName>Natter.Prompting</AssemblyName>
+    <Description>Prompt compiler implementation shared by the host and the Prompt Library plugin.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Natter.Contracts/Natter.Contracts.csproj" />
+    <ProjectReference Include="../Natter.Abstractions/Natter.Abstractions.csproj" />
+    <ProjectReference Include="../Natter.Chat/Natter.Chat.csproj" />
+  </ItemGroup>
+</Project>

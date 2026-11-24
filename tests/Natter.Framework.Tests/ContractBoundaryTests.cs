@@ -30,11 +30,26 @@ public sealed class ContractBoundaryTests
     }
 
     [Fact]
-    public void PluginAbstractions_application_reference_is_known_debt_until_b02b()
+    public void PluginAbstractions_does_not_reference_application()
     {
-        // B-02a cannot remove this yet: Plugin.Abstractions still exposes prompt/memory contracts
-        // that live in Application, and PromptLibrary compiles through them. B-02b moves those.
-        AssertProjectReference("src/Natter.Plugin.Abstractions/Natter.Plugin.Abstractions.csproj", "Natter.Application");
+        AssertNoProjectReference("src/Natter.Plugin.Abstractions/Natter.Plugin.Abstractions.csproj", "Natter.Application");
+        AssertProjectReference("src/Natter.Plugin.Abstractions/Natter.Plugin.Abstractions.csproj", "Natter.Contracts");
+    }
+
+    [Fact]
+    public void PromptLibrary_and_sample_memory_use_contract_projects_not_application()
+    {
+        AssertNoProjectReference("plugins/Natter.Plugin.PromptLibrary/Natter.Plugin.PromptLibrary.csproj", "Natter.Application");
+        AssertProjectReference("plugins/Natter.Plugin.PromptLibrary/Natter.Plugin.PromptLibrary.csproj", "Natter.Prompting");
+        AssertNoProjectReference("samples/Natter.Sample.Plugin.Memory/Natter.Sample.Plugin.Memory.csproj", "Natter.Application");
+        AssertNoProjectReference("samples/Natter.Sample.Plugin.Memory/Natter.Sample.Plugin.Memory.csproj", "Natter.Chat");
+    }
+
+    [Fact]
+    public void Contract_assemblies_are_wired_without_a_cycle()
+    {
+        Assert.Equal("Natter.Contracts", typeof(PromptRequest).Assembly.GetName().Name);
+        Assert.Equal("Natter.Prompting", typeof(PromptComposer).Assembly.GetName().Name);
     }
 
     private static void AssertProjectReference(string relativePath, string name)

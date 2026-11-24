@@ -47,7 +47,7 @@ public sealed class MemoryStorePlugin : INatterPlugin
 /// </summary>
 public sealed class SampleMemoryStore : IMemoryEntryStore
 {
-    private readonly InMemoryMemoryEntryStore _inner = new();
+    private readonly SampleMemoryEntryStore _inner = new();
     private readonly string _path;
     private readonly Lock _gate = new();
     private static readonly JsonSerializerOptions JsonOptions = new()

@@ -1,6 +1,7 @@
 <Solution>
   <Project Path="src/Natter.Abstractions/Natter.Abstractions.csproj" />
   <Project Path="src/Natter.Cli.Abstractions/Natter.Cli.Abstractions.csproj" />
+  <Project Path="src/Natter.Contracts/Natter.Contracts.csproj" />
   <Project Path="src/Natter.Domain/Natter.Domain.csproj" />
   <Project Path="src/Natter.Chat/Natter.Chat.csproj" />
   <Project Path="src/Natter.Plugin.Abstractions/Natter.Plugin.Abstractions.csproj" />
@@ -11,6 +12,7 @@
   <Project Path="src/Natter.Feature.Ai.DeepSeek/Natter.Feature.Ai.DeepSeek.csproj" />
   <Project Path="src/Natter.Feature.Ai.Spark/Natter.Feature.Ai.Spark.csproj" />
   <Project Path="src/Natter.Chat.Satori/Natter.Chat.Satori.csproj" />
+  <Project Path="src/Natter.Prompting/Natter.Prompting.csproj" />
   <Project Path="src/Natter.Application/Natter.Application.csproj" />
   <Project Path="src/Natter.Infrastructure/Natter.Infrastructure.csproj" />
   <Project Path="src/Natter.Cli.Core/Natter.Cli.Core.csproj" />
