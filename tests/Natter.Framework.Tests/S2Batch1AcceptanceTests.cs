@@ -91,9 +91,7 @@ public sealed class S2Batch1AcceptanceTests
         using var temp = new TempDirectory();
         var package = temp.Combine("clean-but-expanding.npa");
         var manifest = Encoding.UTF8.GetBytes(MinimalManifest("natter.s2.expand", entryAssembly: "lib/probe.dll"));
-        var dll = File.ReadAllBytes(Path.Combine(
-            RepoRoot(), "samples", "Natter.Sample.Plugin.Greetings", "bin", "Debug", "net10.0",
-            "Natter.Sample.Plugin.Greetings.dll"));
+        var dll = File.ReadAllBytes(GreetingsPluginDll());
         var payload = new byte[4 * 1024 * 1024];
         var manifestHash = Convert.ToHexString(SHA256.HashData(manifest)).ToLowerInvariant();
         var dllHash = Convert.ToHexString(SHA256.HashData(dll)).ToLowerInvariant();
@@ -252,9 +250,7 @@ public sealed class S2Batch1AcceptanceTests
         Directory.CreateDirectory(pluginDirectory);
         var sourceDirectory = Path.Combine(RepoRoot(), "samples", "Natter.Sample.Plugin.Greetings");
         File.Copy(Path.Combine(sourceDirectory, "plugin.json"), Path.Combine(pluginDirectory, "plugin.json"));
-        File.Copy(
-            Path.Combine(sourceDirectory, "bin", "Debug", "net10.0", "Natter.Sample.Plugin.Greetings.dll"),
-            Path.Combine(pluginDirectory, "Natter.Sample.Plugin.Greetings.dll"));
+        File.Copy(GreetingsPluginDll(), Path.Combine(pluginDirectory, "Natter.Sample.Plugin.Greetings.dll"));
 
         var builder = NatterApplicationBuilder.Create()
             .AddNatterFramework()
@@ -370,9 +366,7 @@ public sealed class S2Batch1AcceptanceTests
         using var temp = new TempDirectory();
         var package = temp.Combine("bad-signature.npa");
         var manifest = Encoding.UTF8.GetBytes(MinimalManifest("natter.s2.badsig"));
-        var dll = File.ReadAllBytes(Path.Combine(
-            RepoRoot(), "samples", "Natter.Sample.Plugin.Greetings", "bin", "Debug", "net10.0",
-            "Natter.Sample.Plugin.Greetings.dll"));
+        var dll = File.ReadAllBytes(GreetingsPluginDll());
         var manifestHash = Convert.ToHexString(SHA256.HashData(manifest)).ToLowerInvariant();
         var dllHash = Convert.ToHexString(SHA256.HashData(dll)).ToLowerInvariant();
         var hashFile = Encoding.ASCII.GetBytes($"{manifestHash}  plugin.json\n{dllHash}  lib/probe.dll\n");
@@ -712,5 +706,32 @@ public sealed class S2Batch1AcceptanceTests
     {
         public ValueTask<TaskResult> ExecuteAsync(AgentTask task, TaskExecutionContext context, CancellationToken cancellationToken = default)
             => ValueTask.FromResult(new TaskResult(text));
+    }
+
+    /// <summary>
+    /// Locates the sample plugin assembly in the same build configuration as this test assembly.
+    ///
+    /// CI builds the solution once in Release and then runs every suite with --no-build, while a
+    /// local `dotnet test` defaults to Debug. Hardcoding either configuration makes one side fail with
+    /// DirectoryNotFoundException (this is what 82f6866 introduced when it switched CI to
+    /// Release + --no-build without touching these three call sites).
+    /// </summary>
+    private static string GreetingsPluginDll()
+    {
+        var configuration = new DirectoryInfo(AppContext.BaseDirectory).Parent?.Name ?? "Debug";
+        var candidates = new[]
+        {
+            Path.Combine(RepoRoot(), "samples", "Natter.Sample.Plugin.Greetings", "bin", configuration, "net10.0", "Natter.Sample.Plugin.Greetings.dll"),
+            Path.Combine(RepoRoot(), "samples", "Natter.Sample.Plugin.Greetings", "bin", "Release", "net10.0", "Natter.Sample.Plugin.Greetings.dll"),
+            Path.Combine(RepoRoot(), "samples", "Natter.Sample.Plugin.Greetings", "bin", "Debug", "net10.0", "Natter.Sample.Plugin.Greetings.dll"),
+        };
+
+        foreach (var candidate in candidates)
+        {
+            if (File.Exists(candidate))
+                return candidate;
+        }
+
+        return candidates[0];
     }
 }

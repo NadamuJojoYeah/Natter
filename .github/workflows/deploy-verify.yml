@@ -90,7 +90,11 @@ jobs:
               "soakStart": start.isoformat(), "intervalSeconds": 300,
               "durationSeconds": 86400, "port": 5099,
           })]
-          for i in range(24):  # 24 samples * 5 min = ~2h of a healthy host
+          # The header declares durationSeconds=86400, and soak-report.py now derives the expected
+          # sample count from that declaration (82f6866: "coverage 改用头部声明口径"). Emitting only
+          # a couple of hours therefore reads as 8% coverage and fails the 95% gate. Cover the whole
+          # declared window: 288 intervals * 300s = 86400s, +1 for the sample at t=0.
+          for i in range(289):  # 289 samples * 5 min = the full declared 24h
               at = start + datetime.timedelta(seconds=300 * i)
               lines.append(json.dumps({
                   "status": "healthy",

@@ -79,7 +79,12 @@ jobs:
         run: dotnet build Natter.slnx -c Release --nologo
 
   build-test:
-    name: Build & test (every solution project, 4 test suites)
+    # The job name is the branch-protection required check AND the .NET baseline marker:
+    # docs/DEPENDENCY_EVOLUTION_POLICY.md pins the target baseline (.NET 10 LTS now, .NET 12 next),
+    # so bumping majors means renaming this job and updating the required check with it — a
+    # deliberate, traceable baseline move. Do not rename it casually: the check would silently never
+    # report and the PR would sit "Expected" forever.
+    name: Build & test (.NET 10)
     runs-on: ubuntu-24.04
     timeout-minutes: 30
 
