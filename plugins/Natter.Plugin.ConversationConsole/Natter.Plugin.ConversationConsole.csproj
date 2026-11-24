@@ -56,12 +56,31 @@
     <!-- One script owns install + build + the cross-process lock (two plugins share ui/node_modules). -->
     <Exec Command="bash &quot;$(UiDirectory)scripts/build-target.sh&quot; conversation" WorkingDirectory="$(UiDirectory)" />
 
+  </Target>
+
+  <!--
+    wwwroot is a BUILD PRODUCT, so it must not be declared as a None/CopyToOutputDirectory item:
+    MSBuild evaluates those during project evaluation, before the UI build has produced anything, and
+    a clean checkout (CI, Docker, a fresh clone) then fails with
+      MSB3030: Could not copy ... wwwroot/index.html because it was not found.
+    Copy explicitly after build/publish instead, the same pattern CopySamplePluginsToPublish uses.
+  -->
+  <Target Name="CopyConversationWebUiToOutput" AfterTargets="Build" Condition="'$(SkipUiBuild)' != 'true'">
     <ItemGroup>
-      <None Include="$(MSBuildThisFileDirectory)wwwroot/**"
-            Exclude="@(None)"
-            CopyToOutputDirectory="PreserveNewest"
-            CopyToPublishDirectory="PreserveNewest" />
+      <ConversationWebUiOutputFiles Include="$(MSBuildThisFileDirectory)wwwroot/**/*" />
     </ItemGroup>
+    <Copy SourceFiles="@(ConversationWebUiOutputFiles)"
+          DestinationFiles="@(ConversationWebUiOutputFiles->'$(OutDir)wwwroot/%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
+
+  <Target Name="CopyConversationWebUiToPublish" AfterTargets="Publish" Condition="'$(SkipUiBuild)' != 'true'">
+    <ItemGroup>
+      <ConversationWebUiPublishFiles Include="$(MSBuildThisFileDirectory)wwwroot/**/*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(ConversationWebUiPublishFiles)"
+          DestinationFiles="@(ConversationWebUiPublishFiles->'$(PublishDir)wwwroot/%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
   </Target>
 
   <Target Name="WarnMissingConversationWebUi" BeforeTargets="PrepareForBuild" Condition="'$(SkipUiBuild)' == 'true'">

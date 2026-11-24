@@ -57,12 +57,31 @@
     <!-- One script owns install + build + the cross-process lock (two plugins share ui/node_modules). -->
     <Exec Command="bash &quot;$(UiDirectory)scripts/build-target.sh&quot; webconsole" WorkingDirectory="$(UiDirectory)" />
 
+  </Target>
+
+  <!--
+    wwwroot is a BUILD PRODUCT, so it must not be declared as a None/CopyToOutputDirectory item:
+    MSBuild evaluates those during project evaluation, before BuildWebUi has produced anything, and a
+    clean checkout (CI, Docker, a fresh clone) then fails with
+      MSB3030: Could not copy ... wwwroot/index.html because it was not found.
+    Copy explicitly after the build/publish instead, the same pattern CopySamplePluginsToPublish uses.
+  -->
+  <Target Name="CopyWebUiToOutput" AfterTargets="Build" Condition="'$(SkipUiBuild)' != 'true'">
     <ItemGroup>
-      <None Include="$(MSBuildThisFileDirectory)wwwroot/**"
-            Exclude="@(None)"
-            CopyToOutputDirectory="PreserveNewest"
-            CopyToPublishDirectory="PreserveNewest" />
+      <WebUiOutputFiles Include="$(MSBuildThisFileDirectory)wwwroot/**/*" />
     </ItemGroup>
+    <Copy SourceFiles="@(WebUiOutputFiles)"
+          DestinationFiles="@(WebUiOutputFiles->'$(OutDir)wwwroot/%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
+
+  <Target Name="CopyWebUiToPublish" AfterTargets="Publish" Condition="'$(SkipUiBuild)' != 'true'">
+    <ItemGroup>
+      <WebUiPublishFiles Include="$(MSBuildThisFileDirectory)wwwroot/**/*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(WebUiPublishFiles)"
+          DestinationFiles="@(WebUiPublishFiles->'$(PublishDir)wwwroot/%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
   </Target>
 
   <Target Name="WarnMissingWebUi" BeforeTargets="PrepareForBuild" Condition="'$(SkipUiBuild)' == 'true'">

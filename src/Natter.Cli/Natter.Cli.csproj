@@ -41,12 +41,12 @@
                           Condition="Exists('$(SampleMetricsBin)/Natter.Sample.Plugin.Metrics.pdb')" />
     </ItemGroup>
 
-    <Copy SourceFiles="@(GreetingsPluginFiles)" DestinationFolder="$(OutDir)plugins/greetings" SkipUnchangedFiles="true" />
-    <Copy SourceFiles="@(MetricsPluginFiles)" DestinationFolder="$(OutDir)plugins/metrics" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(GreetingsPluginFiles)" DestinationFolder="$(OutDir)plugins/natter.sample.port.greetings" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(MetricsPluginFiles)" DestinationFolder="$(OutDir)plugins/natter.sample.event.metrics" SkipUnchangedFiles="true" />
     <Copy SourceFiles="$(MSBuildThisFileDirectory)../../samples/Natter.Sample.Plugin.Greetings/plugin.json"
-          DestinationFolder="$(OutDir)plugins/greetings" SkipUnchangedFiles="true" />
+          DestinationFolder="$(OutDir)plugins/natter.sample.port.greetings" SkipUnchangedFiles="true" />
     <Copy SourceFiles="$(MSBuildThisFileDirectory)../../samples/Natter.Sample.Plugin.Metrics/plugin.json"
-          DestinationFolder="$(OutDir)plugins/metrics" SkipUnchangedFiles="true" />
+          DestinationFolder="$(OutDir)plugins/natter.sample.event.metrics" SkipUnchangedFiles="true" />
   </Target>
 
   <!-- Keep the plugin layout next to the published executable as well. -->
@@ -62,12 +62,12 @@
       <PublishMetricsFiles Include="$(SampleMetricsBin)/Natter.Sample.Plugin.Metrics.dll" />
     </ItemGroup>
 
-    <Copy SourceFiles="@(PublishGreetingsFiles)" DestinationFolder="$(PublishDir)plugins/greetings" SkipUnchangedFiles="true" />
-    <Copy SourceFiles="@(PublishMetricsFiles)" DestinationFolder="$(PublishDir)plugins/metrics" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(PublishGreetingsFiles)" DestinationFolder="$(PublishDir)plugins/natter.sample.port.greetings" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(PublishMetricsFiles)" DestinationFolder="$(PublishDir)plugins/natter.sample.event.metrics" SkipUnchangedFiles="true" />
     <Copy SourceFiles="$(MSBuildThisFileDirectory)../../samples/Natter.Sample.Plugin.Greetings/plugin.json"
-          DestinationFolder="$(PublishDir)plugins/greetings" SkipUnchangedFiles="true" />
+          DestinationFolder="$(PublishDir)plugins/natter.sample.port.greetings" SkipUnchangedFiles="true" />
     <Copy SourceFiles="$(MSBuildThisFileDirectory)../../samples/Natter.Sample.Plugin.Metrics/plugin.json"
-          DestinationFolder="$(PublishDir)plugins/metrics" SkipUnchangedFiles="true" />
+          DestinationFolder="$(PublishDir)plugins/natter.sample.event.metrics" SkipUnchangedFiles="true" />
   </Target>
 
 </Project>
