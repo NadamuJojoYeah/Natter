@@ -99,6 +99,16 @@ public interface IPluginDependencies
 /// <summary>Typed contribution registration API. Bare host DI access is intentionally absent.</summary>
 public interface IContributionRegistry
 {
+    /// <summary>
+    /// Contributes an outbound message transport (<c>chat.upstream</c>).
+    /// <para>
+    /// <b>Implementation obligations</b> (docs/CONTRIBUTION_OBLIGATIONS.md §3.1): internal idempotency;
+    /// and <b>conditional chunking</b> — declaring a <c>MaxMessageLength</c> means splitting outbound
+    /// content at that bound, while declaring null means explicitly waiving chunking, which must be
+    /// observable (warn/health). The host does not chunk on the adapter's behalf, because only the
+    /// adapter knows the deployment's real limit.
+    /// </para>
+    /// </summary>
     void AddChatUpstream<TUpstream>(string id)
         where TUpstream : class, IChatUpstream;
 

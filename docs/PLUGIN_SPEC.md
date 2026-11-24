@@ -638,6 +638,24 @@ public interface IChatEventSubscriber
 - `chat.upstream` 的 `ConnectAsync` / `DisconnectAsync` 由宿主统一驱动，不由插件自己随意启动；见 §7。
 - `chat.event-subscriber` 只读，不得直接发送命令；需要回复时使用 `chat.responder`。
 
+### 6.0 实现方义务（义务清单，2026-11-24）
+
+上表只规定「贡献什么类型」；**类型义务**（实现方必须保证什么、可以依赖宿主什么、违反的后果、以及当前靠什么强制）见
+[CONTRIBUTION_OBLIGATIONS.md](CONTRIBUTION_OBLIGATIONS.md)。那里有一张 11 行 × 5 列的表，第 5 列「当前靠什么强制」是重点——
+它区分「有声明义务」和「有保障」，两者不是一回事。
+
+两条已经机制化的义务（写插件前请先看）：
+
+1. **`chat.upstream` 的分片义务是条件的**：声明了 `Capabilities.MaxMessageLength` 就 MUST 按该上限分片；
+   声明 `null` 等于**显式放弃**该义务，且放弃必须可观测（告警或 health 字段）。**没有第三种状态**——
+   「既不分片也不声明放弃」就是 Satori 曾经的样子，测试会红。
+2. **权限策略必须显式声明**：`NpsPermissionPolicy.RequiredPermissions` 对未登记的类型**抛异常**而不是默认零权限。
+   新增贡献类型时必须同时给出权限策略，否则激活期报错。
+
+> 已知未闭合项：`port.adapter` 目前**不要求任何权限**（显式空清单，非遗漏）。收紧它会让现有 bundled 示例插件
+> （`samples/Natter.Sample.Plugin.Greetings`）停止激活，因此需要一个独立的 `port.override` 权限并随信任级默认授予，
+> 见义务文档 §5.4。
+
 ### 6.1 Embedding / Rerank 端口（P6.2，2026-11-22）
 
 `embedding.provider` / `rerank.provider` 与 `chat.responder` 一样由插件实现、宿主持有目录，注册引用为
