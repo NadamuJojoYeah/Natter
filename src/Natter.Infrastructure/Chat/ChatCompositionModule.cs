@@ -101,20 +101,16 @@ public sealed class ChatCompositionModule : ICompositionModule
         services.AddSingleton<Natter.Application.Chat.MemoryRetrievalMetrics>();
         services.AddSingleton<ChatCommandFactory>();
         services.AddSingleton<Natter.Application.Chat.IConversationStore>(_ =>
-            string.IsNullOrWhiteSpace(context.Options.StateDirectory)
-                ? new Natter.Application.Chat.InMemoryConversationStore()
-                : new SqliteConversationStore(Path.Combine(
-                    Path.GetFullPath(context.Options.StateDirectory),
-                    "natter.db")));
+            Store<Natter.Application.Chat.IConversationStore>(context.Options,
+                () => new Natter.Application.Chat.InMemoryConversationStore(),
+                path => new SqliteConversationStore(path)));
         // Read-only conversation projection consumed by optional plugins (Conversation Console).
         // The port has no write methods by design, the SQLite implementation never owns the schema
         // and a host without --state-dir answers empty pages instead of inventing history.
         services.AddSingleton<Natter.Application.Chat.IConversationQuery>(_ =>
-            string.IsNullOrWhiteSpace(context.Options.StateDirectory)
-                ? new Natter.Application.Chat.EmptyConversationQuery()
-                : new SqliteConversationQuery(Path.Combine(
-                    Path.GetFullPath(context.Options.StateDirectory),
-                    "natter.db")));
+            Store<Natter.Application.Chat.IConversationQuery>(context.Options,
+                () => new Natter.Application.Chat.EmptyConversationQuery(),
+                path => new SqliteConversationQuery(path)));
         services.AddSingleton<Natter.Application.Chat.IPromptComposer, Natter.Application.Chat.PromptComposer>();
         services.AddSingleton<Natter.Application.Chat.IPromptFragmentSource>(provider =>
             new Natter.Application.Chat.HostPromptFragmentSource(
@@ -133,9 +129,9 @@ public sealed class ChatCompositionModule : ICompositionModule
         // depends on it — HostContextPipeline, the command router and the CLI all use the layered
         // store. Delete this registration together with the Obsolete v1 types.
         services.AddSingleton<Natter.Application.Chat.IMemoryStore>(_ =>
-            string.IsNullOrWhiteSpace(context.Options.StateDirectory)
-                ? new Natter.Application.Chat.InMemoryMemoryStore()
-                : new SqliteMemoryStore(Path.Combine(Path.GetFullPath(context.Options.StateDirectory), "natter.db")));
+            Store<Natter.Application.Chat.IMemoryStore>(context.Options,
+                () => new Natter.Application.Chat.InMemoryMemoryStore(),
+                path => new SqliteMemoryStore(path)));
         // Migration diagnostics go to the host log once; natter health reads the same value.
         services.AddSingleton<Natter.Application.Chat.IMemoryEntryStore>(provider =>
         {
@@ -145,14 +141,14 @@ public sealed class ChatCompositionModule : ICompositionModule
                 Natter.Application.Chat.MemoryMigrationDiagnostics.WarningSink =
                     message => logger?.Log(LogLevel.Warning, "{MemoryMigration}", message);
 
-            return string.IsNullOrWhiteSpace(context.Options.StateDirectory)
-                ? new Natter.Application.Chat.InMemoryMemoryEntryStore()
-                : new SqliteMemoryEntryStore(Path.Combine(Path.GetFullPath(context.Options.StateDirectory), "natter.db"));
+            return Store<Natter.Application.Chat.IMemoryEntryStore>(context.Options,
+                () => new Natter.Application.Chat.InMemoryMemoryEntryStore(),
+                path => new SqliteMemoryEntryStore(path));
         });
         services.AddSingleton<Natter.Application.Chat.ISummaryStore>(_ =>
-            string.IsNullOrWhiteSpace(context.Options.StateDirectory)
-                ? new Natter.Application.Chat.InMemorySummaryStore()
-                : new SqliteSummaryStore(Path.Combine(Path.GetFullPath(context.Options.StateDirectory), "natter.db")));
+            Store<Natter.Application.Chat.ISummaryStore>(context.Options,
+                () => new Natter.Application.Chat.InMemorySummaryStore(),
+                path => new SqliteSummaryStore(path)));
         services.AddSingleton<Natter.Application.Chat.ContextComponentCatalog>(provider =>
         {
             var catalog = new Natter.Application.Chat.ContextComponentCatalog();
@@ -199,9 +195,9 @@ public sealed class ChatCompositionModule : ICompositionModule
         services.AddSingleton<Natter.Application.Chat.HostRuntimeClock>();
         services.AddSingleton<Natter.Application.Chat.TaskMetrics>();
         services.AddSingleton<Natter.Application.Chat.ITaskStore>(_ =>
-            string.IsNullOrWhiteSpace(context.Options.StateDirectory)
-                ? new Natter.Application.Chat.InMemoryTaskStore()
-                : new SqliteTaskStore(Path.Combine(Path.GetFullPath(context.Options.StateDirectory), "natter.db")));
+            Store<Natter.Application.Chat.ITaskStore>(context.Options,
+                () => new Natter.Application.Chat.InMemoryTaskStore(),
+                path => new SqliteTaskStore(path)));
         // task-65: structured task inspection for the consoles (read-only; never mutates tasks).
         services.AddSingleton<Natter.Application.Chat.IAgentTaskInspection>(provider =>
             new TaskInspectionService(
@@ -324,5 +320,39 @@ public sealed class ChatCompositionModule : ICompositionModule
             ServiceLifetime.Singleton,
             "framework:chat",
             "Read-only conversation projection (list/search/messages) for optional console plugins."));
+    }
+
+    /// <summary>File name of the host database. Changing it changes it for every store at once.</summary>
+    internal const string DatabaseFileName = "natter.db";
+
+    /// <summary>
+    /// Absolute path of the host database, or <see langword="null"/> when no state directory was
+    /// configured (then every store falls back to its in-memory implementation).
+    /// <para>
+    /// Single source of truth on purpose: six stores share this one file, so a second copy of this
+    /// expression would let a rename of the database file silently split storage in two.
+    /// </para>
+    /// </summary>
+    internal static string? ResolveDatabasePath(CompositionOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        return string.IsNullOrWhiteSpace(options.StateDirectory)
+            ? null
+            : Path.Combine(Path.GetFullPath(options.StateDirectory), DatabaseFileName);
+    }
+
+    /// <summary>
+    /// Picks the in-memory or the persistent implementation from the presence of a state directory.
+    /// Keeps every store registration to one line and one decision.
+    /// </summary>
+    internal static T Store<T>(
+        CompositionOptions options,
+        Func<T> inMemory,
+        Func<string, T> persistent)
+    {
+        var databasePath = ResolveDatabasePath(options);
+
+        return databasePath is null ? inMemory() : persistent(databasePath);
     }
 }

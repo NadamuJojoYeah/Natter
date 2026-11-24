@@ -38,10 +38,35 @@ public sealed class HealthHttpServer : IDisposable
     {
         _cts.Cancel();
         _listener.Close();
-        try { _loop?.Wait(TimeSpan.FromSeconds(2)); } catch { }
+
+        // Shutdown must never throw, but it must not hide a dead accept loop either: a faulted loop
+        // means /health stopped answering while `serve` looks healthy. Report it once, then continue.
+        try
+        {
+            _loop?.Wait(TimeSpan.FromSeconds(2));
+        }
+        catch (Exception exception) when (exception is AggregateException or OperationCanceledException or ObjectDisposedException)
+        {
+            var reason = exception is AggregateException aggregate && aggregate.InnerException is { } inner
+                ? inner
+                : exception;
+
+            ReportLoopTerminated(reason);
+        }
+
         _cts.Dispose();
         _requestSlots.Dispose();
     }
+
+    /// <summary>
+    /// Writes one diagnostic line to stderr. Deliberately excludes the request URI: a health URL can
+    /// carry nothing today, but the rule is that request detail never reaches a log line (S3 D-02).
+    /// </summary>
+    internal static Action<string> Report { get; set; } =
+        message => Console.Error.WriteLine($"health endpoint: {message}");
+
+    private static void ReportLoopTerminated(Exception exception)
+        => Report($"accept loop terminated: {exception.GetType().Name}: {exception.Message}");
 
     private async Task AcceptLoopAsync()
     {
@@ -108,9 +133,22 @@ public sealed class HealthHttpServer : IDisposable
             await context.Response.OutputStream.WriteAsync(bytes, _cts.Token).ConfigureAwait(false);
             context.Response.Close();
         }
-        catch
+        catch (Exception exception)
         {
-            try { context.Response.StatusCode = 500; context.Response.Close(); } catch { }
+            // A failed 500 write means the client is already gone; nothing to recover, but the cause
+            // must not vanish silently (S3 D-02).
+            try
+            {
+                context.Response.StatusCode = 500;
+                context.Response.Close();
+            }
+            catch (Exception writeFailure) when (writeFailure is HttpListenerException or ObjectDisposedException or InvalidOperationException)
+            {
+                Report($"could not answer a request: {writeFailure.GetType().Name}: {writeFailure.Message}");
+            }
+
+            if (exception is not OperationCanceledException)
+                Report($"request failed: {exception.GetType().Name}: {exception.Message}");
         }
     }
 }

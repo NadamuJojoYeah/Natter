@@ -195,7 +195,15 @@ public sealed class ConversationConsoleApiTests
         Assert.Equal(200, health.StatusCode);
         using var document = JsonDocument.Parse(health.Body);
         Assert.False(document.RootElement.GetProperty("query").GetProperty("available").GetBoolean());
-        Assert.Equal("unavailable", document.RootElement.GetProperty("query").GetProperty("source").GetString());
+        // A-05: source is data, not status. With no injected port there is no source at all, and the
+        // status booleans carry the "unavailable" meaning.
+        var queryNode = document.RootElement.GetProperty("query");
+        // The null source is omitted from JSON entirely; either shape means "no source".
+        Assert.True(
+            !queryNode.TryGetProperty("source", out var sourceNode) || sourceNode.ValueKind == JsonValueKind.Null,
+            "an uninjected port must not name a source");
+        Assert.False(queryNode.GetProperty("injected").GetBoolean());
+        Assert.False(queryNode.GetProperty("available").GetBoolean());
     }
 
     [Fact]
@@ -213,7 +221,12 @@ public sealed class ConversationConsoleApiTests
         Assert.False(query.GetProperty("available").GetBoolean());
         Assert.True(query.GetProperty("injected").GetBoolean());
         Assert.False(query.GetProperty("hasDataSource").GetBoolean());
-        Assert.Equal("empty", query.GetProperty("source").GetString());
+        // The empty fallback is injected but has no data source, so the source name is absent.
+        Assert.True(
+            !query.TryGetProperty("source", out var fallbackSource) || fallbackSource.ValueKind == JsonValueKind.Null,
+            "the empty fallback must not name a source");
+        Assert.True(query.GetProperty("injected").GetBoolean());
+        Assert.False(query.GetProperty("available").GetBoolean());
 
         var list = await handler.HandleAsync(ConversationConsoleTestFactory.Request("/api/sessions"));
         Assert.Equal(501, list.StatusCode);

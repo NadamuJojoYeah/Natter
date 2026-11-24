@@ -72,6 +72,7 @@ public static class RuntimeHealth
         IPluginCatalog plugins,
         HostRuntimeClock clock,
         TaskMetrics taskMetrics,
+        MemoryRetrievalOptions? memoryOptions = null,
         CancellationToken cancellationToken = default)
     {
         var conversationCount = await conversations.CountAsync(cancellationToken).ConfigureAwait(false);
@@ -147,7 +148,12 @@ public static class RuntimeHealth
             PluginActivation: null,
             Memory: new RuntimeHealthMemory(
                 "layered",
-                Natter.Application.Chat.MemoryMigrationDiagnostics.Warning));
+                Natter.Application.Chat.MemoryMigrationDiagnostics.Warning,
+                // Which curve the compatibility (v1) recall path would use, and its window. The
+                // layered path is always the power law with a per-type exponent; reporting the
+                // configured value keeps a mode switch observable instead of implicit (S3 C-02).
+                memoryOptions?.Mode ?? DecayMode.Legacy,
+                (memoryOptions?.StabilityWindow ?? TimeSpan.FromDays(30)).TotalDays));
     }
 }
 
@@ -189,8 +195,20 @@ public sealed record RuntimeHealthUpstream(
 
 public sealed record RuntimeHealthProvider(string Id, bool Available, string Profile, int SupportTier);
 
-/// <summary>Layered memory state. Never carries memory text (§10.2).</summary>
-public sealed record RuntimeHealthMemory(string Store, string? MigrationWarning);
+/// <summary>
+/// Layered memory state. Never carries memory text (§10.2).
+/// <para>
+/// <see cref="DecayMode"/> and <see cref="StabilityDays"/> describe the configured window for the
+/// compatibility recall path. The layered path itself always applies the power law with a per-type
+/// exponent (<see cref="MemoryDecay.ProfileFor"/>), so this is the switchable part, reported so an
+/// operator can see it rather than infer it from behaviour.
+/// </para>
+/// </summary>
+public sealed record RuntimeHealthMemory(
+    string Store,
+    string? MigrationWarning,
+    DecayMode DecayMode = DecayMode.Legacy,
+    double StabilityDays = 30);
 
 public sealed record RuntimeHealthPlugins(int Activated, int Failed, IReadOnlyList<RuntimeHealthPlugin> Failures);
 

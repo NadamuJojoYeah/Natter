@@ -61,9 +61,13 @@ public sealed class ConversationConsoleQueryGateway
     /// </summary>
     public bool IsAvailable => HasDataSource;
 
-    public string Source => _query is null
-        ? "unavailable"
-        : _query.HasDataSource ? "host.conversation-query" : "empty";
+    /// <summary>
+    /// Where the rows come from, or <see langword="null"/> when there is no data source. This is a
+    /// data field, not a status: the empty fallback has no source at all, and printing a status word
+    /// here made every consumer render "unavailable" as if it were a source name (S3 A-05). Status
+    /// lives in <see cref="IsInjected"/> / <see cref="HasDataSource"/> / <see cref="IsAvailable"/>.
+    /// </summary>
+    public string? Source => HasDataSource ? "host.conversation-query" : null;
 
     /// <summary>Lists conversations. Returns null when the host port is unavailable.</summary>
     public async ValueTask<ConversationConsolePage?> ListAsync(

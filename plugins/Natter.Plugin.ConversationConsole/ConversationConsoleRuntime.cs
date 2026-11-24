@@ -46,8 +46,8 @@ public sealed class ConversationConsoleRuntime : IAsyncDisposable
     /// <summary>True when the host granted <c>chat.read</c> and bridged <see cref="IConversationQuery"/>.</summary>
     public bool QueryAvailable { get; private set; }
 
-    /// <summary>Where the conversation data came from, for diagnostics ("unavailable" when ungranted).</summary>
-    public string QuerySource { get; private set; } = "unavailable";
+    /// <summary>Where the conversation data came from, or null when there is no data source.</summary>
+    public string? QuerySource { get; private set; }
 
     public string Url => ConversationConsoleNetwork.BuildUrl(_options.Bind, _options.Port);
 

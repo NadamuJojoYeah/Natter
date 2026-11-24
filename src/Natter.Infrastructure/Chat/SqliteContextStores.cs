@@ -212,7 +212,7 @@ public sealed class SqliteMemoryStore : IMemoryStore
         command.Parameters.AddWithValue("$now", now.ToString("O", System.Globalization.CultureInfo.InvariantCulture));
         command.Parameters.AddWithValue("$limit", Math.Max(1, limit));
 
-        var halfLife = query.DecayHalfLife > TimeSpan.Zero ? query.DecayHalfLife : TimeSpan.FromDays(30);
+        var stabilityWindow = query.StabilityWindow > TimeSpan.Zero ? query.StabilityWindow : TimeSpan.FromDays(30);
         var scored = new List<(MemoryItem Item, double Score)>();
         await using (var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
         {
@@ -221,9 +221,8 @@ public sealed class SqliteMemoryStore : IMemoryStore
                 var item = Read(reader);
                 var bm25 = reader.IsDBNull(15) ? 0d : reader.GetDouble(15);
                 var ageDays = Math.Max(0, (now - item.UpdatedAt).TotalDays);
-                // v1 live path keeps historical exponential decay; the power law is the v2 shape.
-                // Both modes live in MemoryDecay (LegacyRetention / Retention) so they stay comparable.
-                var decay = MemoryDecay.LegacyRetention(ageDays, halfLife.TotalDays);
+                // Mode comes from the query, which the host fills from MemoryRetrievalOptions.
+                var decay = MemoryDecay.Decay(ageDays, stabilityWindow.TotalDays, query.Mode);
                 scored.Add((item, (-bm25) * decay));
             }
         }

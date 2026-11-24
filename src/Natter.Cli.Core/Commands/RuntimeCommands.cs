@@ -15,7 +15,8 @@ public sealed class ServeCommand(
     IConversationStore conversations,
     IPluginCatalog plugins,
     HostRuntimeClock clock,
-    TaskMetrics taskMetrics) : ICliCommandHandler
+    TaskMetrics taskMetrics,
+    MemoryRetrievalOptions memoryOptions) : ICliCommandHandler
 {
 
     public async ValueTask<int> ExecuteAsync(CliInvocation invocation, CancellationToken cancellationToken = default)
@@ -109,7 +110,8 @@ public sealed class ServeCommand(
             conversations,
             plugins,
             clock,
-            taskMetrics).ConfigureAwait(false));
+            taskMetrics,
+            memoryOptions).ConfigureAwait(false));
     }
 }
 
@@ -121,7 +123,8 @@ public sealed class HealthCommand(
     IConversationStore conversations,
     IPluginCatalog plugins,
     HostRuntimeClock clock,
-    TaskMetrics taskMetrics) : ICliCommandHandler
+    TaskMetrics taskMetrics,
+    MemoryRetrievalOptions memoryOptions) : ICliCommandHandler
 {
 
     public async ValueTask<int> ExecuteAsync(CliInvocation invocation, CancellationToken cancellationToken = default)
@@ -134,6 +137,7 @@ public sealed class HealthCommand(
             plugins,
             clock,
             taskMetrics,
+            memoryOptions,
             cancellationToken).ConfigureAwait(false);
         if (invocation.HasFlag("offline"))
         {

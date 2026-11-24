@@ -42,6 +42,26 @@ public readonly record struct MemoryDecayProfile(double DecayD, double InitialSt
 /// falls back to <see cref="MinStabilityDays"/> (see <see cref="Retention"/> for the rationale).
 /// </para>
 /// </summary>
+/// <summary>
+/// Which forgetting curve the recall path applies. Exactly one is live at a time; the choice is
+/// configuration, not a hidden property of the caller (S3 review A-01/C-02).
+/// </summary>
+public enum DecayMode
+{
+    /// <summary>
+    /// Historical exponential <c>exp(-age/S)</c> (v1). <c>S</c> is a genuine half-life:
+    /// retention reaches 0.368 after one interval. This is the shipped behaviour.
+    /// </summary>
+    Legacy,
+
+    /// <summary>
+    /// FSRS-6 power law (<c>Retention</c>). <c>S</c> is the interval at which retention is still
+    /// <see cref="MemoryDecay.TargetRetention"/> (0.9) — much slower decay than <see cref="Legacy"/>.
+    /// Target state for v2; not yet the default.
+    /// </summary>
+    PowerLaw,
+}
+
 public static class MemoryDecay
 {
     /// <summary>Growth coefficient of <see cref="StabilityGrowth"/>. Our value, between Pimsleur's
@@ -109,6 +129,18 @@ public static class MemoryDecay
         // The clamp keeps d >= MinDecay, so 0.9^(-1/d) stays in ~[1.14, 2.87] and cannot overflow.
         return Math.Pow(TargetRetention, -1d / d) - 1d;
     }
+
+    /// <summary>
+    /// The one place that maps a <see cref="DecayMode"/> to a curve. Both recall paths (in-memory and
+    /// SQLite) call this, so a mode switch cannot half-apply, and the v1/v2 curves stay comparable.
+    /// </summary>
+    public static double Decay(double ageDays, double stabilityDays, DecayMode mode, double decayD = DefaultDecay)
+        => mode switch
+        {
+            DecayMode.Legacy => LegacyRetention(ageDays, stabilityDays),
+            DecayMode.PowerLaw => Retention(ageDays, stabilityDays, decayD),
+            _ => throw new ArgumentOutOfRangeException(nameof(mode), mode, "Unknown decay mode."),
+        };
 
     /// <summary>
     /// Retention of a memory <paramref name="ageDays"/> after its last reinforcement, given its

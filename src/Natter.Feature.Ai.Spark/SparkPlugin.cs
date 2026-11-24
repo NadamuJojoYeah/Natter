@@ -118,14 +118,20 @@ public sealed class SparkPlugin : INatterPlugin
             throw new InvalidOperationException("Spark streaming is not enabled in this Natter version.");
         if (options.Tools is { Count: > 0 })
             throw new InvalidOperationException("Spark tools are not enabled in this Natter version.");
-        if (options.MaxOutputTokens is < 1 or > 32768)
-            throw new InvalidOperationException("Spark config 'maxOutputTokens' is out of range.");
-        if (options.TimeoutSeconds is < 1 or > 600)
-            throw new InvalidOperationException("Spark config 'timeoutSeconds' must be between 1 and 600.");
-        if (options.MaxRetries is < 0 or > 5)
-            throw new InvalidOperationException("Spark config 'maxRetries' must be between 0 and 5.");
+        // Bounds come from SparkNumericBounds, which a test keeps in sync with config.schema.json.
+        RequireInBounds("maxOutputTokens", options.MaxOutputTokens);
+        RequireInBounds("timeoutSeconds", options.TimeoutSeconds);
+        RequireInBounds("maxRetries", options.MaxRetries);
         if (options.HistoryScope is not ("conversation" or "user"))
             throw new InvalidOperationException("Spark config 'historyScope' must be 'conversation' or 'user'.");
+    }
+
+    private static void RequireInBounds(string name, long value)
+    {
+        var (min, max) = SparkNumericBounds.All[name];
+        if (value < min || value > max)
+            throw new InvalidOperationException(
+                $"Spark config '{name}' must be between {min} and {max} (got {value}).");
     }
 }
 

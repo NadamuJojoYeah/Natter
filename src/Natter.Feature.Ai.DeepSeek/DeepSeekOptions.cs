@@ -11,6 +11,26 @@ public static class DeepSeekDefaults
     public const int MaxRetries = 2;
 }
 
+/// <summary>
+/// Numeric bounds enforced at activation. <c>config.schema.json</c> declares the same numbers; a test
+/// compares the two so "schema accepts, activation throws" cannot happen silently (S3 D-04).
+/// </summary>
+public static class DeepSeekNumericBounds
+{
+    public static readonly IReadOnlyDictionary<string, (long Min, long Max)> All =
+        new Dictionary<string, (long Min, long Max)>(System.StringComparer.Ordinal)
+        {
+            ["maxOutputTokens"] = (1, 384000),
+            ["timeoutSeconds"] = (1, 600),
+            ["maxRetries"] = (0, 5),
+            ["retryBaseDelayMs"] = (0, 60000),
+            ["retryMaxDelayMs"] = (0, 60000),
+            ["maxConcurrentRequests"] = (1, 16),
+            ["historyMaxMessages"] = (0, 1000),
+            ["historyMaxCharacters"] = (0, 1000000),
+        };
+}
+
 public sealed class DeepSeekOptions
 {
     public string? ApiKey { get; set; }
@@ -56,9 +76,9 @@ public sealed class DeepSeekOptions
 
     public int MaxConcurrentRequests { get; set; } = 2;
 
-    public string FallbackText { get; set; } = "AI is temporarily unavailable. Please try again shortly.";
+    public string FallbackText { get; set; } = AiReplyDefaults.FallbackText;
 
-    public string EmptyResponseText { get; set; } = "I could not produce a response.";
+    public string EmptyResponseText { get; set; } = AiReplyDefaults.EmptyResponseText;
 
     public bool IsThinkingEnabled
         => string.Equals(Thinking, "enabled", StringComparison.OrdinalIgnoreCase);

@@ -195,7 +195,8 @@ public sealed class ConversationConsoleAssetsAndHostTests
 
         var withoutPort = await StartAsync(workspace, secrets, provider: new FakeServiceProvider());
         Assert.False(withoutPort.Runtime.QueryAvailable);
-        Assert.Equal("unavailable", withoutPort.Runtime.QuerySource);
+        // A-05: no port means no source name; QueryAvailable carries the status.
+        Assert.Null(withoutPort.Runtime.QuerySource);
 
         using var second = new ConversationConsoleWorkspace();
         var withPort = await StartAsync(

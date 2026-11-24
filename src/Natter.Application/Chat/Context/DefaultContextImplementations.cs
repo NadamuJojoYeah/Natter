@@ -277,9 +277,9 @@ public sealed class InMemoryMemoryStore : IMemoryStore
             // the legacy recency ordering byte-for-byte.
             if (!string.IsNullOrWhiteSpace(query.Query))
             {
-                var halfLife = query.DecayHalfLife > TimeSpan.Zero ? query.DecayHalfLife : TimeSpan.FromDays(30);
+                var stabilityWindow = query.StabilityWindow > TimeSpan.Zero ? query.StabilityWindow : TimeSpan.FromDays(30);
                 var scored = items
-                    .Select(item => (Item: item, Score: MemoryScoring.Score(item.Text, query.Query, item.UpdatedAt, now, halfLife)))
+                    .Select(item => (Item: item, Score: MemoryScoring.Score(item.Text, query.Query, item.UpdatedAt, now, stabilityWindow, query.Mode)))
                     .Where(pair => pair.Score > 0)
                     .OrderByDescending(pair => pair.Score)
                     .ThenByDescending(pair => pair.Item.UpdatedAt)

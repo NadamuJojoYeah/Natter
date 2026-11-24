@@ -1,6 +1,19 @@
 namespace Natter.Feature.Ai;
 
 /// <summary>Provider-neutral configuration for the shared chat responder.</summary>
+/// <summary>
+/// User-facing reply text that is not provider specific. Providers must reference these instead of
+/// restating the literals: two copies of the same sentence drift the moment one is edited (S3 C-07).
+/// </summary>
+public static class AiReplyDefaults
+{
+    /// <summary>Shown when the provider genuinely failed after retries.</summary>
+    public const string FallbackText = "AI is temporarily unavailable. Please try again shortly.";
+
+    /// <summary>Shown when the provider returned an empty body.</summary>
+    public const string EmptyResponseText = "I could not produce a response.";
+}
+
 public sealed class AiResponderOptions
 {
     public string ProviderName { get; set; } = "ai";
@@ -32,7 +45,7 @@ public sealed class AiResponderOptions
     /// <summary>How long Dispose waits for in-flight leases before leaving semaphores for GC.</summary>
     public int GateDisposeTimeoutMilliseconds { get; set; } = 2000;
 
-    public string FallbackText { get; set; } = "AI is temporarily unavailable. Please try again shortly.";
+    public string FallbackText { get; set; } = AiReplyDefaults.FallbackText;
 
     /// <summary>
     /// Shown when the provider keeps hitting the output ceiling instead of failing outright. Reusing
@@ -43,7 +56,7 @@ public sealed class AiResponderOptions
         "The answer was too long for the current output limit, so it was cut off. "
         + "Ask for a smaller chunk, or raise the provider's MaxOutputTokens.";
 
-    public string EmptyResponseText { get; set; } = "I could not produce a response.";
+    public string EmptyResponseText { get; set; } = AiReplyDefaults.EmptyResponseText;
 
     public bool IsConversationScoped
         => !string.Equals(HistoryScope, "user", StringComparison.OrdinalIgnoreCase);

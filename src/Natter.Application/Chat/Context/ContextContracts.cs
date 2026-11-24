@@ -172,20 +172,24 @@ public sealed record MemoryQuery(
     public MemoryScopeType? Scope { get; init; }
 
     /// <summary>
-    /// Time-decay parameter, default 30 days.
+    /// Stability window for time decay, default 30 days. It only lowers the score — entries are
+    /// never deleted here.
     /// <para>
-    /// <b>Current semantics (v1, half-life):</b> the age at which retention halves
-    /// (<see cref="MemoryDecay.LegacyRetention"/>, <c>exp(-age/S)</c> → 0.368 at 30 days).
+    /// <b>Reading depends on <see cref="Mode"/>.</b> Under <see cref="DecayMode.Legacy"/> it is a true
+    /// half-life: retention <c>exp(-age/S)</c> reaches 0.368 after one window. Under
+    /// <see cref="DecayMode.PowerLaw"/> it is the interval at which retention is still
+    /// <see cref="MemoryDecay.TargetRetention"/> (0.9). One field, two readings — which is why the
+    /// mode is explicit rather than implied by the caller.
     /// </para>
     /// <para>
-    /// <b>Planned semantics (v2, calibration interval):</b> when the recall path moves to the power
-    /// law (P6.7) this becomes the stability interval where retention is
-    /// <see cref="MemoryDecay.TargetRetention"/> (0.9). The name is kept only because 61 call sites
-    /// reference it; it is a naming debt to fix when v1 retires. It only lowers the score — entries
-    /// are never deleted here.
+    /// Renamed from <c>DecayHalfLife</c> (S3 A-01): the old name asserted the v1 reading only, and the
+    /// comment that justified keeping it ("61 call sites") was stale — the real count was four.
     /// </para>
     /// </summary>
-    public TimeSpan DecayHalfLife { get; init; } = TimeSpan.FromDays(30);
+    public TimeSpan StabilityWindow { get; init; } = TimeSpan.FromDays(30);
+
+    /// <summary>Forgetting curve applied to this query. Defaults to the shipped v1 curve.</summary>
+    public DecayMode Mode { get; init; } = DecayMode.Legacy;
 }
 
     [Obsolete("v1 memory store retired at P6.7; use IMemoryEntryStore")]

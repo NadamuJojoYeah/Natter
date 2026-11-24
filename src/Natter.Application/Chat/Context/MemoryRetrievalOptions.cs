@@ -17,8 +17,17 @@ public sealed class MemoryRetrievalOptions
     /// <summary>Retrieval budget; on timeout the turn continues with empty memory.</summary>
     public TimeSpan RetrievalTimeout { get; init; } = TimeSpan.FromMilliseconds(300);
 
-    /// <summary>Half-life for time decay; older entries are down-weighted, never deleted.</summary>
-    public TimeSpan DecayHalfLife { get; init; } = TimeSpan.FromDays(30);
+    /// <summary>
+    /// Stability window for time decay; older entries are down-weighted, never deleted.
+    /// The reading depends on <see cref="Mode"/>: half-life (Legacy) or 0.9-retention interval (PowerLaw).
+    /// </summary>
+    public TimeSpan StabilityWindow { get; init; } = TimeSpan.FromDays(30);
+
+    /// <summary>
+    /// Forgetting curve used by the recall path. Defaults to <see cref="DecayMode.Legacy"/>, which is
+    /// the shipped behaviour; switching it is a deliberate, observable configuration change.
+    /// </summary>
+    public DecayMode Mode { get; init; } = DecayMode.Legacy;
 
     public MemoryScopeType DefaultScope { get; init; } = MemoryScopeType.User;
 }

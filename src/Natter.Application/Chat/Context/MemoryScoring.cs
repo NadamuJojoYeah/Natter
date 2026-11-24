@@ -96,7 +96,20 @@ public static class MemoryScoring
         return tokens;
     }
 
-    public static double Score(string text, string query, DateTimeOffset updatedAt, DateTimeOffset now, TimeSpan halfLife)
+    /// <summary>
+    /// Relevance × time decay. <paramref name="stabilityWindow"/> means "half-life" under
+    /// <see cref="DecayMode.Legacy"/> and "0.9-retention interval" under
+    /// <see cref="DecayMode.PowerLaw"/> — same field, two readings, which is why the mode is an
+    /// explicit argument instead of an assumption baked into this method.
+    /// </summary>
+    public static double Score(
+        string text,
+        string query,
+        DateTimeOffset updatedAt,
+        DateTimeOffset now,
+        TimeSpan stabilityWindow,
+        DecayMode mode = DecayMode.Legacy,
+        double decayD = MemoryDecay.DefaultDecay)
     {
         var queryTokens = Tokenize(query);
         if (queryTokens.Count == 0)
@@ -107,11 +120,12 @@ public static class MemoryScoring
         var relevance = (double)matches / queryTokens.Count;
 
         var ageDays = Math.Max(0, (now - updatedAt).TotalDays);
-        // v1 live path keeps its historical exponential decay so this release does not change recall
-        // behaviour (§5.1's power law is the v2 shape). Single implementation per mode lives in
-        // MemoryDecay: LegacyRetention for v1, Retention for v2. Retired with v1 at P6.7.
-        var stabilityDays = halfLife.TotalDays > 0 ? halfLife.TotalDays : 30d;
-        var decay = MemoryDecay.LegacyRetention(ageDays, stabilityDays);
+        var stabilityDays = stabilityWindow.TotalDays > 0 ? stabilityWindow.TotalDays : 30d;
+
+        // Exactly one implementation per mode lives in MemoryDecay, so the two curves stay comparable
+        // and nobody can "simplify" one of them locally.
+        var decay = MemoryDecay.Decay(ageDays, stabilityDays, mode, decayD);
+
         return relevance * decay;
     }
 }

@@ -133,26 +133,29 @@ public sealed class DeepSeekPlugin : INatterPlugin
         if (options.Tools is { Count: > 0 })
             throw new InvalidOperationException("DeepSeek tools are not enabled in this Natter version.");
 
-        if (options.MaxOutputTokens is < 1 or > 384000)
-            throw new InvalidOperationException("DeepSeek config 'maxOutputTokens' is out of range.");
+        // Bounds come from DeepSeekNumericBounds, which a test keeps in sync with config.schema.json.
+        RequireInBounds("maxOutputTokens", options.MaxOutputTokens);
+        RequireInBounds("historyMaxMessages", options.HistoryMaxMessages);
+        RequireInBounds("historyMaxCharacters", options.HistoryMaxCharacters);
+        RequireInBounds("timeoutSeconds", options.TimeoutSeconds);
+        RequireInBounds("maxRetries", options.MaxRetries);
+        RequireInBounds("retryBaseDelayMs", options.RetryBaseDelayMs);
+        RequireInBounds("retryMaxDelayMs", options.RetryMaxDelayMs);
+        RequireInBounds("maxConcurrentRequests", options.MaxConcurrentRequests);
 
-        if (options.HistoryMaxMessages < 0 || options.HistoryMaxCharacters < 0)
-            throw new InvalidOperationException("DeepSeek history limits must not be negative.");
-
-        if (options.TimeoutSeconds is < 1 or > 600)
-            throw new InvalidOperationException("DeepSeek config 'timeoutSeconds' must be between 1 and 600.");
-
-        if (options.MaxRetries is < 0 or > 5)
-            throw new InvalidOperationException("DeepSeek config 'maxRetries' must be between 0 and 5.");
-
-        if (options.RetryBaseDelayMs is < 0 or > 60000 || options.RetryMaxDelayMs < options.RetryBaseDelayMs)
+        if (options.RetryMaxDelayMs < options.RetryBaseDelayMs)
             throw new InvalidOperationException("DeepSeek retry delays are invalid.");
-
-        if (options.MaxConcurrentRequests is < 1 or > 16)
-            throw new InvalidOperationException("DeepSeek config 'maxConcurrentRequests' must be between 1 and 16.");
 
         if (options.HistoryScope is not ("conversation" or "user"))
             throw new InvalidOperationException("DeepSeek config 'historyScope' must be 'conversation' or 'user'.");
+    }
+
+    private static void RequireInBounds(string name, long value)
+    {
+        var (min, max) = DeepSeekNumericBounds.All[name];
+        if (value < min || value > max)
+            throw new InvalidOperationException(
+                $"DeepSeek config '{name}' must be between {min} and {max} (got {value}).");
     }
 }
 
