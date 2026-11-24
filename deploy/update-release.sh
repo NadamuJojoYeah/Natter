@@ -26,6 +26,8 @@ BACKUP_ROOT="/var/backups/natter"
 RESTART=1
 DRY_RUN=0
 HEALTH_PORT="${NATTER_HEALTH_PORT:-5099}"
+# Where plugin config lives, keyed by plugin id. Empty = skip the orphan check.
+CONFIG_DIR=""
 
 usage() {
   sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
@@ -38,6 +40,7 @@ while [[ $# -gt 0 ]]; do
     --target) TARGET="${2:-}"; shift 2 ;;
     --unit) UNIT="${2:-}"; shift 2 ;;
     --backup-root) BACKUP_ROOT="${2:-}"; shift 2 ;;
+    --config-dir) CONFIG_DIR="${2:-}"; shift 2 ;;
     --no-restart) RESTART=0; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     -h|--help) usage 0 ;;
@@ -183,6 +186,59 @@ else:
 PY
 fi
 
+# Plugin ids are the key for external config: the loader resolves
+# `<NATTER_CONFIG_DIR>/<manifest.id>.json`. Renaming a plugin id therefore ORPHANS its config file
+# silently -- the plugin activates with no config and reports something like
+# `invalid-config: /token: property is missing`, which reads like a code bug. It cost a production
+# deploy on 2026-11-24. Report the orphans before touching the install root.
+detect_orphan_config() {
+  local cfg_root="$1" release_root="$2"
+  [[ -d "$cfg_root" ]] || return 0
+  python3 - "$cfg_root" "$release_root" <<'PY' || true
+import glob, json, os, sys
+cfg_root, release_root = sys.argv[1], sys.argv[2]
+
+release_ids = set()
+for manifest in glob.glob(os.path.join(release_root, "*", "plugin.json")):
+    try:
+        pid = json.load(open(manifest, encoding="utf-8")).get("id")
+    except Exception:
+        continue
+    if isinstance(pid, str) and pid:
+        release_ids.add(pid)
+
+# Files the host itself owns and never keys by a plugin id.
+not_a_plugin = {"profiles", "profiles.schema"}
+orphans = []
+for path in sorted(glob.glob(os.path.join(cfg_root, "*.json"))):
+    stem = os.path.basename(path)[:-5]
+    if stem in not_a_plugin or stem.endswith(".schema"):
+        continue
+    if stem in release_ids:
+        continue
+    orphans.append((stem, path))
+
+if not orphans:
+    print("  (none)")
+    raise SystemExit(0)
+
+print("  WARNING: config files whose name matches no plugin id in this release:")
+for stem, path in orphans:
+    print(f"    {stem}.json   (no plugin with id='{stem}')")
+print("  Plugin config is resolved as <config-dir>/<plugin-id>.json, so a renamed plugin id")
+print("  silently loses its config while the old file stays behind.")
+print("  If one of these was renamed, copy it to the new id (keep the old file for rollback):")
+for stem, path in orphans:
+    print(f"    sudo cp -a '{path}' '{cfg_root}/<new-plugin-id>.json'")
+print("  Plugins will report invalid-config/missing values until this is done.")
+PY
+}
+
+if [[ -n "$CONFIG_DIR" && -d "$CONFIG_DIR" ]]; then
+  echo "check: plugin config files under $CONFIG_DIR"
+  detect_orphan_config "$CONFIG_DIR" "$RELEASE/plugins"
+fi
+
 echo "deploy: $RELEASE -> $TARGET"
 run install -d -m 0755 "$TARGET" || die "cannot create target" 5
 # Copy the release on top; do not delete unknown files (config, audit, local state may live here).
@@ -217,6 +273,12 @@ if [[ -z "$SERVICE_USER" ]]; then
   SERVICE_USER="$(sed -n 's/^User=//p' "$TARGET/natter.service" 2>/dev/null | head -1 || true)"
 fi
 [[ -n "$SERVICE_USER" ]] || SERVICE_USER="natter"
+
+# Same idea for the config root: read it from the unit rather than hardcoding, so the orphan-config
+# check looks where the host actually looks.
+if [[ -z "$CONFIG_DIR" ]]; then
+  CONFIG_DIR="$(sed -n 's/^Environment=NATTER_CONFIG_DIR=//p' "$TARGET/natter.service" 2>/dev/null | head -1 || true)"
+fi
 
 # Plugins declare their writable data directories in plugin.json (`dataDirs`). Declaring them in the
 # manifest keeps the deployment honest: adding a writing plugin no longer means editing this script,
