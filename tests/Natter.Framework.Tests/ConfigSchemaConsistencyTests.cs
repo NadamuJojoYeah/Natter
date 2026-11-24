@@ -192,12 +192,9 @@ public sealed class ConfigSchemaConsistencyTests
         // C-06: chunking was a convention, not a contract — each adapter had to remember to call
         // ChatTextChunker.Chunk. This is a ratchet: a NEW adapter that forgets it fails here, and an
         // adapter listed as a known gap that starts chunking also fails (remove it from the list).
-        var knownGaps = new Dictionary<string, string>(StringComparer.Ordinal)
-        {
-            ["src/Natter.Chat.Satori/SatoriChatUpstream.cs"] =
-                "Satori sends the mapped request un-chunked; declared MaxMessageLength is not enforced. "
-                + "Needs a fix in Natter.Chat.Satori (out of scope for the S3 cleanup batch).",
-        };
+        // Empty today: Satori was the last known gap and now chunks its sends (task-74). A new
+        // exemption here would need the same removal when the gap is closed.
+        var knownGaps = new Dictionary<string, string>(StringComparer.Ordinal);
 
         var adapters = Directory
             .EnumerateFiles(RepoRoot(), "*.cs", SearchOption.AllDirectories)

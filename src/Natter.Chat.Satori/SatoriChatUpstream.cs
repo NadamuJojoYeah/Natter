@@ -174,10 +174,28 @@ public sealed class SatoriChatUpstream : IChatUpstream, IDisposable
         if (!string.IsNullOrWhiteSpace(key) && _idempotency.TryGet(key, out var cached) && cached is not null)
             return cached;
 
-        // Adapter-side defence in depth: the mapper validates the mention policy against the
-        // mapped elements (not only Content.Mentions), so a caller that bypasses the dispatcher
-        // cannot emit a high-risk mention. Text that merely looks like an element is escaped into
-        // a text node and does not become a mention.
+        // Sends go through the same chunking contract as Discord and DingTalk: a reply longer than
+        // the declared MaxMessageLength is split instead of being rejected as a whole. Everything
+        // else (update/delete) replaces or removes exactly one message and is not split, matching
+        // the Discord adapter's convention.
+        var ack = command is MessageSendCommand send
+            ? await SendChunkedAsync(send, cancellationToken).ConfigureAwait(false)
+            : await SendMappedAsync(command, cancellationToken).ConfigureAwait(false);
+
+        if (ack.Ok && !string.IsNullOrWhiteSpace(key))
+            _idempotency.Store(key, ack);
+
+        return ack;
+    }
+
+    /// <summary>
+    /// Maps and sends a command in one request. Adapter-side defence in depth: the mapper validates
+    /// the mention policy against the mapped elements (not only <c>Content.Mentions</c>), so a caller
+    /// that bypasses the dispatcher cannot emit a high-risk mention. Text that merely looks like an
+    /// element is escaped into a text node and does not become a mention.
+    /// </summary>
+    private async ValueTask<ChatAck> SendMappedAsync(ChatCommand command, CancellationToken cancellationToken)
+    {
         if (!_commandMapper.TryMap(command, _outboundPolicy, out var request, out var mapError)
             || request is null)
         {
@@ -189,6 +207,73 @@ public sealed class SatoriChatUpstream : IChatUpstream, IDisposable
                 $"The Satori adapter cannot map command type '{command.Type}'."));
         }
 
+        return await SendRequestAsync(command, request, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Splits a send into platform-sized chunks (task-74). Satori advertised
+    /// <see cref="Capabilities.MaxMessageLength"/> but used to post the mapped request un-chunked, so
+    /// an over-long reply was rejected as a whole. The split is the shared
+    /// <see cref="ChatTextChunker"/> used by Discord and DingTalk: rune-safe, and a fenced code block
+    /// that spans a boundary is closed and reopened on the next chunk when the content is markdown.
+    /// Each chunk is mapped on its own, so the mention policy is validated for every piece of the
+    /// reply; only the first chunk keeps the reply reference, and attachments/mentions stay on it.
+    /// Failure semantics match the other adapters: the first failing chunk ends the send with that
+    /// chunk's error, already-delivered chunks are not rolled back, and the ack is not cached.
+    /// </summary>
+    private async ValueTask<ChatAck> SendChunkedAsync(
+        MessageSendCommand send,
+        CancellationToken cancellationToken)
+    {
+        var content = send.Payload.Content;
+        try
+        {
+            content.EnsureValid();
+        }
+        catch (NlmpValidationException exception)
+        {
+            return ChatAck.Failure(send, ChatError.Create(ChatErrorCodes.InvalidRequest, exception.Message));
+        }
+
+        var chunks = ChatTextChunker.Chunk(content, _capabilities.MaxMessageLength);
+        var messageIds = new List<string>();
+
+        for (var index = 0; index < chunks.Count; index++)
+        {
+            var chunkCommand = send with
+            {
+                Payload = send.Payload with
+                {
+                    Content = chunks[index],
+                    ReplyTo = index == 0 ? send.Payload.ReplyTo : null,
+                },
+            };
+
+            if (!_commandMapper.TryMap(chunkCommand, _outboundPolicy, out var request, out var mapError)
+                || request is null)
+            {
+                return ChatAck.Failure(send, mapError ?? ChatError.Create(
+                    ChatErrorCodes.Unsupported,
+                    $"The Satori adapter cannot map command type '{chunkCommand.Type}'."));
+            }
+
+            var chunkAck = await SendRequestAsync(chunkCommand, request, cancellationToken).ConfigureAwait(false);
+            if (!chunkAck.Ok)
+                return ChatAck.Failure(send, chunkAck.Error!);
+
+            if (chunkAck.Result?.MessageIds is { Count: > 0 } ids)
+                messageIds.AddRange(ids);
+        }
+
+        return ChatAck.Success(send, messageIds.Count == 0 ? null : messageIds, _clock.UtcNow);
+    }
+
+    /// <summary>One transport call with the adapter's exception → NLMP error mapping.</summary>
+    private async ValueTask<ChatAck> SendRequestAsync(
+        ChatCommand command,
+        SatoriApiRequest request,
+        CancellationToken cancellationToken)
+    {
         SatoriSendResult result;
         try
         {
@@ -205,18 +290,16 @@ public sealed class SatoriChatUpstream : IChatUpstream, IDisposable
                 $"Satori transport failed: {exception.Message}"));
         }
 
-        var ack = result.Ok
+        return result.Ok
             ? ChatAck.Success(command, result.MessageIds, _clock.UtcNow)
-            : ChatAck.Failure(command, ChatError.Create(
-                result.ErrorCode ?? ChatErrorCodes.Internal,
-                result.ErrorMessage ?? "Satori API call failed.",
-                result.RetryAfterMs));
-
-        if (ack.Ok && !string.IsNullOrWhiteSpace(key))
-            _idempotency.Store(key, ack);
-
-        return ack;
+            : ChatAck.Failure(command, ToError(result));
     }
+
+    private static ChatError ToError(SatoriSendResult result)
+        => ChatError.Create(
+            result.ErrorCode ?? ChatErrorCodes.Internal,
+            result.ErrorMessage ?? "Satori API call failed.",
+            result.RetryAfterMs);
 
     public void Dispose()
     {
