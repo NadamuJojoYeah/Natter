@@ -102,7 +102,7 @@ public sealed class WebConsoleRequestHandlerTests
 
         Assert.Equal(200, response.StatusCode);
         var json = LoginResult.Json(response);
-        Assert.Equal("natter.plugin.webconsole", json.GetProperty("self").GetProperty("pluginId").GetString());
+        Assert.Equal("natter.tool.admin.webconsole", json.GetProperty("self").GetProperty("pluginId").GetString());
         Assert.False(json.GetProperty("health").GetProperty("available").GetBoolean());
         Assert.Equal("host.plugin_diagnostics.unavailable",
             json.GetProperty("plugins").GetProperty("gapCode").GetString());
@@ -137,10 +137,11 @@ public sealed class WebConsoleRequestHandlerTests
         Assert.Equal(403, withoutCsrf.StatusCode);
         Assert.Equal("csrf.invalid", LoginResult.Json(withoutCsrf).GetProperty("error").GetProperty("code").GetString());
 
+        // readOnly=true now reports the unified console.read_only code (see task-14).
         var readonlyResponse = await harness.Handler.HandleAsync(harness.Request(
             "POST", "/api/config/profiles", body: "{}", cookie: login.Cookie, csrf: login.Csrf));
         Assert.Equal(403, readonlyResponse.StatusCode);
-        Assert.Equal("config.write_disabled",
+        Assert.Equal("console.read_only",
             LoginResult.Json(readonlyResponse).GetProperty("error").GetProperty("code").GetString());
 
         using var writable = WebConsoleHarness.Create(new WebConsoleOptions
@@ -152,7 +153,7 @@ public sealed class WebConsoleRequestHandlerTests
         var writableLogin = await writable.LoginAsync();
         var gap = await writable.Handler.HandleAsync(writable.Request(
             "POST",
-            "/api/config/plugin:natter.plugin.webconsole",
+            "/api/config/plugin:natter.tool.admin.webconsole",
             body: JsonSerializer.Serialize(new { content = "{}" }),
             cookie: writableLogin.Cookie,
             csrf: writableLogin.Csrf));
@@ -301,7 +302,12 @@ public sealed class WebConsoleRequestHandlerTests
     [Fact]
     public async Task Forwarded_for_is_only_trusted_for_configured_proxies()
     {
-        using var harness = WebConsoleHarness.Create();
+        // S2-D2: no trusted proxy by default -> X-Forwarded-For is ignored entirely.
+        using var harness = WebConsoleHarness.Create(new WebConsoleOptions
+        {
+            Port = 5090,
+            TrustedProxies = ["127.0.0.1"],
+        });
         var login = await harness.LoginAsync();
 
         var trusted = await harness.Handler.HandleAsync(harness.Request(
@@ -323,6 +329,19 @@ public sealed class WebConsoleRequestHandlerTests
         var audit = harness.Audit.Read(20);
         Assert.Contains(audit, entry => entry.Action == "snapshot.view" && entry.Ip == "198.51.100.7");
         Assert.Contains(audit, entry => entry.Action == "snapshot.view" && entry.Ip == "203.0.113.9");
+
+        // Direct peer is not a proxy: the forged header must not change the recorded address.
+        using var direct = WebConsoleHarness.Create();
+        var directLogin = await direct.LoginAsync(ip: "203.0.113.9");
+        await direct.Handler.HandleAsync(direct.Request(
+            "GET",
+            "/api/snapshot",
+            cookie: directLogin.Cookie,
+            ip: "203.0.113.9",
+            extraHeaders: new Dictionary<string, string> { ["X-Forwarded-For"] = "198.51.100.7" }));
+
+        Assert.DoesNotContain(direct.Audit.Read(20), entry => entry.Action == "snapshot.view" && entry.Ip == "198.51.100.7");
+        Assert.Contains(direct.Audit.Read(20), entry => entry.Action == "snapshot.view" && entry.Ip == "203.0.113.9");
     }
 
     [Fact]
@@ -502,7 +521,12 @@ public sealed class WebConsoleRequestHandlerTests
     [Fact]
     public async Task Trusted_forwarded_proto_marks_session_cookie_secure()
     {
-        using var trusted = WebConsoleHarness.Create();
+        // X-Forwarded-Proto is only honoured when the direct peer is a configured proxy (S2-D2).
+        using var trusted = WebConsoleHarness.Create(new WebConsoleOptions
+        {
+            Port = 5090,
+            TrustedProxies = ["127.0.0.1"],
+        });
         var secure = await trusted.LoginAsync(extraHeaders: new Dictionary<string, string>
         {
             ["X-Forwarded-Proto"] = "https",

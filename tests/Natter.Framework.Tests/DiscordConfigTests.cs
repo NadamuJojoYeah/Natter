@@ -18,7 +18,7 @@ public sealed class DiscordConfigTests
         var manifest = new PluginManifest
         {
             SchemaVersion = 1,
-            Id = "natter.transport.discord",
+            Id = "natter.transport.messaging.discord",
             Name = "Discord",
             Version = "0.1.0",
             Kind = PluginKind.Transport,
@@ -58,7 +58,7 @@ public sealed class DiscordConfigTests
         var manifest = new PluginManifest
         {
             SchemaVersion = 1,
-            Id = "natter.transport.discord",
+            Id = "natter.transport.messaging.discord",
             Name = "Discord",
             Version = "0.1.0",
             Kind = PluginKind.Transport,

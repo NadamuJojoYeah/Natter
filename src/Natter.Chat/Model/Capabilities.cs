@@ -10,6 +10,19 @@ public sealed record Capabilities
 {
     public IReadOnlyList<ConversationKind> ConversationKinds { get; init; } = [];
 
+    /// <summary>
+    /// Outbound text bound in UTF-16 code units, or <see langword="null"/> when the real limit is
+    /// unknown (an aggregation protocol whose platform varies) or chunking is deliberately disabled.
+    /// <para>
+    /// <b>Declaring a value creates an obligation:</b> the adapter must split outbound content at this
+    /// bound. <see langword="null"/> waives that obligation, and the waiver has to be observable
+    /// (log/health) — see docs/CONTRIBUTION_OBLIGATIONS.md §3.1/§3.2.
+    /// </para>
+    /// <para>
+    /// Note the direction of failure: <c>ChatTextChunker.Chunk</c> treats an absent bound as "do not
+    /// split", so a forgotten value fails <i>open</i> — the platform then rejects the whole message.
+    /// </para>
+    /// </summary>
     public int? MaxMessageLength { get; init; }
 
     public bool Markdown { get; init; }

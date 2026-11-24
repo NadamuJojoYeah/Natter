@@ -43,7 +43,25 @@
             "properties": {
               "provider": { "type": "string", "pattern": "^[^#]+#[^#]+$" },
               "version": { "type": "string" },
-              "systemPrompt": { "type": "string" }
+              "systemPrompt": { "type": "string" },
+              "preset": {
+                "type": "string",
+                "description": "Prompt Compiler preset id selected inside the provider (optional; host#static ignores it)."
+              },
+              "locale": {
+                "type": "string",
+                "description": "Locale used for preset selection when the request has none (optional)."
+              },
+              "disabledFragments": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Fragment ids disabled for this profile. Source text is never deleted."
+              },
+              "variables": {
+                "type": "object",
+                "additionalProperties": { "type": "string" },
+                "description": "Preset variable defaults; only whitelisted names are substituted."
+              }
             }
           },
           "context": {

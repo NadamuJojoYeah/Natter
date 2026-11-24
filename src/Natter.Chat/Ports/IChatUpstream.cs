@@ -17,7 +17,26 @@ public interface IChatUpstream : IChatEventSource
     /// <summary>Capabilities for the source, optionally refined per conversation.</summary>
     ValueTask<Capabilities> GetCapabilitiesAsync(Conversation? conversation = null, CancellationToken cancellationToken = default);
 
-    /// <summary>Executes one command and returns an ack. Adapters apply idempotency internally.</summary>
+    /// <summary>
+    /// Executes one command and returns an ack.
+    /// <para>
+    /// <b>Idempotency</b> is the adapter's job (the host may retry a chunk).
+    /// </para>
+    /// <para>
+    /// <b>Chunking is a conditional obligation</b> (docs/CONTRIBUTION_OBLIGATIONS.md §3.1):
+    /// </para>
+    /// <list type="number">
+    ///   <item><b>If the adapter declares <see cref="Capabilities.MaxMessageLength"/></b> it MUST split
+    ///   outbound content at that bound (see <c>ChatTextChunker.Chunk</c>). Declaring a limit and
+    ///   sending over it is how the Satori adapter shipped replies the platform rejected whole.</item>
+    ///   <item><b>If it declares <see langword="null"/></b> it is waiving that obligation — which is
+    ///   legitimate for an aggregation protocol whose real limit depends on the platform behind the
+    ///   gateway. The waiver MUST be observable (a warning or a health field); a silent waiver is the
+    ///   defect this contract exists to prevent.</item>
+    /// </list>
+    /// <para>There is no third state: an adapter that neither chunks nor records the waiver is
+    /// incomplete, and a test enforces exactly that.</para>
+    /// </summary>
     ValueTask<ChatAck> ExecuteAsync(ChatCommand command, CancellationToken cancellationToken = default);
 }
 

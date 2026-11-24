@@ -14,31 +14,31 @@
       "pattern": "^[0-9]+$",
       "description": "Discord bot user id used to build Source before login."
     },
-    "intents": {
+    "intents": { "default": ["Guilds", "GuildMessages", "DirectMessages", "MessageContent"],
       "type": "array",
       "items": {
         "enum": ["Guilds", "GuildMessages", "DirectMessages", "MessageContent", "GuildMembers", "GuildPresences", "GuildMessageReactions"]
       },
       "uniqueItems": true
     },
-    "guilds": { "type": "array", "items": { "type": "string", "pattern": "^[0-9]+$" }, "uniqueItems": true },
-    "channels": { "type": "array", "items": { "type": "string", "pattern": "^[0-9]+$" }, "uniqueItems": true },
-    "users": { "type": "array", "items": { "type": "string", "pattern": "^[0-9]+$" }, "uniqueItems": true },
-    "requireMention": { "type": "boolean" },
-    "messageCommands": { "type": "boolean" },
-    "slashCommands": { "type": "boolean" },
-    "ignoreBots": {
+    "guilds": { "default": [], "type": "array", "items": { "type": "string", "pattern": "^[0-9]+$" }, "uniqueItems": true },
+    "channels": { "default": [], "type": "array", "items": { "type": "string", "pattern": "^[0-9]+$" }, "uniqueItems": true },
+    "users": { "default": [], "type": "array", "items": { "type": "string", "pattern": "^[0-9]+$" }, "uniqueItems": true },
+    "requireMention": { "default": true, "type": "boolean" },
+    "messageCommands": { "default": true, "type": "boolean" },
+    "slashCommands": { "default": false, "type": "boolean" },
+    "ignoreBots": { "default": true,
       "type": "boolean",
       "description": "Default true. Disabling lets bot messages enter NLMP; keep true unless another layer filters them."
     },
-    "ignoreSelf": {
+    "ignoreSelf": { "default": true,
       "type": "boolean",
       "description": "Default true. Disabling can make the bot answer its own messages; orchestrator also ignores self by default."
     },
-    "typing": { "type": "boolean" },
-    "maxMessageLength": { "type": "integer", "minimum": 1, "maximum": 2000 },
-    "maxAttachmentBytes": { "type": "integer", "minimum": 1 },
-    "commands": {
+    "typing": { "default": true, "type": "boolean" },
+    "maxMessageLength": { "default": 1900, "type": "integer", "minimum": 1, "maximum": 2000 },
+    "maxAttachmentBytes": { "default": 26214400, "type": "integer", "minimum": 1 },
+    "commands": { "default": {"ask": true, "remember": true, "forget": true, "memory": true, "reset": true},
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -53,8 +53,66 @@
         "cancel": { "type": "boolean" }
       }
     },
-    "interactionTtlSeconds": { "type": "integer", "minimum": 1, "maximum": 900 },
-    "readyTimeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 300 },
+    "interactionTtlSeconds": { "default": 900, "type": "integer", "minimum": 1, "maximum": 900 },
+    "readyTimeoutSeconds": { "default": 30, "type": "integer", "minimum": 1, "maximum": 300 },
+    "reconnectWatchdog": { "default": true,
+      "type": "boolean",
+      "description": "Default true. Rebuild the gateway transport when connected stays false past the threshold."
+    },
+    "reconnectWatchdogThresholdMs": { "default": 60000,
+      "type": "integer",
+      "minimum": 5000,
+      "maximum": 600000,
+      "description": "Default 60000. Tolerated disconnected window before the watchdog rebuilds."
+    },
+    "reconnectWatchdogTickMs": { "default": 0,
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 60000,
+      "description": "Default 0 (auto: threshold/4 clamped). Watchdog poll interval."
+    },
+    "reconnectBackoffInitialMs": { "default": 1000,
+      "type": "integer",
+      "minimum": 100,
+      "maximum": 60000,
+      "description": "Default 1000. First retry delay after a failed rebuild."
+    },
+    "reconnectBackoffMaxMs": { "default": 60000,
+      "type": "integer",
+      "minimum": 100,
+      "maximum": 600000,
+      "description": "Default 60000. Upper bound for the exponential backoff."
+    },
+    "reconnectMaxAttempts": { "default": 10,
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100,
+      "description": "Default 10. After this many failed rebuilds the watchdog stops and flags manual intervention."
+    },
+    "interactionCacheCapacity": { "default": 500,
+      "type": "integer",
+      "minimum": 16,
+      "maximum": 100000,
+      "description": "Default 500. Bounded cache for interaction/channel lookups; older entries are evicted."
+    },
+    "sendRetryMaxAttempts": { "default": 3,
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 10,
+      "description": "Default 3. Attempts for a rate-limited (429) send before giving up."
+    },
+    "sendRetryBaseDelayMs": { "default": 250,
+      "type": "integer",
+      "minimum": 50,
+      "maximum": 10000,
+      "description": "Default 250. Base delay for send retries; honours retryAfter when Discord provides it."
+    },
+    "sendRetryMaxDelayMs": { "default": 5000,
+      "type": "integer",
+      "minimum": 100,
+      "maximum": 60000,
+      "description": "Default 5000. Upper bound for a single send retry delay."
+    },
     "devGuildId": { "type": "string", "pattern": "^[0-9]+$" }
   }
 }

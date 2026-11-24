@@ -107,7 +107,7 @@ plugins/Natter.Plugin.Discord/
 ```json
 {
   "schemaVersion": 1,
-  "id": "natter.transport.discord",
+  "id": "natter.transport.messaging.discord",
   "name": "Discord Transport",
   "version": "0.1.0",
   "kind": "transport",
@@ -572,7 +572,7 @@ new Capabilities
 
 `plugins list --detail` 应显示：
 
-- `natter.transport.discord` 的 manifest/state/trust/permissions/contributions；
+- `natter.transport.messaging.discord` 的 manifest/state/trust/permissions/contributions；
 - `chat.upstream` 是否 active；
 - 失败阶段（manifest/permission/config/activate/upstream-connect）。
 
@@ -650,7 +650,7 @@ new Capabilities
 
 ## 16. 验收标准
 
-- [x] NPS 能加载 `natter.transport.discord`，manifest/权限/config/secret 校验通过（manifest/config 测试）；
+- [x] NPS 能加载 `natter.transport.messaging.discord`，manifest/权限/config/secret 校验通过（manifest/config 测试）；
 - [x] 插件 `ActivateAsync` 不进行网络连接；
 - [x] NPS 自动调用 `ConnectAsync`，`discord status` 显示 connected（fake transport）；
 - [x] 消息/@mention/DM/Group DM/Thread 正确映射为 NLMP；

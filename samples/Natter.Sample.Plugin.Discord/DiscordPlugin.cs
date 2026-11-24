@@ -109,7 +109,8 @@ public sealed class DiscordStatusCommandHandler(DiscordChatUpstream upstream) : 
         invocation.Console.Out.WriteLine($"guilds: {status.GuildCount?.ToString() ?? "-"}");
         invocation.Console.Out.WriteLine($"channels: {status.ChannelCount?.ToString() ?? "-"}");
         invocation.Console.Out.WriteLine($"latency: {status.LatencyMs?.ToString() ?? "-"} ms");
-        invocation.Console.Out.WriteLine($"lastError: {status.LastError ?? "-"}");
+        invocation.Console.Out.WriteLine(
+            $"lastError: {Natter.Application.Redaction.SecretRedaction.Apply(status.LastError, Natter.Application.Redaction.SecretRedactionOptions.Admin)}");
         invocation.Console.Out.WriteLine($"sendFailures: {status.SendFailures}");
         invocation.Console.Out.WriteLine($"lastSendError: {status.LastSendError ?? "-"}");
         invocation.Console.Out.WriteLine($"lastEventAt: {status.LastEventAt?.ToString("O") ?? "-"}");

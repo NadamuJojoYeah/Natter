@@ -1,4 +1,5 @@
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
 using Natter.Chat;
 
 namespace Natter.Application.Chat;
@@ -10,12 +11,18 @@ namespace Natter.Application.Chat;
 /// </summary>
 public sealed class HostContextPipeline(
     IConversationStore conversations,
-    IMemoryStore memories,
+    IMemoryEntryStore memories,
     ISummaryStore summaries,
     IPromptProvider prompts,
     IContextAssembler assembler,
-    IContextComponentCatalog? components = null) : IContextPipeline
+    IContextComponentCatalog? components = null,
+    MemoryRetrievalOptions? memoryOptions = null,
+    MemoryRetrievalMetrics? memoryMetrics = null,
+    Microsoft.Extensions.Logging.ILogger<HostContextPipeline>? logger = null) : IContextPipeline
 {
+    private readonly MemoryRetrievalOptions _memoryOptions = memoryOptions ?? MemoryRetrievalOptions.Default;
+    private readonly MemoryRetrievalMetrics _memoryMetrics = memoryMetrics ?? new MemoryRetrievalMetrics();
+
     private static ConversationSummary BuildDeterministicSummary(
         ConversationKey key,
         IReadOnlyList<StoredMessage> older,
@@ -95,18 +102,43 @@ public sealed class HostContextPipeline(
             ? allMessages.TakeLast(windowSize).ToArray()
             : allMessages;
 
-        IReadOnlyList<MemoryItem> memoryItems = [];
+        IReadOnlyList<MemoryEntry> memoryItems = [];
         string? fallback = null;
+        if (string.Equals(profile.Memory.Scope?.Trim(), "global", StringComparison.OrdinalIgnoreCase))
+        {
+            logger?.LogWarning(
+                "memory.scope=global is configured: these memories are visible to every user of source {SourceKey}.",
+                source.Key);
+        }
+
         try
         {
+            // P6 §8.1: memory is an enhancement. A 300ms timeout returns no memory and counts the
+            // degradation instead of blocking the turn.
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(_memoryOptions.RetrievalTimeout);
             memoryItems = await memoryStore.SearchAsync(
-                new MemoryQuery(
-                    source,
-                    conversation,
-                    user,
-                    budget.MaxMemoryItems,
-                    IncludePrivate: conversation.Kind is ConversationKind.Direct or ConversationKind.Group),
-                cancellationToken).ConfigureAwait(false);
+                new MemoryEntryQuery(source, conversation, user)
+                {
+                    // P6 §3: retrieval visibility is the union of all visible scopes; actor
+                    // isolation comes from the scope id, not from a default strict filter.
+                    Query = userText,
+                    Limit = _memoryOptions.MaxCandidates,
+                    IncludePrivate = conversation.Kind is ConversationKind.Direct or ConversationKind.Group,
+                },
+                timeout.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            _memoryMetrics.Timeout();
+            logger?.LogWarning(
+                "memory retrieval timed out after {TimeoutMs}ms; continuing without memory.",
+                _memoryOptions.RetrievalTimeout.TotalMilliseconds);
+            memoryItems = [];
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -132,17 +164,40 @@ public sealed class HostContextPipeline(
                 }
             }
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
             fallback ??= "summary:" + ex.GetType().Name;
         }
 
+        // §7: memory is visible in the prompt plan. It is rendered as a dedicated untrusted-data
+        // message by the assembler (never inside the system message), so the default output stays
+        // byte-identical. disabledFragments removes both diagnostics and the injected message.
+        var disabledMemory = profile.Prompt.DisabledFragments ?? [];
+        var memoryFragments = BuildMemoryFragments(summary, memoryItems, profile)
+            .Where(fragment => !disabledMemory.Contains(fragment.Id, StringComparer.Ordinal))
+            .ToArray();
+        if (disabledMemory.Contains("host#memory.summary", StringComparer.Ordinal))
+            summary = null;
+        if (memoryFragments.Length == 0)
+            memoryItems = [];
+
         PromptBundle prompt;
         try
         {
             prompt = await promptProvider.GetAsync(
-                new PromptRequest(profile, source, conversation, user, null, variables ?? new Dictionary<string, string>()),
+                new PromptRequest(profile, source, conversation, user, null, variables ?? new Dictionary<string, string>())
+                {
+                    MemoryFragments = memoryFragments,
+                },
                 cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -155,6 +210,10 @@ public sealed class HostContextPipeline(
             return await contextAssembler.AssembleAsync(
                 new ContextRequest(profile, prompt, source, conversation, user, userText, recent, memoryItems, summary, budget),
                 cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -174,7 +233,69 @@ public sealed class HostContextPipeline(
                 [],
                 messages.Sum(message => message.Text?.Length ?? 0),
                 "recent-only-fallback",
-                new ContextDiagnostics(recent.Count, 0, false, 0, fallback ?? "assembler:" + ex.GetType().Name));
+                new ContextDiagnostics(
+                    recent.Count,
+                    0,
+                    false,
+                    0,
+                    fallback ?? "assembler:" + ex.GetType().Name,
+                    prompt.PlanHash,
+                    prompt.PluginFragmentCount,
+                    prompt.PluginFragmentProviderCount,
+                    prompt.PluginFragmentElapsedMilliseconds,
+                    prompt.FragmentDiagnostics,
+                    prompt.DisabledFragmentDiagnostics));
         }
+    }
+
+    private IReadOnlyList<PromptFragment> BuildMemoryFragments(
+        ConversationSummary? summary,
+        IReadOnlyList<MemoryEntry> items,
+        RuntimeProfile profile)
+    {
+        var fragments = new List<PromptFragment>();
+        var order = 200;
+        if (summary is not null && !string.IsNullOrWhiteSpace(summary.Text))
+        {
+            fragments.Add(new PromptFragment(
+                "host#memory.summary",
+                "[Memory summary]\n" + summary.Text,
+                PromptFragmentSource.Memory,
+                Order: order,
+                EnabledByDefault: true,
+                MaxCharacters: PromptCompilerDefaults.FragmentMaxCharacters));
+        }
+
+        order = 210;
+        var injected = 0;
+        var tokens = 0;
+        foreach (var item in items)
+        {
+            if (injected >= _memoryOptions.MaxInjected)
+            {
+                _memoryMetrics.InjectionTruncated();
+                break;
+            }
+
+            var text = "[Memory]\n- " + item.Content;
+            var estimate = MemoryTokens.Estimate(text);
+            if (tokens + estimate > _memoryOptions.MaxTokens)
+            {
+                _memoryMetrics.TokenTruncated();
+                break;
+            }
+
+            tokens += estimate;
+            injected++;
+            fragments.Add(new PromptFragment(
+                "host#memory.recall." + injected.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                text,
+                PromptFragmentSource.Memory,
+                Order: order++,
+                EnabledByDefault: true,
+                MaxCharacters: PromptCompilerDefaults.FragmentMaxCharacters));
+        }
+
+        return fragments;
     }
 }

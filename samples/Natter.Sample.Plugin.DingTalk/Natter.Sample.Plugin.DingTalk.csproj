@@ -10,6 +10,7 @@
 
   <ItemGroup>
     <ProjectReference Include="../../src/Natter.Chat.DingTalk/Natter.Chat.DingTalk.csproj" />
+    <ProjectReference Include="../../src/Natter.Application/Natter.Application.csproj" />
     <ProjectReference Include="../../src/Natter.Plugin.Abstractions/Natter.Plugin.Abstractions.csproj" />
     <ProjectReference Include="../../src/Natter.Cli.Abstractions/Natter.Cli.Abstractions.csproj" />
   </ItemGroup>

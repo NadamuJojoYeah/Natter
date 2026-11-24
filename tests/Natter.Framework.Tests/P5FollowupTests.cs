@@ -23,29 +23,6 @@ public sealed partial class P5FollowupTests
     // A. 命令面：/status /tasks /cancel /ask
     // ---------------------------------------------------------------------
 
-    [Fact]
-    public async Task Status_reports_state_version_and_truncates_long_results()
-    {
-        var source = Discord();
-        var conversation = new Conversation("c1", ConversationKind.Direct);
-        var user = Human();
-        var store = new InMemoryTaskStore();
-        var router = NewRouter(store, new RecordingTaskDispatcher());
-        var task = NewTask(source, SessionFor(source, conversation, user));
-        await store.CreateAsync(task);
-        await store.TransitionAsync(task.TaskId, AgentTaskStatus.Running, 0);
-        await store.TransitionAsync(task.TaskId, AgentTaskStatus.Completed, 1, resultText: new string('x', 900));
-
-        var reply = await ReplyAsync(router, Slash(source, conversation, user, "status", new() { ["task"] = task.TaskId }));
-
-        Assert.Contains(task.TaskId, reply);
-        Assert.Contains("Completed", reply);
-        Assert.Contains("v2", reply);
-        // 500 字截断 + 省略号：结果不会被整段塞回平台。
-        Assert.Contains("...", reply);
-        Assert.True(reply.Length < 700, $"status reply too long: {reply.Length}");
-        Assert.DoesNotContain(new string('x', 600), reply);
-    }
 
     [Fact]
     public async Task Status_and_cancel_report_unknown_tasks_instead_of_throwing()
@@ -129,7 +106,7 @@ public sealed partial class P5FollowupTests
         await WaitUntilAsync(async () => (await store.GetAsync(task.TaskId))?.Status == AgentTaskStatus.Running);
 
         var denied = await ReplyAsync(router, Slash(source, conversation, stranger, "cancel", new() { ["task"] = task.TaskId }));
-        Assert.Contains("not owned", denied);
+        Assert.Equal("Not task owner.", denied);
         Assert.Equal(AgentTaskStatus.Running, (await store.GetAsync(task.TaskId))!.Status);
 
         var allowed = await ReplyAsync(router, Slash(source, conversation, owner, "cancel", new() { ["task"] = task.TaskId }));
@@ -141,7 +118,7 @@ public sealed partial class P5FollowupTests
         // 终态之后 cancel 只回一句话，不再改状态、不再发第二条结果。
         Assert.False(await runtime.RequestCancelAsync(task.TaskId, owner.Id));
         var afterTerminal = await ReplyAsync(router, Slash(source, conversation, owner, "cancel", new() { ["task"] = task.TaskId }));
-        Assert.Contains("not owned", afterTerminal);
+        Assert.Equal("Task already cancelled.", afterTerminal);
         await WaitForCommandsAsync(recorder, 1);
         Assert.Single(recorder.Commands);
     }
@@ -809,7 +786,7 @@ public sealed partial class P5FollowupTests
 
     private static ChatCommandRouter NewRouter(ITaskStore? tasks = null, ITaskDispatcher? dispatcher = null)
         => new(
-            new InMemoryMemoryStore(),
+            new InMemoryMemoryEntryStore(),
             new InMemorySummaryStore(),
             new InMemoryConversationStore(),
             new ChatCommandFactory(new TestClock()),

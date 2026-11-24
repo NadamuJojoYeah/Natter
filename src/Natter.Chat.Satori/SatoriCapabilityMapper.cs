@@ -27,7 +27,25 @@ public sealed record SatoriCapabilityOptions
     /// <summary>Overrides conversation kinds entirely; null derives them from features.</summary>
     public IReadOnlyList<ConversationKind>? ConversationKinds { get; init; }
 
-    public int? MaxMessageLength { get; init; }
+    /// <summary>
+    /// Chunk limit for outbound text. Defaults to <see cref="DefaultMaxMessageLength"/> instead of
+    /// <c>null</c> because a declared-but-unenforced limit is how the Satori adapter shipped
+    /// un-chunked replies: chunking only kicks in when an upper bound is known, so <c>null</c>
+    /// silently disables it and an over-long reply is rejected as a whole.
+    /// <para>
+    /// Satori is an aggregation protocol — Discord/QQ/Telegram/... can sit behind the same gateway —
+    /// so the real limit is a deployment property, not a protocol constant. Override this for a
+    /// platform with a lower limit. Set it to <c>null</c> only to disable chunking on purpose; the
+    /// upstream logs a warning when it sees <c>null</c>, so the decision stays visible.
+    /// </para>
+    /// </summary>
+    public int? MaxMessageLength { get; init; } = DefaultMaxMessageLength;
+
+    /// <summary>
+    /// Conservative default: 1900 leaves headroom for the escaped element string (mentions and
+    /// attachments grow the serialized content) and fits every platform whose own limit is 2000+.
+    /// </summary>
+    public const int DefaultMaxMessageLength = 1900;
 
     public long? MaxAttachmentBytes { get; init; }
 
@@ -82,6 +100,10 @@ public static class SatoriCapabilityMapper
     private static List<ConversationKind> DeriveConversationKinds(HashSet<string> features)
     {
         var kinds = new List<ConversationKind>();
+
+        // Satori always delivers direct messages, independent of login features. Advertise it so
+        // the dispatcher accepts outbound DMs; this is a known platform capability, not a guess.
+        kinds.Add(ConversationKind.Direct);
 
         // §8.3: guild.plain adjusts conversation kinds; nothing else is assumed.
         if (features.Contains("guild.plain"))

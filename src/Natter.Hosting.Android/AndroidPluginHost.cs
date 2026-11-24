@@ -63,8 +63,40 @@ internal static class AndroidPluginHost
         if (store is not null)
         {
             cliOptions.LoadPlugins = true;
-            foreach (var directory in store.GetActivePluginDirectories())
-                cliOptions.PluginDirectories.Add(directory);
+
+            // Release builds only accept signed packages at install time, so activation enforces the
+            // same rule; Debug keeps the development escape hatch.
+            builder.ConfigurePluginTrust(trust =>
+            {
+#if DEBUG
+                trust.RequireSignedPlugins = false;
+#else
+                trust.RequireSignedPlugins = true;
+#endif
+            });
+
+            // S1-12: carry the installer's trust verdict and the startup integrity result with the
+            // directory. A dynamic host cannot re-verify the signature itself, so anything that is
+            // not a verified, integrity-clean signed package is explicitly registered as unverified
+            // (and rejected when the trust policy requires signatures).
+            var candidates = store.GetActivePluginCandidates();
+            foreach (var candidate in candidates)
+            {
+                builder.AddPluginDirectory(new PluginTrustRegistration(
+                    candidate.Directory,
+                    Signature: candidate.Integrity switch
+                    {
+                        InstalledPluginIntegrity.Tampered => PluginSignatureState.Tampered,
+                        InstalledPluginIntegrity.Verified when candidate.Signed => PluginSignatureState.Verified,
+                        _ => PluginSignatureState.Unverified,
+                    },
+                    SignerKeyId: candidate.SignerKeyId,
+                    PluginId: candidate.PluginId,
+                    Detail: candidate.IntegrityDetail ?? candidate.IntegrityCode));
+
+                if (!cliOptions.PluginDirectories.Contains(candidate.Directory, StringComparer.OrdinalIgnoreCase))
+                    cliOptions.PluginDirectories.Add(candidate.Directory);
+            }
 
             builder.ConfigureOptions(options =>
                 options.PluginConfigDirectory = store.ConfigDirectory);
@@ -116,17 +148,26 @@ internal static class AndroidPluginHost
         }
     }
 
+    /// <summary>
+    /// Publisher trust anchors are embedded in the APK assembly (<c>trusted-keys.txt</c>), never
+    /// read from app-writable storage. A process that can write <c>FilesDir</c> must not be able to
+    /// replace the root of trust; changing the anchors now requires rebuilding the APK.
+    /// </summary>
     public static IReadOnlyList<string> LoadTrustedKeys(Context context)
     {
-        // Production builds should embed publisher keys in the APK. For extended/sideload
-        // builds the key list can be provisioned into app-private storage.
-        var path = Path.Combine(context.FilesDir!.AbsolutePath, "plugin-trusted-keys.txt");
-        if (!File.Exists(path))
+        _ = context; // retained for call-site compatibility
+
+        using var stream = typeof(AndroidPluginHost).Assembly.GetManifestResourceStream(EmbeddedTrustedKeys);
+        if (stream is null)
             return [];
 
-        return File.ReadAllLines(path)
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd()
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
             .Select(line => line.Trim())
             .Where(line => line.Length > 0 && !line.StartsWith('#'))
             .ToArray();
     }
+
+    private const string EmbeddedTrustedKeys = "Natter.Hosting.Android.trusted-keys.txt";
 }

@@ -1,0 +1,151 @@
+{
+  "schemaVersion": 1,
+  "description": "P6.9 memory recall fixture (docs/P6_MEMORY_SYSTEM.md §12). Corpus and queries are fixed so a re-run yields the same numbers. Ages are in days before 'now' at seed time; decay-sensitive cases depend on them.",
+  "corpus": [
+    {
+      "id": "policy_zh",
+      "type": "policy",
+      "content": "以后都用中文回答我",
+      "ageDays": 5
+    },
+    {
+      "id": "policy_emoji",
+      "type": "policy",
+      "content": "不要用任何 emoji 符号",
+      "ageDays": 8
+    },
+    {
+      "id": "pref_apple",
+      "type": "preference",
+      "content": "我喜欢吃苹果和梨",
+      "ageDays": 10
+    },
+    {
+      "id": "pref_coffee",
+      "type": "preference",
+      "content": "我每天早上喝咖啡不加糖",
+      "ageDays": 12
+    },
+    {
+      "id": "fact_hangzhou",
+      "type": "fact",
+      "content": "我住在杭州西湖区",
+      "ageDays": 20
+    },
+    {
+      "id": "fact_stack",
+      "type": "fact",
+      "content": "prefers C# and .NET for backend services",
+      "ageDays": 15
+    },
+    {
+      "id": "epi_migration",
+      "type": "episodic",
+      "content": "上次讨论过数据库迁移方案",
+      "ageDays": 3
+    },
+    {
+      "id": "epi_release",
+      "type": "episodic",
+      "content": "上周聊过发布窗口的排期",
+      "ageDays": 4
+    },
+    {
+      "id": "trace_origin",
+      "type": "trace",
+      "content": "原话是怎么说的我记不清了",
+      "ageDays": 1
+    },
+    {
+      "id": "decay_new",
+      "type": "fact",
+      "content": "发布窗口定在周五下午三点开始",
+      "ageDays": 1
+    },
+    {
+      "id": "decay_old",
+      "type": "fact",
+      "content": "发布窗口定在周五下午三点开始发布窗口",
+      "ageDays": 400
+    },
+    {
+      "id": "noise_weather",
+      "type": "fact",
+      "content": "今天天气不错适合出门散步",
+      "ageDays": 2
+    }
+  ],
+  "cases": [
+    {
+      "id": "policy-language",
+      "category": "Policy",
+      "query": "你该用什么语言回答",
+      "expect": ["policy_zh"],
+      "note": "2-char anchor 回答: pretokenized matches, raw trigram cannot"
+    },
+    {
+      "id": "preference-food",
+      "category": "Preference",
+      "query": "我喜欢吃什么",
+      "expect": ["pref_apple"],
+      "note": "2-char anchors 喜欢 / 什么"
+    },
+    {
+      "id": "fact-city",
+      "category": "Fact",
+      "query": "我住哪",
+      "expect": ["fact_hangzhou"],
+      "note": "2-char anchor 我住, query shorter than 3 chars"
+    },
+    {
+      "id": "episodic-migration",
+      "category": "Episodic",
+      "query": "数据库迁移方案",
+      "expect": ["epi_migration"],
+      "note": "2-char anchors 数据 / 迁移 / 方案; 3-char windows also present for trigram"
+    },
+    {
+      "id": "trace-origin",
+      "category": "Trace",
+      "query": "原话是怎么说的",
+      "expect": ["trace_origin"],
+      "note": "Trace is retrievable but never actively injected (§8.1)"
+    },
+    {
+      "id": "english-backend",
+      "category": "English",
+      "query": "backend services",
+      "expect": ["fact_stack"],
+      "note": "control case: both tokenizers should pass"
+    },
+    {
+      "id": "decay-recency",
+      "category": "Decay",
+      "query": "发布窗口定在周五下午三点开始",
+      "expect": ["decay_new"],
+      "note": "decay_old has a higher raw bm25 (term repeated) but is 400 days old; with decay on, decay_new must win"
+    },
+    {
+      "id": "noise-weather",
+      "category": "CrossType",
+      "query": "今天天气怎么样",
+      "expect": ["noise_weather"],
+      "note": "must not drag in unrelated policy/preference entries"
+    },
+    {
+      "id": "unrelated",
+      "category": "CrossType",
+      "query": "量子色动力学渐近自由",
+      "expect": [],
+      "expectEmpty": true,
+      "note": "no lexical overlap with the corpus: recall must be empty"
+    },
+    {
+      "id": "emoji-policy",
+      "category": "Policy",
+      "query": "emoji 符号",
+      "expect": ["policy_emoji"],
+      "note": "mixed CJK + latin anchor"
+    }
+  ]
+}

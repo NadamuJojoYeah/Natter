@@ -26,6 +26,13 @@ public interface ITool
     string Description { get; }
     ToolCapabilities Capabilities { get; }
     ValueTask<ToolResult> ExecuteAsync(ToolRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// P5.2 tool metadata (version, input JSON schema, permissions, output limit, timeout,
+    /// native-call support). Legacy tools keep working without changes through this default
+    /// implementation; <see cref="ToolRegistry"/> reads it when building descriptors.
+    /// </summary>
+    ToolMetadata Metadata => ToolMetadata.Legacy;
 }
 
 public interface IToolPolicy

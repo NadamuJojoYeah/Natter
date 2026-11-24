@@ -1,0 +1,145 @@
+{
+  "schemaVersion": 1,
+  "packId": "core",
+  "version": "1.0.0",
+  "enabled": true,
+  "mayRequire": [],
+  "rules": [],
+  "voice": {
+    "prompt": "用第一人称、短句、具体感受描述角色当下的处境。不要解释系统，不要提数值。",
+    "tone": "克制、日常、略带疲惫感",
+    "examples": [
+      "胃里空得发慌，说话的力气都得省着用。",
+      "眼皮沉得厉害，脑子转得比平时慢半拍。"
+    ],
+    "banned": [
+      "系统",
+      "数值",
+      "HP",
+      "饥饿度"
+    ]
+  },
+  "vitals": [
+    {
+      "abstract": true,
+      "id": "baseNeed",
+      "label": "需求基线",
+      "range": { "min": 0, "max": 100 },
+      "baseline": 0,
+      "levels": [
+        { "at": 0, "id": "sated", "label": "饱和" },
+        { "at": 30, "id": "peckish", "label": "轻微" },
+        { "at": 60, "id": "hungry", "label": "明显" },
+        { "at": 85, "id": "starving", "label": "极限", "semantic": "已到极限，注意力涣散" }
+      ]
+    },
+    {
+      "id": "hunger",
+      "parent": "baseNeed",
+      "label": "饥饿",
+      "baseline": 12,
+      "decay": { "mode": "multiplicative", "ratePerHour": 0.08, "target": 100 }
+    },
+    {
+      "id": "energy",
+      "label": "精力",
+      "range": { "min": 0, "max": 100 },
+      "baseline": 70,
+      "decay": { "mode": "multiplicative", "ratePerHour": 0.05, "target": 0 },
+      "levels": [
+        { "at": 0, "id": "spent", "label": "耗尽", "semantic": "几乎没有精力，只能做最低限度的事" },
+        { "at": 25, "id": "low", "label": "偏低", "template": "有点提不起劲。" },
+        { "at": 55, "id": "steady", "label": "平稳", "template": "状态还行。" },
+        { "at": 80, "id": "fresh", "label": "充沛", "template": "精神很好。" }
+      ]
+    },
+    {
+      "id": "mood",
+      "label": "心情",
+      "range": { "min": -100, "max": 100 },
+      "baseline": 10,
+      "decay": { "mode": "multiplicative", "ratePerHour": 0.04, "target": 0 },
+      "levels": [
+        { "at": -100, "id": "low", "label": "低落", "template": "心情沉在底下。" },
+        { "at": -30, "id": "flat", "label": "平淡", "template": "没什么起伏。" },
+        { "at": 20, "id": "even", "label": "正常", "template": "心情一般。" },
+        { "at": 60, "id": "bright", "label": "不错", "template": "心情不错。" }
+      ]
+    },
+    {
+      "id": "sleepiness",
+      "label": "困倦",
+      "range": { "min": 0, "max": 100 },
+      "baseline": 20,
+      "decay": {
+        "mode": "multiplicative",
+        "ratePerHour": 0.12,
+        "target": { "kind": "cycle", "min": 10, "max": 90, "periodHours": 24, "peakHourUtc": 3 }
+      },
+      "levels": [
+        { "at": 0, "id": "awake", "label": "清醒" },
+        { "at": 40, "id": "drowsy", "label": "困意", "template": "有点想打哈欠。" },
+        { "at": 70, "id": "sleepy", "label": "很困", "template": "眼皮有点沉。" }
+      ]
+    }
+  ],
+  "assertedStates": [
+    {
+      "id": "injured",
+      "label": "受伤",
+      "semantic": "身上有伤，动作受限",
+      "template": "伤处一动就疼，动作不敢太大。",
+      "durationHours": 72
+    }
+  ],
+  "derivedStates": [
+    {
+      "id": "starving",
+      "vital": "hunger",
+      "levels": [ "starving" ],
+      "label": "饿坏了",
+      "semantic": "极度饥饿，注意力涣散，耐心变差"
+    },
+    {
+      "id": "exhausted",
+      "vital": "energy",
+      "levels": [ "spent" ],
+      "label": "力竭",
+      "semantic": "精力见底"
+    }
+  ],
+  "effects": [
+    {
+      "id": "starvingDrainsEnergy",
+      "from": "starving",
+      "to": "energy",
+      "rateMultiplier": 1.4,
+      "stacking": "mul",
+      "priority": 0
+    },
+    {
+      "id": "starvingSoursMood",
+      "from": "starving",
+      "to": "mood",
+      "bias": -6,
+      "stacking": "add",
+      "priority": 0
+    },
+    {
+      "id": "injurySlowsRecovery",
+      "from": "injured",
+      "to": "energy",
+      "rateMultiplier": 0.6,
+      "stacking": "mul",
+      "priority": -10
+    }
+  ],
+  "triggers": [
+    {
+      "id": "combatHit",
+      "event": "combat.hit",
+      "state": "injured",
+      "probability": 0.35
+    }
+  ]
+}

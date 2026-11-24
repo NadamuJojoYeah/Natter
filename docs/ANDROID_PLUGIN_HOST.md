@@ -1,5 +1,8 @@
 # Android 插件宿主设计（NPS Android Profile）
 
+> **核对状态（2026-11-23，基线 `99b99cc`）**：本文 11-15 定稿，此后 Android 侧有两处实现变更已在此就地修正——① 信任根改为 **embedded resource**（不再读 `FilesDir/plugin-trusted-keys.txt`）；② 新增**安装后完整性复验**（`InstalledPluginIntegrity` 每次读候选重算 `package.sha256`，篡改即 `Tampered` 并在 trust policy 拒绝）。
+> 未复核项：真机安装/升级/回滚流程与 AOT+dynamic 组合（需真机，见 §14 验收清单）。
+
 > **状态**：Accepted design · 基础实现已交付（store/校验/宿主接入；真机矩阵与管理 UI 待补）  
 > **日期**：2026-11-15  
 > **决策**：Android 支持动态插件，但只作为 **extended / sideload / 企业分发** 的可选发行形态；默认与 Play 发行仍使用 embedded 插件。动态形态关闭 AOT/Trim、只加载已签名的托管 DLL、存放在 app 私有目录、安装后重启生效。  
@@ -130,7 +133,7 @@ APK
 └── (无插件)
 
 FilesDir/plugins/
-├── natter.transport.discord/0.1.0/...
+├── natter.transport.messaging.discord/0.1.0/...
 └── natter.feature.ai.openai/0.1.0/...
 ```
 
@@ -195,7 +198,7 @@ Context.FilesDir/
     ├── .trash/<txn-id>/
     ├── installed.json
     ├── pending.json
-    └── natter.transport.discord/
+    └── natter.transport.messaging.discord/
         ├── 0.1.0/
         │   ├── plugin.json
         │   ├── lib/
@@ -625,12 +628,12 @@ v1 可以先实现：
 
 ```bash
 # 桌面/调试：创建并安装签名包（CLI 的 root 指向 app 私有目录或测试目录）
-natter plugins store install ./natter.sample.greetings-0.1.0.natter-plugin.zip \
+natter plugins store install ./natter.sample.port.greetings-0.1.0.natter-plugin.zip \
   --root /data/user/0/dev.natter.hosting.android/files/plugins \
   --trusted-key <base64-SubjectPublicKeyInfo>
 natter plugins store list --root <root>
-natter plugins store disable natter.sample.greetings --root <root>
-natter plugins store rollback natter.sample.greetings --root <root>
+natter plugins store disable natter.sample.port.greetings --root <root>
+natter plugins store rollback natter.sample.port.greetings --root <root>
 ```
 
 Android dynamic 构建：
@@ -659,7 +662,7 @@ dotnet build src/Natter.Hosting.Android/Natter.Hosting.Android.csproj -c Dynamic
 - Android 文件选择器与完整插件管理 UI 页面（当前是 debug inbox + CLI/输出）；
 - 真机 arm64 + 模拟器 x64 的启动时间/内存/后台/进程回收矩阵；
 - 应用升级、Android 升级、低磁盘、安装中断的真实系统故障注入；
-- 内置发布者公钥的生产配置与轮换流程（当前支持 `FilesDir/plugin-trusted-keys.txt` 或后续嵌入资源；DEBUG 允许 unsigned）；
+- 内置发布者公钥的生产配置与轮换流程。**现行实现（2026-11-23 核对）**：信任锚以 **embedded resource** 编译进 APK（`Natter.Hosting.Android.trusted-keys.txt`，由 `AndroidPluginHost.LoadTrustedKeys` 经 `GetManifestResourceStream` 读取），**不再**读取 `FilesDir/plugin-trusted-keys.txt`（应用可写目录放信任锚等于让提权者替换锚点）。Release/dynamic 构建需在构建前写入公钥并重新签名 APK；DEBUG 允许 unsigned。
 - 跨进程崩溃自动回退（当前是下一次启动 reconcile，不保证崩溃前自动恢复）；
 - 远程 HTTPS 下载器/插件市场（安装器只接收本地包）。
 

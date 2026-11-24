@@ -179,7 +179,15 @@ public sealed class PluginsStoreUninstallCommand : ICliCommandHandler
         var pluginId = invocation.GetPositional(0);
         if (string.IsNullOrWhiteSpace(pluginId))
         {
-            invocation.Console.Error.WriteLine("usage: natter plugins store uninstall <plugin-id> [--delete-data] [--delete-config]");
+            invocation.Console.Error.WriteLine(
+                "usage: natter plugins store uninstall <plugin-id> [--delete-data] [--delete-config] [--force]");
+            return CliExitCodes.Usage;
+        }
+
+        if (!Natter.Plugin.Store.PluginStoreIds.IsValid(pluginId))
+        {
+            invocation.Console.Error.WriteLine(
+                $"error: plugin-id-invalid: '{pluginId}' must match {Natter.Plugin.Store.PluginStoreIds.Pattern}");
             return CliExitCodes.Usage;
         }
 
@@ -190,6 +198,7 @@ public sealed class PluginsStoreUninstallCommand : ICliCommandHandler
                 pluginId,
                 deleteData: invocation.HasFlag("delete-data"),
                 deleteConfig: invocation.HasFlag("delete-config"),
+                force: invocation.HasFlag("force"),
                 cancellationToken).ConfigureAwait(false);
 
             invocation.Console.Out.WriteLine($"uninstalled {pluginId}; restart the host to apply");

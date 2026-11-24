@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "id": "natter.transport.dingtalk",
+  "id": "natter.transport.messaging.dingtalk",
   "name": "DingTalk Transport",
   "version": "0.1.0",
   "kind": "transport",

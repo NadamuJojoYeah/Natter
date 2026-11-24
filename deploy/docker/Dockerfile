@@ -6,10 +6,10 @@
 # What the image contains:
 #   /app            published CLI host (dotnet natter.dll) + samples plugins (greetings, metrics)
 #   /app/plugins    Tier 1 NPS plugins staged by scripts/stage-tier1-plugins.sh
-#                     discord   natter.transport.discord
+#                     discord   natter.transport.messaging.discord
 #                     deepseek  natter.feature.ai.deepseek
 #                   Tier 2 (--build-arg TIER2=true):
-#                     dingtalk  natter.transport.dingtalk
+#                     dingtalk  natter.transport.messaging.dingtalk
 #                     spark     natter.feature.ai.spark
 #
 # The image never contains config.json or secrets: configuration is mounted at /config (read-only)

@@ -20,8 +20,15 @@ public sealed class SatoriSnTracker
         }
     }
 
-    /// <summary>Advances the tracker; returns false for a replayed or older sequence.</summary>
-    public bool TryAdvance(long sn)
+    /// <summary>True when the frame is newer than the last committed sequence.</summary>
+    public bool ShouldProcess(long sn)
+    {
+        lock (_gate)
+            return _lastSn is not { } last || sn > last;
+    }
+
+    /// <summary>Commits a sequence after its event has been mapped successfully.</summary>
+    public bool Commit(long sn)
     {
         lock (_gate)
         {
@@ -32,6 +39,10 @@ public sealed class SatoriSnTracker
             return true;
         }
     }
+
+    /// <summary>Advances the tracker atomically; kept for callers that map before calling it.</summary>
+    public bool TryAdvance(long sn)
+        => ShouldProcess(sn) && Commit(sn);
 
     public void Reset()
     {

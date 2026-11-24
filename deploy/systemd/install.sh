@@ -86,6 +86,7 @@ fi
 
 echo "2/7 release layout (read-only)"
 run chown -R root:root "$RELEASE_DIR"
+run chmod -R a+rX "$RELEASE_DIR"
 run chmod -R go-w "$RELEASE_DIR"
 
 echo "3/7 config layout"
@@ -152,6 +153,27 @@ run chmod 700 "$STATE_DIR" "$LOG_DIR"
 
 echo "6/7 unit files and soak sampler"
 run install -m 0644 "$UNIT_SRC" /etc/systemd/system/natter.service
+
+# Surface hand-made drop-ins instead of silently inheriting them.
+#
+# 2026-11-23: a hand-written `webconsole-audit.conf` drop-in existed only on the machine, not in the
+# repository. It looked like the deploy handled the plugin audit path, so nobody noticed the unit
+# itself granted no write access. A drop-in that is not in version control will drift from the unit
+# and reappear after every reinstall, so print them and let the operator decide.
+DROPIN_DIR="/etc/systemd/system/natter.service.d"
+if [[ -d "$DROPIN_DIR" ]]; then
+  shopt -s nullglob
+  dropins=("$DROPIN_DIR"/*.conf)
+  shopt -u nullglob
+  if [[ ${#dropins[@]} -gt 0 ]]; then
+    echo "note: existing drop-ins override the unit above — verify they are still wanted:" >&2
+    for d in "${dropins[@]}"; do
+      echo "        $d" >&2
+    done
+    echo "      plugin data paths are now declared in natter.service itself (ReadWritePaths), so a" >&2
+      echo "      drop-in that repeats them can be removed." >&2
+  fi
+fi
 if [[ -f "$SOAK_UNIT_SRC" && -f "$SOAK_TIMER_SRC" ]]; then
   # The soak timer runs the sampler from the release directory, so ship the script with it.
   run install -d -m 0755 "$RELEASE_DIR/scripts"

@@ -4,7 +4,7 @@
 > **日期**：2026-11-15  
 > **基线**：`HEAD=04831df`（P2 已归档；P3 foundation 已提交）  
 > **被测对象**：Prompt/Context/Memory 契约、profile 组件选择、SQLite summary/memory、显式 remember/forget、context pipeline、NPS contribution  
-> **开发规格**：[P3 Context & Memory](../P3_CONTEXT_MEMORY.md)  
+> **开发规格**：[P3 Context & Memory](../archive/P3-CONTEXT-MEMORY.md)  
 > **目标**：验证 P3 是否真正可用：能选择策略、能召回显式记忆、能删除、能不串 scope、能在重启后保持。
 
 ---

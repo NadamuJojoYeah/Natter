@@ -310,11 +310,11 @@ public sealed class PluginStoreTests
         var info = await PluginPackageWriter.CreateAsync(source, packagePath, key);
 
         Assert.True(File.Exists(packagePath));
-        Assert.Equal("natter.sample.greetings", info.Manifest.Id);
+        Assert.Equal("natter.sample.port.greetings", info.Manifest.Id);
 
         var store = CreateStore(temp, Convert.ToBase64String(key.ExportSubjectPublicKeyInfo()));
         var installed = await store.InstallAsync(packagePath);
-        Assert.Equal("natter.sample.greetings", installed.Record.Id);
+        Assert.Equal("natter.sample.port.greetings", installed.Record.Id);
         Assert.Equal("signed", installed.Record.Trust);
     }
 
@@ -375,7 +375,7 @@ public sealed class PluginStoreTests
     private sealed class DiagnosticsStub(PluginState state) : IPluginRuntimeDiagnostics
     {
         public IReadOnlyList<PluginGraphNode> Graph { get; } =
-            [new PluginGraphNode("natter.sample.greetings", "0.2.0", "feature", state, [], [], [])];
+            [new PluginGraphNode("natter.sample.port.greetings", "0.2.0", "feature", state, [], [], [])];
 
         public IReadOnlyList<PluginGraphEdge> GraphEdges => [];
 

@@ -9,11 +9,14 @@
 
   <ItemGroup>
     <PackageReference Include="Discord.Net" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="System.Reactive" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="../Natter.Chat/Natter.Chat.csproj" />
+    <!-- C-03: shared redaction core (Natter.Application/Redaction). Application does not reference
+         the Discord adapter, so this edge cannot create a cycle. -->
     <ProjectReference Include="../Natter.Abstractions/Natter.Abstractions.csproj" />
   </ItemGroup>
 

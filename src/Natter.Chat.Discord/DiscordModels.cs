@@ -68,7 +68,44 @@ public sealed class DiscordOptions
 
     public int InteractionTtlSeconds { get; set; } = 900;
 
+    /// <summary>S2-A11: hard cap for the interaction token cache (bounded, TTL pruned).</summary>
+    public int InteractionCacheCapacity { get; set; } = 500;
+
+    /// <summary>S2-A16: send attempts for a rate-limited call (1 disables retries).</summary>
+    public int SendRetryMaxAttempts { get; set; } = 3;
+
+    /// <summary>S2-A16: exponential backoff base for rate-limited sends.</summary>
+    public int SendRetryBaseDelayMs { get; set; } = 250;
+
+    /// <summary>S2-A16: ceiling for both exponential backoff and platform retryAfter delays.</summary>
+    public int SendRetryMaxDelayMs { get; set; } = 5_000;
+
     public int ReadyTimeoutSeconds { get; set; } = 30;
+
+    /// <summary>
+    /// P0 (2026-11-22 incident): rebuild the gateway transport when the upstream stays
+    /// disconnected past <see cref="ReconnectWatchdogThresholdMs"/>. Discord.Net's internal
+    /// reconnect loop can terminate permanently, and nothing else in the host would recover.
+    /// </summary>
+    public bool ReconnectWatchdog { get; set; } = true;
+
+    /// <summary>How long <c>connected=false</c> is tolerated before the watchdog rebuilds the transport.</summary>
+    public int ReconnectWatchdogThresholdMs { get; set; } = 60_000;
+
+    /// <summary>Watchdog poll interval in milliseconds; 0 derives one from the threshold.</summary>
+    public int ReconnectWatchdogTickMs { get; set; }
+
+    /// <summary>First backoff delay between rebuild attempts.</summary>
+    public int ReconnectBackoffInitialMs { get; set; } = 1_000;
+
+    /// <summary>Upper bound for the exponential rebuild backoff.</summary>
+    public int ReconnectBackoffMaxMs { get; set; } = 60_000;
+
+    /// <summary>
+    /// Consecutive failed rebuilds tolerated before the upstream flags "manual intervention
+    /// required" and stops retrying instead of hammering the platform forever.
+    /// </summary>
+    public int ReconnectMaxAttempts { get; set; } = 10;
 
     public string? DevGuildId { get; set; }
 

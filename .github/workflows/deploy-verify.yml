@@ -179,7 +179,10 @@ jobs:
           docker rm -f natter-smoke >/dev/null
           test "$status" = "running"
 
-      - name: Upload staging manifest
+      # S2-E13: this job never produces soak-report.json (the soak audit runs in ci.yml), so it used
+      # to upload a set that silently missed one file. Only list what this job actually creates, and
+      # fail when nothing is there instead of accepting an empty artifact.
+      - name: Upload image verification evidence
         if: always()
         uses: actions/upload-artifact@v5
         with:
@@ -189,5 +192,4 @@ jobs:
             inspect-discord.txt
             inspect-deepseek.txt
             healthcheck.json
-            soak-report.json
-          if-no-files-found: ignore
+          if-no-files-found: error

@@ -19,10 +19,21 @@ env:
   DOTNET_SKIP_FIRST_TIME_EXPERIENCE: "true"
 
 jobs:
-  build-test:
-    name: Build & test (.NET 10)
+  # S1-09: nothing used to build Natter.slnx, so a project that only exists in the solution
+  # (Natter.Plugin.PromptLibrary, Natter.Hosting.Android, ...) could break while CI stayed green.
+  # This job builds the whole solution, Android included.
+  #
+  # Android needs the `android` workload plus Android SDK/JDK: ~1 GB of downloads and minutes of
+  # setup that add nothing to a normal PR, so it is gated behind a repository variable instead of
+  # running unconditionally. Enable it with:
+  #   Settings -> Secrets and variables -> Actions -> Variables -> ANDROID_BUILD = true
+  # When the variable is unset the job reports "skipped" (visible in the checks list, not silently
+  # green), and `build-test` still compiles every non-Android project taken from Natter.slnx.
+  solution-build:
+    name: Build solution (28 projects, incl. Android)
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 40
+    if: ${{ vars.ANDROID_BUILD == 'true' }}
 
     steps:
       - name: Checkout
@@ -37,64 +48,153 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/.nuget/packages
-          key: nuget-${{ runner.os }}-${{ hashFiles('global.json', 'Directory.Packages.props', '**/*.csproj', 'Natter.slnx') }}
+          key: nuget-${{ runner.os }}-${{ hashFiles('global.json', 'Directory.Build.props', 'Directory.Packages.props', '**/*.csproj', 'Natter.slnx') }}
           restore-keys: |
             nuget-${{ runner.os }}-
 
-      - name: Restore
+      - name: Explain the Android toolchain requirements
         run: |
-          dotnet restore src/Natter.Cli/Natter.Cli.csproj
-          dotnet restore tests/Natter.Framework.Tests/Natter.Framework.Tests.csproj
-          dotnet restore tests/Natter.Live.Tests/Natter.Live.Tests.csproj
-          dotnet restore tests/Natter.Plugin.WebConsole.Tests/Natter.Plugin.WebConsole.Tests.csproj
+          echo "ANDROID_HOME=${ANDROID_HOME:-<unset>}"
+          echo "JAVA_HOME=${JAVA_HOME:-<unset>}"
+          java -version || true
 
-      - name: Build CLI
-        run: dotnet build src/Natter.Cli/Natter.Cli.csproj -c Release --no-restore
+      - name: Install android workload
+        run: dotnet workload install android
 
-      - name: Build framework tests
-        run: dotnet build tests/Natter.Framework.Tests/Natter.Framework.Tests.csproj -c Release --no-restore
+      - name: Build the whole solution
+        run: dotnet build Natter.slnx -c Release --nologo
 
-      - name: Run framework tests
-        run: |
-          dotnet test tests/Natter.Framework.Tests/Natter.Framework.Tests.csproj \
-            -c Release --no-build \
-            --logger "trx;LogFileName=framework.trx" \
-            --results-directory TestResults
+  build-test:
+    name: Build & test (every solution project, 4 test suites)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
 
-      - name: Build live tests
-        run: dotnet build tests/Natter.Live.Tests/Natter.Live.Tests.csproj -c Release --no-restore
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
 
-      - name: Live tests must skip without credentials
-        env:
-          NATTER_LIVE: ""
-        run: |
-          dotnet test tests/Natter.Live.Tests/Natter.Live.Tests.csproj \
-            -c Release --no-build \
-            --logger "trx;LogFileName=live-skip.trx" \
-            --results-directory TestResults
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: "10.0.x"
 
-      - name: Build WebConsole plugin tests
-        run: dotnet build tests/Natter.Plugin.WebConsole.Tests/Natter.Plugin.WebConsole.Tests.csproj -c Release --no-restore
+      - name: Cache NuGet
+        uses: actions/cache@v5
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('global.json', 'Directory.Build.props', 'Directory.Packages.props', '**/*.csproj', 'Natter.slnx') }}
+          restore-keys: |
+            nuget-${{ runner.os }}-
 
-      - name: Run WebConsole plugin tests
-        run: |
-          dotnet test tests/Natter.Plugin.WebConsole.Tests/Natter.Plugin.WebConsole.Tests.csproj \
-            -c Release --no-build \
-            --logger "trx;LogFileName=webconsole.trx" \
-            --results-directory TestResults
-
-      - name: Dependency vulnerability scan
+      # Enumerating from Natter.slnx (instead of a hand-written list) means a new project is covered
+      # the moment it is added to the solution. Android is the only exclusion; see solution-build.
+      - name: Enumerate solution projects (Android excluded)
+        id: projects
         shell: bash
         run: |
           set -euo pipefail
-          dotnet restore tests/Natter.Framework.Tests/Natter.Framework.Tests.csproj \
-            -p:NuGetAudit=true
-          dotnet list tests/Natter.Framework.Tests/Natter.Framework.Tests.csproj \
-            package --vulnerable --include-transitive | tee vulnerability.txt
+          # `dotnet sln list` prints a "Project(s)" header and a dashes separator before the paths.
+          mapfile -t all < <(dotnet sln Natter.slnx list \
+            | tail -n +2 \
+            | grep -vE '^-+$' \
+            | sed '/^[[:space:]]*$/d')
+          mapfile -t buildable < <(printf '%s\n' "${all[@]}" | grep -v 'Natter.Hosting.Android' || true)
+          {
+            echo "Solution projects : ${#all[@]}"
+            echo "Built in this job : ${#buildable[@]}"
+            echo "Excluded          : Natter.Hosting.Android (net10.0-android, see solution-build)"
+            printf '  %s\n' "${buildable[@]}"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          printf '%s\n' "${buildable[@]}" > solution-projects.txt
+          if [ "${#buildable[@]}" -lt 27 ]; then
+            echo "Only ${#buildable[@]} projects found; the solution enumeration probably broke." >&2
+            exit 1
+          fi
+
+      - name: Build every solution project (Android excluded)
+        shell: bash
+        run: |
+          set -euo pipefail
+          failed=0
+          while IFS= read -r project; do
+            [ -n "$project" ] || continue
+            echo "::group::build $project"
+            if ! dotnet build "$project" -c Release --nologo -v minimal; then
+              failed=$((failed + 1))
+              echo "::error::build failed: $project"
+            fi
+            echo "::endgroup::"
+          done < solution-projects.txt
+          echo "build failures: $failed"
+          exit $failed
+
+      - name: Enumerate test projects
+        id: tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t suites < <(find tests -name '*.csproj' -not -path '*/bin/*' -not -path '*/obj/*' | sort)
+          echo "Test suites: ${#suites[@]}"
+          printf '  %s\n' "${suites[@]}" | tee -a "$GITHUB_STEP_SUMMARY"
+          printf '%s\n' "${suites[@]}" > test-projects.txt
+          if [ "${#suites[@]}" -lt 4 ]; then
+            echo "Expected at least 4 test suites, found ${#suites[@]}." >&2
+            exit 1
+          fi
+
+      # S2 task-44: tests must run on the assemblies built in *this* job. `--no-build` makes that
+      # explicit: a stale bin/ (from a cached checkout or an interrupted incremental build) can
+      # otherwise mix a new test assembly with an old product DLL and produce fake failures, which
+      # is exactly what the merge-verify saw for `Archive_that_lies_about_its_size...`
+      # (`manifest-not-nps` until `dotnet build -c Release` rebuilt Natter.Plugin.Store).
+      #
+      # NATTER_LIVE is empty on purpose: the live suite must skip without credentials, and the unit
+      # suites must not depend on it.
+      - name: Run every test suite
+        shell: bash
+        env:
+          NATTER_LIVE: ""
+        run: |
+          set -euo pipefail
+          failed=0
+          while IFS= read -r project; do
+            [ -n "$project" ] || continue
+            name="$(basename "$project" .csproj)"
+            echo "::group::test $name"
+            if ! dotnet test "$project" \
+                  -c Release \
+                  --no-build \
+                  --logger "trx;LogFileName=${name}.trx" \
+                  --results-directory TestResults; then
+              failed=$((failed + 1))
+              echo "::error::tests failed: $project"
+            fi
+            echo "::endgroup::"
+          done < test-projects.txt
+          echo "test failures: $failed"
+          exit $failed
+
+      # S1-09 requirement 3: the audit used to look at one project only; it now covers every test
+      # suite (which pulls the product assemblies transitively).
+      - name: Dependency vulnerability scan (all suites)
+        shell: bash
+        run: |
+          set -euo pipefail
+          : > vulnerability.txt
+          failed=0
+          while IFS= read -r project; do
+            [ -n "$project" ] || continue
+            echo "== $project ==" | tee -a vulnerability.txt
+            dotnet restore "$project" -p:NuGetAudit=true
+            if ! dotnet list "$project" package --vulnerable --include-transitive | tee -a vulnerability.txt; then
+              failed=1
+            fi
+          done < test-projects.txt
           if grep -q "has the following vulnerable packages" vulnerability.txt; then
             echo "Vulnerable NuGet packages detected."
             exit 1
           fi
+          exit $failed
 
       - name: Upload test results
         if: always()
@@ -104,4 +204,6 @@ jobs:
           path: |
             TestResults/**
             vulnerability.txt
+            solution-projects.txt
+            test-projects.txt
           if-no-files-found: ignore

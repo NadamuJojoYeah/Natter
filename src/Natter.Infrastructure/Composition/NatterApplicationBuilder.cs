@@ -27,6 +27,8 @@ public sealed class NatterApplicationBuilder
     private readonly List<(PluginManifest Manifest, INatterPlugin Plugin, string? Directory)> _embeddedNpsPlugins = [];
     private readonly List<Action<IServiceCollection>> _serviceConfigurations = [];
     private readonly NpsPluginOptions _npsOptions = new();
+    private readonly PluginTrustOptions _pluginTrust = new();
+    private readonly Dictionary<string, PluginTrustRegistration> _pluginTrustRegistrations = new(StringComparer.OrdinalIgnoreCase);
     private readonly NpsPluginRuntime _npsRuntime;
     private readonly CompositionOptions _options = new();
     private Action<ILoggingBuilder>? _loggingConfiguration;
@@ -89,7 +91,31 @@ public sealed class NatterApplicationBuilder
         if (string.IsNullOrWhiteSpace(directory))
             return this;
 
-        _options.PluginDirectories.Add(Path.GetFullPath(directory));
+        return AddPluginDirectory(new PluginTrustRegistration(Path.GetFullPath(directory)));
+    }
+
+    /// <summary>
+    /// Adds a directory together with what the caller could verify about it (S1-12). A plain
+    /// directory is registered as <see cref="PluginSignatureState.Unverified"/> and is never treated
+    /// as signed.
+    /// </summary>
+    public NatterApplicationBuilder AddPluginDirectory(PluginTrustRegistration registration)
+    {
+        ArgumentNullException.ThrowIfNull(registration);
+        if (string.IsNullOrWhiteSpace(registration.Directory))
+            return this;
+
+        var directory = Path.GetFullPath(registration.Directory);
+        _options.PluginDirectories.Add(directory);
+        _pluginTrustRegistrations[directory] = registration with { Directory = directory };
+        return this;
+    }
+
+    /// <summary>Configures activation-time trust policy (S1-12). Defaults keep existing deployments working.</summary>
+    public NatterApplicationBuilder ConfigurePluginTrust(Action<PluginTrustOptions> configure)
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+        configure(_pluginTrust);
         return this;
     }
 
@@ -326,11 +352,41 @@ public sealed class NatterApplicationBuilder
                         continue;
                     }
 
-                    result.Candidates.Add(NpsPluginCandidate.FromManifest(
+                    // S1-12: the installer's trust verdict and the startup integrity check decide
+                    // here; FilePluginTrustLevel is the baseline, not a rubber stamp.
+                    var registration = _pluginTrustRegistrations.TryGetValue(fullPath, out var known)
+                        ? known
+                        : new PluginTrustRegistration(fullPath);
+                    var decision = PluginTrustPolicy.Evaluate(_npsOptions, _pluginTrust, registration);
+
+                    if (!decision.Allowed)
+                    {
+                        result.Failures.Add(new PluginDescriptor(
+                            read.Manifest.Id,
+                            read.Manifest.Name,
+                            read.Manifest.Version,
+                            read.Manifest.Entry?.Assembly ?? string.Empty,
+                            fullPath,
+                            PluginState.Failed,
+                            decision.Message,
+                            read.Manifest.Capabilities,
+                            read.Manifest.Description,
+                            Kind: read.Manifest.Kind.ToString().ToLowerInvariant(),
+                            HostApi: read.Manifest.HostApi,
+                            Trust: PluginTrustPolicy.TrustLabel(decision),
+                            ErrorDetail: new PluginErrorDescriptor("trust", decision.Code, decision.Message)));
+                        continue;
+                    }
+
+                    var candidate = NpsPluginCandidate.FromManifest(
                         read.Manifest,
                         fullPath,
                         read,
-                        _npsOptions.FilePluginTrustLevel));
+                        decision.Trust);
+                    candidate.Warnings.AddRange(decision.Warnings);
+                    candidate.TrustLabel = PluginTrustPolicy.TrustLabel(decision);
+                    candidate.SignatureVerified = decision.SignatureVerified;
+                    result.Candidates.Add(candidate);
                     continue;
                 }
 

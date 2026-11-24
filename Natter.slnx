@@ -1,6 +1,7 @@
 <Solution>
   <Project Path="src/Natter.Abstractions/Natter.Abstractions.csproj" />
   <Project Path="src/Natter.Cli.Abstractions/Natter.Cli.Abstractions.csproj" />
+  <Project Path="src/Natter.Contracts/Natter.Contracts.csproj" />
   <Project Path="src/Natter.Domain/Natter.Domain.csproj" />
   <Project Path="src/Natter.Chat/Natter.Chat.csproj" />
   <Project Path="src/Natter.Plugin.Abstractions/Natter.Plugin.Abstractions.csproj" />
@@ -11,6 +12,7 @@
   <Project Path="src/Natter.Feature.Ai.DeepSeek/Natter.Feature.Ai.DeepSeek.csproj" />
   <Project Path="src/Natter.Feature.Ai.Spark/Natter.Feature.Ai.Spark.csproj" />
   <Project Path="src/Natter.Chat.Satori/Natter.Chat.Satori.csproj" />
+  <Project Path="src/Natter.Prompting/Natter.Prompting.csproj" />
   <Project Path="src/Natter.Application/Natter.Application.csproj" />
   <Project Path="src/Natter.Infrastructure/Natter.Infrastructure.csproj" />
   <Project Path="src/Natter.Cli.Core/Natter.Cli.Core.csproj" />
@@ -21,8 +23,16 @@
   <Project Path="samples/Natter.Sample.Plugin.Memory/Natter.Sample.Plugin.Memory.csproj" />
   <Project Path="samples/Natter.Sample.Plugin.Discord/Natter.Sample.Plugin.Discord.csproj" />
   <Project Path="samples/Natter.Sample.Plugin.DingTalk/Natter.Sample.Plugin.DingTalk.csproj" />
+  <Project Path="plugins/Natter.Plugin.PromptLibrary/Natter.Plugin.PromptLibrary.csproj" />
   <Project Path="plugins/Natter.Plugin.WebConsole/Natter.Plugin.WebConsole.csproj" />
+  <Project Path="plugins/Natter.Plugin.AiEmbedding.OpenAi/Natter.Plugin.AiEmbedding.OpenAi.csproj" />
+  <Project Path="plugins/Natter.Plugin.ConversationConsole/Natter.Plugin.ConversationConsole.csproj" />
+  <Project Path="plugins/Natter.Plugin.StateVitals/Natter.Plugin.StateVitals.csproj" />
   <Project Path="tests/Natter.Framework.Tests/Natter.Framework.Tests.csproj" />
   <Project Path="tests/Natter.Live.Tests/Natter.Live.Tests.csproj" />
+  <Project Path="tests/Natter.Plugin.PromptLibrary.Tests/Natter.Plugin.PromptLibrary.Tests.csproj" />
   <Project Path="tests/Natter.Plugin.WebConsole.Tests/Natter.Plugin.WebConsole.Tests.csproj" />
+  <Project Path="tests/Natter.Plugin.AiEmbedding.OpenAi.Tests/Natter.Plugin.AiEmbedding.OpenAi.Tests.csproj" />
+  <Project Path="tests/Natter.Plugin.ConversationConsole.Tests/Natter.Plugin.ConversationConsole.Tests.csproj" />
+  <Project Path="tests/Natter.Plugin.StateVitals.Tests/Natter.Plugin.StateVitals.Tests.csproj" />
 </Solution>

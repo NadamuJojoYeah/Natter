@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net.Http;
 using System.Text.Json;
 using Microsoft.Extensions.AI;
@@ -75,7 +76,18 @@ public sealed class DeepSeekPlugin : INatterPlugin
             apiKey,
             provider.GetRequiredService<DeepSeekMetrics>()));
         services.AddSingleton<IAiContextAssembler>(provider => new RecentWindowContextAssembler(responderOptions));
-        services.AddSingleton<AiChatResponder>();
+        // P5.2c: DeepSeek Chat Completions supports native tool calling, so the responder is
+        // constructed with NativeAndText; the text <tool_call> protocol stays as the fallback.
+        services.AddSingleton<AiChatResponder>(provider => new AiChatResponder(
+            provider.GetRequiredService<IChatClient>(),
+            responderOptions,
+            provider.GetRequiredService<IAiConversationStore>(),
+            provider.GetRequiredService<AiConversationGate>(),
+            provider.GetRequiredService<Natter.Chat.ChatCommandFactory>(),
+            provider.GetRequiredService<IPluginLog>(),
+            provider.GetRequiredService<IAiContextAssembler>(),
+            provider.GetService<Natter.Application.Chat.IContextPipeline>(),
+            Natter.Application.Chat.ToolProtocolCapabilities.NativeAndText));
         services.AddTransient<DeepSeekStatusCommandHandler>();
 
         context.Contributions.AddChatResponder<AiChatResponder>("deepseek", priority: 10);
@@ -121,26 +133,29 @@ public sealed class DeepSeekPlugin : INatterPlugin
         if (options.Tools is { Count: > 0 })
             throw new InvalidOperationException("DeepSeek tools are not enabled in this Natter version.");
 
-        if (options.MaxOutputTokens is < 1 or > 384000)
-            throw new InvalidOperationException("DeepSeek config 'maxOutputTokens' is out of range.");
+        // Bounds come from DeepSeekNumericBounds, which a test keeps in sync with config.schema.json.
+        RequireInBounds("maxOutputTokens", options.MaxOutputTokens);
+        RequireInBounds("historyMaxMessages", options.HistoryMaxMessages);
+        RequireInBounds("historyMaxCharacters", options.HistoryMaxCharacters);
+        RequireInBounds("timeoutSeconds", options.TimeoutSeconds);
+        RequireInBounds("maxRetries", options.MaxRetries);
+        RequireInBounds("retryBaseDelayMs", options.RetryBaseDelayMs);
+        RequireInBounds("retryMaxDelayMs", options.RetryMaxDelayMs);
+        RequireInBounds("maxConcurrentRequests", options.MaxConcurrentRequests);
 
-        if (options.HistoryMaxMessages < 0 || options.HistoryMaxCharacters < 0)
-            throw new InvalidOperationException("DeepSeek history limits must not be negative.");
-
-        if (options.TimeoutSeconds is < 1 or > 600)
-            throw new InvalidOperationException("DeepSeek config 'timeoutSeconds' must be between 1 and 600.");
-
-        if (options.MaxRetries is < 0 or > 5)
-            throw new InvalidOperationException("DeepSeek config 'maxRetries' must be between 0 and 5.");
-
-        if (options.RetryBaseDelayMs is < 0 or > 60000 || options.RetryMaxDelayMs < options.RetryBaseDelayMs)
+        if (options.RetryMaxDelayMs < options.RetryBaseDelayMs)
             throw new InvalidOperationException("DeepSeek retry delays are invalid.");
-
-        if (options.MaxConcurrentRequests is < 1 or > 16)
-            throw new InvalidOperationException("DeepSeek config 'maxConcurrentRequests' must be between 1 and 16.");
 
         if (options.HistoryScope is not ("conversation" or "user"))
             throw new InvalidOperationException("DeepSeek config 'historyScope' must be 'conversation' or 'user'.");
+    }
+
+    private static void RequireInBounds(string name, long value)
+    {
+        var (min, max) = DeepSeekNumericBounds.All[name];
+        if (value < min || value > max)
+            throw new InvalidOperationException(
+                $"DeepSeek config '{name}' must be between {min} and {max} (got {value}).");
     }
 }
 
@@ -160,6 +175,12 @@ public sealed class DeepSeekStatusCommandHandler(
     {
         var historyCount = await history.CountAsync(cancellationToken).ConfigureAwait(false);
         var baseHost = Uri.TryCreate(options.BaseUrl, UriKind.Absolute, out var uri) ? uri.Host : "invalid";
+        var metricsSnapshot = metrics.Snapshot();
+        metricsSnapshot = metricsSnapshot with
+        {
+            LastError = Natter.Application.Redaction.SecretRedaction.Apply(
+                metricsSnapshot.LastError, Natter.Application.Redaction.SecretRedactionOptions.Admin),
+        };
         var snapshot = new DeepSeekStatusSnapshot(
             "deepseek",
             options.Model,
@@ -170,7 +191,8 @@ public sealed class DeepSeekStatusCommandHandler(
             options.HistoryMaxMessages,
             options.HistoryMaxCharacters,
             historyCount,
-            metrics.Snapshot());
+            metrics.Snapshot(),
+            DeepSeekEffectiveParameters.Build(options));
 
         if (invocation.HasFlag("json"))
         {
@@ -192,7 +214,10 @@ public sealed class DeepSeekStatusCommandHandler(
         invocation.Console.Out.WriteLine($"outputTokens: {snapshot.Metrics.OutputTokens}");
         invocation.Console.Out.WriteLine($"cachedInputTokens: {snapshot.Metrics.CachedInputTokens}");
         invocation.Console.Out.WriteLine($"reasoningTokens: {snapshot.Metrics.ReasoningTokens}");
-        invocation.Console.Out.WriteLine($"lastError: {snapshot.Metrics.LastError ?? "-"}");
+        invocation.Console.Out.WriteLine(
+            $"lastError: {Natter.Application.Redaction.SecretRedaction.Apply(snapshot.Metrics.LastError, Natter.Application.Redaction.SecretRedactionOptions.Admin)}");
+        foreach (var parameter in snapshot.Effective)
+            invocation.Console.Out.WriteLine($"{parameter.Name}: {parameter.Value} ({parameter.Source})");
 
         return CliExitCodes.Success;
     }
@@ -208,4 +233,29 @@ public sealed record DeepSeekStatusSnapshot(
     int HistoryMaxMessages,
     int HistoryMaxCharacters,
     int HistoryConversations,
-    DeepSeekMetricsSnapshot Metrics);
+    DeepSeekMetricsSnapshot Metrics,
+    IReadOnlyList<DeepSeekEffectiveParameter> Effective);
+
+/// <summary>One effective parameter plus where the value came from ("default" or "config").</summary>
+public sealed record DeepSeekEffectiveParameter(string Name, string Value, string Source);
+
+internal static class DeepSeekEffectiveParameters
+{
+    public static IReadOnlyList<DeepSeekEffectiveParameter> Build(DeepSeekOptions options)
+    {
+        static string Source(bool overridden) => overridden ? "config" : "default";
+        return
+        [
+            new("maxOutputTokens", options.MaxOutputTokens.ToString(CultureInfo.InvariantCulture),
+                Source(options.MaxOutputTokens != DeepSeekDefaults.MaxOutputTokens)),
+            new("maxInputCharacters", options.MaxInputCharacters.ToString(CultureInfo.InvariantCulture),
+                Source(options.MaxInputCharacters != DeepSeekDefaults.MaxInputCharacters)),
+            new("temperature", options.Temperature.ToString("0.###", CultureInfo.InvariantCulture),
+                Source(!options.Temperature.Equals(DeepSeekDefaults.Temperature))),
+            new("timeoutSeconds", options.TimeoutSeconds.ToString(CultureInfo.InvariantCulture),
+                Source(options.TimeoutSeconds != DeepSeekDefaults.TimeoutSeconds)),
+            new("maxRetries", options.MaxRetries.ToString(CultureInfo.InvariantCulture),
+                Source(options.MaxRetries != DeepSeekDefaults.MaxRetries)),
+        ];
+    }
+}

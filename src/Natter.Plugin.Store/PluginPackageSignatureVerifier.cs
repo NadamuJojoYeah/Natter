@@ -8,6 +8,63 @@ public sealed class PluginPackageSignatureVerifier
 {
     public const string Algorithm = "ECDSA-P256-SHA256";
 
+    /// <summary>
+    /// Canonical text format version. v2 uses length prefixes so a file name can never shift the
+    /// payload boundaries; v1 relied on "hash + two spaces + name + newline" (S2-C7).
+    /// </summary>
+    public const int CanonicalFormatVersion = 2;
+
+    public const string CanonicalV2Header = "nps-hash-v2";
+
+    /// <summary>Builds the unambiguous canonical hash payload used for signing.</summary>
+    public static string BuildCanonicalText(IReadOnlyList<(string Path, string Hash)> files)
+    {
+        ArgumentNullException.ThrowIfNull(files);
+
+        var builder = new StringBuilder();
+        builder.Append(CanonicalV2Header).Append('\n');
+        builder.Append(files.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)).Append('\n');
+
+        foreach (var (path, hash) in files)
+        {
+            var encodedPath = Uri.EscapeDataString(path.Replace('\\', '/'));
+            builder.Append(encodedPath.Length.ToString(System.Globalization.CultureInfo.InvariantCulture))
+                .Append(':')
+                .Append(encodedPath)
+                .Append('\n')
+                .Append(hash)
+                .Append('\n');
+        }
+
+        return builder.ToString();
+    }
+
+    /// <summary>
+    /// Legacy (v1) canonical text: <c>hash + "  " + path + "\n"</c>. Kept only to detect and
+    /// explicitly reject packages signed with the ambiguous format.
+    /// </summary>
+    public static string BuildLegacyCanonicalText(IReadOnlyList<(string Path, string Hash)> files)
+    {
+        ArgumentNullException.ThrowIfNull(files);
+
+        var builder = new StringBuilder();
+        foreach (var (path, hash) in files)
+            builder.Append(hash).Append("  ").Append(path).Append('\n');
+
+        return builder.ToString();
+    }
+
+    /// <summary>Constant-time comparison for hex hashes (S2-C6).</summary>
+    public static bool HashesMatch(string? expected, string? actual)
+    {
+        if (expected is null || actual is null)
+            return false;
+
+        var left = Encoding.UTF8.GetBytes(expected.ToLowerInvariant());
+        var right = Encoding.UTF8.GetBytes(actual.ToLowerInvariant());
+        return left.Length == right.Length && CryptographicOperations.FixedTimeEquals(left, right);
+    }
+
     public bool TryVerify(
         byte[] signature,
         string canonicalHashText,

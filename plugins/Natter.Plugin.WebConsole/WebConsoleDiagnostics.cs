@@ -79,6 +79,8 @@ public sealed class WebConsoleDiagnostics
     private readonly WebConsoleAuditStore _audit;
     private readonly WebConsoleTokenAuthenticator _tokens;
     private readonly WebConsoleStaticAssets _assets;
+    private readonly bool _viewerLoginEnabled;
+    private readonly WebConsoleAuditLocation? _auditLocation;
     private readonly TimeProvider _clock;
     private readonly DateTimeOffset _startedAt;
 
@@ -92,7 +94,9 @@ public sealed class WebConsoleDiagnostics
         WebConsoleAuditStore audit,
         WebConsoleTokenAuthenticator tokens,
         WebConsoleStaticAssets assets,
-        TimeProvider clock)
+        bool viewerLoginEnabled,
+        TimeProvider clock,
+        WebConsoleAuditLocation? auditLocation = null)
     {
         _identity = identity ?? throw new ArgumentNullException(nameof(identity));
         _options = options ?? throw new ArgumentNullException(nameof(options));
@@ -103,11 +107,29 @@ public sealed class WebConsoleDiagnostics
         _audit = audit ?? throw new ArgumentNullException(nameof(audit));
         _tokens = tokens ?? throw new ArgumentNullException(nameof(tokens));
         _assets = assets ?? throw new ArgumentNullException(nameof(assets));
+        _viewerLoginEnabled = viewerLoginEnabled;
+        _auditLocation = auditLocation;
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
         _startedAt = clock.GetUtcNow();
     }
 
     /// <summary>Config preview with the live Phase 2 write gap resolved from the admin surface.</summary>
+    /// <summary>Compatibility overload: hosts/tests without viewer logins.</summary>
+    public WebConsoleDiagnostics(
+        WebConsoleIdentity identity,
+        WebConsoleOptions options,
+        WebConsoleConfigPreview config,
+        IWebConsoleHostPort hostPort,
+        WebConsoleAdminGateway admin,
+        WebConsoleServerStatusHolder serverStatus,
+        WebConsoleAuditStore audit,
+        WebConsoleTokenAuthenticator tokens,
+        WebConsoleStaticAssets assets,
+        TimeProvider clock)
+        : this(identity, options, config, hostPort, admin, serverStatus, audit, tokens, assets, false, clock)
+    {
+    }
+
     public WebConsoleConfigPreview ConfigPreview => _config with { WriteGapCode = BuildAdminStatus().ConfigGapCode };
 
     public WebConsoleAdminStatus AdminStatus => BuildAdminStatus();
@@ -135,8 +157,26 @@ public sealed class WebConsoleDiagnostics
                 status.State is "listening" or "external" ? "ok" : "degraded",
                 status.State == "external" ? $"external instance {status.Url}" : status.Url ?? status.ErrorCode),
             new("token", _tokens.IsUsable ? "ok" : "error", _tokens.Problem),
+            new(
+                "viewer-login",
+                string.IsNullOrEmpty(_options.ViewerToken) || _viewerLoginEnabled ? "ok" : "degraded",
+                string.IsNullOrEmpty(_options.ViewerToken)
+                    ? "not configured"
+                    : _viewerLoginEnabled ? "enabled (read-only role)" : "webconsole.viewer-token-missing"),
             new("static-assets", "ok", $"{_assets.Files.Count} whitelisted assets"),
-            new("audit", auditWritable ? "ok" : "error", auditError),
+            new("audit", auditWritable ? "ok" : "error", auditError ?? _audit.FilePath),
+            new(
+                "redaction",
+                "ok",
+                _admin.Redaction.UsesHostRedactor ? "host IAdminRedactor" : "plugin rules (host redactor not bridged)"),
+            new(
+                "audit-root",
+                _auditLocation is null || _auditLocation.Root == WebConsoleAuditRoot.StateDirectory
+                    ? "ok"
+                    : "degraded",
+                _auditLocation is null
+                    ? _audit.FilePath
+                    : $"{WebConsoleAuditPaths.RootName(_auditLocation.Root)}: {_auditLocation.Directory}"),
             new("host.health", host.Health.Available ? "ok" : "degraded", host.Health.GapCode ?? host.Health.Reason),
             new("host.plugins", host.Plugins.Available ? "ok" : "degraded", host.Plugins.Data?.Source ?? host.Plugins.GapCode),
             new("host.admin_config", admin.ConfigStoreAvailable ? "ok" : "degraded", admin.ConfigGapCode ?? "available"),

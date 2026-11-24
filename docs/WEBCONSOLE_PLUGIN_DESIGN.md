@@ -3,7 +3,7 @@
 > **状态**：Accepted design · Phase 1 delivered；Phase 2/3 插件侧校验/策略已就绪（2026-11-18）
 > **日期**：2026-11-17（设计）/ 2026-11-18（实现决策）
 > **定位**：Natter 的独立运维/调试插件，提供 Web 诊断、配置编辑和受限命令终端；不进入 core，不默认启用。
-> **关联**：[NPS v1](PLUGIN_SPEC.md)、[运维手册](OPERATIONS_RUNBOOK.md)、[Harness 架构](HARNESS_ARCHITECTURE.md)、[P5 Agent Runtime](P5_AGENT_TASK_RUNTIME.md)、[宿主契约缺口与适配](WEBCONSOLE_HOST_API_GAP.md)、[插件使用说明](WEBCONSOLE_PLUGIN.md)
+> **关联**：[NPS v1](PLUGIN_SPEC.md)、[运维手册](OPERATIONS_RUNBOOK.md)、[Harness 架构](HARNESS_ARCHITECTURE.md)、[P5 Agent Runtime](P5_AGENT_TASK_RUNTIME.md)、[宿主契约缺口与适配](archive/WEBCONSOLE-HOST-API-GAP.md)、[插件使用说明](WEBCONSOLE_PLUGIN.md)
 
 ---
 
@@ -109,7 +109,7 @@ csproj（**实际实现**）：
 - `plugin.json` 同时作为 `EmbeddedResource`（测试可校验）和输出文件；
 - `config.schema.json`、`config.sample.json`、`wwwroot/**` 复制到输出目录，便于 staging。
 
-> **实现偏差**：Kestrel 改为 BCL `HttpListener`。这不是“简化设计”，而是宿主 ALC/runtimeconfig 当前无法提供 ASP.NET Core 共享框架的必然结果；迁移路径已写入 [缺口文档 G7](WEBCONSOLE_HOST_API_GAP.md#6-g7aspnet-core--alc-实测结论)。
+> **实现偏差**：Kestrel 改为 BCL `HttpListener`。这不是“简化设计”，而是宿主 ALC/runtimeconfig 当前无法提供 ASP.NET Core 共享框架的必然结果；迁移路径已写入 [缺口文档 G7](archive/WEBCONSOLE-HOST-API-GAP.md#6-g7aspnet-core--alc-实测结论)。
 
 ---
 
@@ -118,7 +118,7 @@ csproj（**实际实现**）：
 ```json
 {
   "schemaVersion": 1,
-  "id": "natter.plugin.webconsole",
+  "id": "natter.tool.admin.webconsole",
   "name": "Natter WebConsole",
   "version": "0.1.0",
   "kind": "admin",
@@ -160,7 +160,7 @@ admin.command
 
 第一版可以只启动 loopback server + `web status` CLI，不要求 core 先支持 `admin.ui`。
 
-> **实际 manifest 偏差**：宿主 `PluginKind` 没有 `admin`，`admin.*` contribution 也未进入 v1 词表，因此 Phase 1 使用 `"kind": "tool"` 且只声明 `cli.command/web.status`。登记见 [缺口 G1/G2](WEBCONSOLE_HOST_API_GAP.md#3-g1g2manifest-与管理面贡献点)。
+> **实际 manifest 偏差**：宿主 `PluginKind` 没有 `admin`，`admin.*` contribution 也未进入 v1 词表，因此 Phase 1 使用 `"kind": "tool"` 且只声明 `cli.command/web.status`。登记见 [缺口 G1/G2](archive/WEBCONSOLE-HOST-API-GAP.md#3-g1g2manifest-与管理面贡献点)。
 
 ---
 
@@ -219,16 +219,17 @@ admin.command
 - 不在日志/HTML/JSON 返回 secret；
 - 审计所有写操作和命令。
 
-### 6.2 角色
-
-P5 第一版可以只有：
+### 6.2 角色（已实现，2026-11-21）
 
 ```text
-viewer  -> read-only
-admin   -> config write / command
+viewer  -> read-only（快照/日志/审计/预览/文档读取 + 两个 /validate）
+admin   -> config write / command / rollback
 ```
 
-不要把角色系统做成复杂 RBAC；先两个角色够用。
+- 两个凭据：`WEBCONSOLE_TOKEN`（必需）与 `WEBCONSOLE_VIEWER_TOKEN`（可选，`viewerToken` 配置改为 `${secret:WEBCONSOLE_VIEWER_TOKEN}` 才启用）；
+- **服务端强制**：`WebConsoleAuthorization.Classify(method, path)` → `Read`/`Manage`，viewer 的 `Manage` 一律 `403 auth.forbidden`；UI 只做提示；
+- 同一密钥用于两个角色时 viewer 登录自动禁用（`viewer-token-duplicates-admin`）；
+- 不做复杂 RBAC：只有这两个角色，权限矩阵见使用说明 §4.2/§4.3。
 
 ### 6.3 反向代理
 
@@ -291,15 +292,16 @@ public interface IAdminDiagnostics
 > 1. `natter serve --health-port` 的 `/health`（health/upstreams/providers/plugins 计数）；
 > 2. 插件 provider 中的 `IPluginRuntimeDiagnostics`（若宿主桥接，见缺口 G4）。
 >
-> 都不可用时区块返回 `available:false` + `gapCode`，不伪造数据。契约与降级表见 [WEBCONSOLE_HOST_API_GAP.md](WEBCONSOLE_HOST_API_GAP.md)。
+> 都不可用时区块返回 `available:false` + `gapCode`，不伪造数据。契约与降级表见 [WEBCONSOLE_HOST_API_GAP.md](archive/WEBCONSOLE-HOST-API-GAP.md)。
 
-### 7.3 日志
+### 7.3 日志（已实现：tail + 过滤 + 分页 + 导出）
 
-- 只返回最近 N 行；
-- 先脱敏；
-- 不返回 prompt/memory 正文；
-- 不返回 secret/代理凭据；
-- 支持按 level/plugin 过滤。
+- 只返回最近 N 行（宿主 `AdminLogBuffer` 有界环形缓冲）；
+- 先脱敏（宿主 `IAdminRedactor` + 插件 `SanitizeText`）；
+- 不返回 prompt/memory 正文、不返回 secret/代理凭据；
+- 支持 `level`（最低级别）/`source`/`q`/`since`/`until` 过滤，`limit`+`offset` 分页（上限 500），`order=asc|desc`；
+- 导出 `format=text|jsonl`：附件下载、5000 行 / 1 MiB 字节上限、截断标记、脱敏同源；
+- 轮转不在插件内做：宿主缓冲自动淘汰，插件审计超 1 MiB 轮转为 `.1`，长期留存由运维采集。
 
 ---
 
@@ -488,7 +490,7 @@ Phase 1 已落实：
 3. 插件新增 `KestrelWebConsoleServer` 实现同一服务器抽象，用配置切换；
 4. 两套实现跑同一组请求处理测试。
 
-详细证据与迁移步骤见 [WEBCONSOLE_HOST_API_GAP.md §6](WEBCONSOLE_HOST_API_GAP.md#6-g7aspnet-core--alc-实测结论)。
+详细证据与迁移步骤见 [WEBCONSOLE_HOST_API_GAP.md §6](archive/WEBCONSOLE-HOST-API-GAP.md#6-g7aspnet-core--alc-实测结论)。
 
 ---
 
@@ -524,6 +526,14 @@ DeactivateAsync
 
 ## 12. 审计与日志
 
+### 12.0 审计落盘位置（2026-11-21 修正）
+
+审计日志属于**运行期状态**，不写插件包：`$NATTER_STATE_DIR/webconsole/audit/webconsole-audit.jsonl`，
+目录 0700 / 文件 0600；只有 `NATTER_STATE_DIR` 缺失时才回落 `<插件目录>/audit`（并打 warning），
+回落且不可写 → 激活失败 `webconsole.audit-unwritable`。systemd `ProtectSystem=strict` 与只读容器因此都不需要放宽插件目录。
+`WebConsoleAuditPaths` 负责解析，`web status` 输出 `audit.root`（`state-directory` / `plugin-directory`），健康检查 `audit-root` 报 `degraded` 表示回落。
+
+
 审计事件：
 
 - 登录成功/失败；
@@ -531,7 +541,11 @@ DeactivateAsync
 - 配置读取/保存；
 - 命令执行；
 - 配置回滚；
-- 终端拒绝。
+- 终端拒绝；
+- 角色拒绝（`auth.role_denied`）、只读拒绝（`console.read_only`）；
+- 日志查看/导出（`logs.view`/`logs.export`，只记 limit/匹配数/行数，不记内容）。
+
+审计文件超过 1 MiB 轮转为 `.1`；目录 0700、文件 0600；长期留存与跨主机采集由运维负责。
 
 日志字段：
 
@@ -615,6 +629,15 @@ time, user, ip, action, target, result, duration
 - [x] `GET /api/commands` 状态、`POST /api/commands` 真实执行（exit/stdout/stderr/截断/超时）；
 - [x] 不拼 shell / 不启动子进程（宿主 runner 同样不启子进程）。
 
+### 角色与日志硬化（2026-11-21 追加）
+
+- [x] viewer/admin 双凭据，服务端强制（`403 auth.forbidden`），同密钥自动禁用 viewer；
+- [x] `/api/logs` 过滤（level/source/q/since/until）、分页（limit/offset/order）、`/api/logs/export`（text/jsonl，脱敏 + 有界）；
+- [x] 只读/关闭态统一错误码（`console.read_only` → `config.write_disabled`/`command.disabled`），`/validate` 在只读与 viewer 下可用；
+- [x] 备份路径/undo 文案（会话内快照上限与 TTL、宿主备份手动恢复）、viewer 禁用按钮与原因提示；
+- [x] ui-smoke 覆盖角色徽章、日志面板、导出 URL；
+- [x] audit 目录改到 `$NATTER_STATE_DIR/webconsole/audit`（0700/0600，回落插件目录时 warning + `audit-unwritable`），只读插件挂载可用。
+
 ### Phase 4：可选 sidecar
 
 - ttyd/Wetty/SSH 集成；
@@ -624,7 +647,7 @@ time, user, ip, action, target, result, duration
 
 ## 15. 验收标准
 
-Phase 1 状态见 §18；未达成项都对应 [缺口文档](WEBCONSOLE_HOST_API_GAP.md) 中的 Gx 编号。
+Phase 1 状态见 §18；未达成项都对应 [缺口文档](archive/WEBCONSOLE-HOST-API-GAP.md) 中的 Gx 编号。
 
 - [x] 默认只绑定 loopback；
 - [x] 无 token 不启动；
@@ -633,6 +656,8 @@ Phase 1 状态见 §18；未达成项都对应 [缺口文档](WEBCONSOLE_HOST_AP
 - [x] 配置编辑 schema/diff/backup/lock（宿主 store + 插件 409/502 映射）
 - [x] 路径白名单（只读侧 + 文档 id 双白名单）
 - [x] 命令 allowlist（插件 + 宿主双重）
+- [x] viewer 只读 + admin 管理（服务端强制）
+- [x] 日志过滤/分页/导出（脱敏、有界）
 - [x] 审计；
 - [ ] file plugin 可加载（staging 脚本已提供，待真实宿主集成验证）
 - [x] ASP.NET Core ALC：Phase 1 不使用，改用 HttpListener（G7）
@@ -663,6 +688,10 @@ Phase 1 状态见 §18；未达成项都对应 [缺口文档](WEBCONSOLE_HOST_AP
 ---
 
 ## 18. Phase 1 实现映射（2026-11-18）
+
+> 审计路径修正（2026-11-21）：`WebConsoleAuditPaths`（state 根解析 + 回落 warning）、`WebConsoleAuditStore.EnsurePrivateDirectory`（目录链 0700）、`WebConsoleRuntime`（`audit-unwritable` 启动错误码 + `audit` 状态块）。测试：`tests/Natter.Plugin.WebConsole.Tests/Phase23/AuditPathTests.cs`、`WebConsoleRuntimeTests`。
+
+> 角色/日志硬化映射（2026-11-21）：`WebConsoleAuthorization`（访问分类 + 统一错误码）、`WebConsoleCredentials`（viewer 凭据解析）、`WebConsoleLogsPolicy`（过滤/分页/导出边界）、`WebConsoleRequestHandler` 的 `logs`/`logs/export` 路由与角色闸门、`wwwroot` 角色徽章与日志面板。测试见 `tests/Natter.Plugin.WebConsole.Tests/Phase23/{RoleEnforcementTests,LogsFilterExportTests,LogsPolicyTests,ReadOnlyCodesTests}.cs`。
 
 > Phase 2/3 实现映射（2026-11-21）：`WebConsoleAdminSurface`（契约解析）、`WebConsoleAdminGateway`（读/校验/保存/undo/run/logs + 错误码映射 + 内存 undo）、`WebConsoleRequestHandler` 的 `/api/config/*` 与 `/api/commands*` 路由、`WebConsoleDiagnostics`（`host.admin_config`/`host.admin_command`/`host.logs` 检查）、`wwwroot` 配置编辑器与命令台。测试见 `tests/Natter.Plugin.WebConsole.Tests/Phase23`。
 

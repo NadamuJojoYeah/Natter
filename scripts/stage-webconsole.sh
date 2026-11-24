@@ -5,7 +5,7 @@
 #   CONFIGURATION=Debug ./scripts/stage-webconsole.sh /srv/natter/plugins
 #
 # Layout written:
-#   <root>/natter.plugin.webconsole/
+#   <root>/natter.tool.admin.webconsole/
 #   ├── plugin.json
 #   ├── config.schema.json
 #   ├── config.sample.json
@@ -27,7 +27,7 @@ fi
 
 SOURCE="$ROOT/plugins/Natter.Plugin.WebConsole"
 BIN="$SOURCE/bin/$CONFIGURATION/net10.0"
-DEST="$PLUGIN_ROOT/natter.plugin.webconsole"
+DEST="$PLUGIN_ROOT/natter.tool.admin.webconsole"
 
 if [[ ! -f "$BIN/Natter.Plugin.WebConsole.dll" ]]; then
   echo "== building WebConsole plugin ($CONFIGURATION) =="
@@ -55,7 +55,7 @@ cat <<EOF
 staged: $DEST
 next:
   1. provide secret WEBCONSOLE_TOKEN via the host secret provider (env or key store)
-  2. copy config.sample.json to $DEST/config.json (or <plugin-config-dir>/natter.plugin.webconsole.json)
+  2. copy config.sample.json to $DEST/config.json (or <plugin-config-dir>/natter.tool.admin.webconsole.json)
   3. start the host with: natter serve --health-port 5099
   4. open http://127.0.0.1:5090/ and run: natter web status --json
 EOF

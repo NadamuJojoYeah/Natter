@@ -11,27 +11,21 @@ public sealed class WebConsoleServerTests
     [Fact]
     public async Task Server_serves_login_and_snapshot_over_loopback()
     {
-        var port = FreePort();
-        using var harness = WebConsoleHarness.Create(new WebConsoleOptions { Port = port });
-        await using var server = new WebConsoleServer(
-            harness.Options,
-            harness.Handler,
-            harness.Status,
-            new NullPluginLog());
+        await using var serverUnderTest = await ServerUnderTest.StartAsync(port => new WebConsoleOptions { Port = port });
+        var harness = serverUnderTest.Harness;
+        var baseUrl = serverUnderTest.BaseUrl;
 
-        await server.StartAsync();
         Assert.Equal("listening", harness.Status.Current.State);
 
         try
         {
             using var client = new HttpClient(new SocketsHttpHandler { UseProxy = false });
-            var baseUrl = $"http://127.0.0.1:{port}";
 
             var index = await client.GetAsync(baseUrl + "/");
             Assert.Equal(HttpStatusCode.OK, index.StatusCode);
             Assert.Equal("text/html; charset=utf-8", index.Content.Headers.ContentType?.ToString());
             Assert.Equal(
-                "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
+                "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
                 + "connect-src 'self'; font-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
                 Assert.Single(index.Headers.GetValues("Content-Security-Policy")));
 
@@ -56,11 +50,11 @@ public sealed class WebConsoleServerTests
 
             Assert.Equal(HttpStatusCode.OK, snapshot.StatusCode);
             using var document = JsonDocument.Parse(await snapshot.Content.ReadAsStringAsync());
-            Assert.Equal("natter.plugin.webconsole", document.RootElement.GetProperty("self").GetProperty("pluginId").GetString());
+            Assert.Equal("natter.tool.admin.webconsole", document.RootElement.GetProperty("self").GetProperty("pluginId").GetString());
         }
         finally
         {
-            await server.StopAsync();
+            await serverUnderTest.Server.StopAsync();
         }
 
         Assert.Equal("stopped", harness.Status.Current.State);
@@ -69,7 +63,7 @@ public sealed class WebConsoleServerTests
     [Fact]
     public async Task Port_conflict_reports_stable_error_code()
     {
-        var port = FreePort();
+        var port = LoopbackPortPool.Reserve();
         var blocker = new TcpListener(IPAddress.Loopback, port);
         blocker.Start();
 
@@ -111,22 +105,22 @@ public sealed class WebConsoleServerTests
     }
 
     [Fact]
-    public void Packaged_wwwroot_loads_without_inline_script()
+    public void Packaged_wwwroot_ships_a_module_document_with_no_inline_script()
     {
-        var assets = WebConsoleStaticAssets.Load(Path.Combine(AppContext.BaseDirectory, "plugin-assets"));
+        var root = Path.Combine(AppContext.BaseDirectory, "plugin-assets");
+        if (!File.Exists(Path.Combine(root, "index.html")))
+            return; // UI build not run in this checkout; the build gate asserts it in CI/publish.
 
-        Assert.Equal(["/", "/app.js", "/app.css"], assets.Files);
+        var assets = WebConsoleStaticAssets.Load(root);
         Assert.True(assets.TryGet("/", out var index));
         var html = Encoding.UTF8.GetString(index.Body);
-        Assert.Contains("src=\"/app.js\"", html);
-        Assert.DoesNotContain("<script>", html);
-        Assert.DoesNotContain("onclick=", html);
+
+        // Vite emits `<script type="module" crossorigin src="/assets/index-<hash>.js">`.
+        Assert.Contains("type=\"module\"", html, StringComparison.Ordinal);
+        Assert.Matches(@"src=""/assets/[A-Za-z0-9._-]+\.js""", html);
+        Assert.DoesNotContain("<script>", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("onclick=", html, StringComparison.Ordinal);
+        Assert.Equal(WebConsoleStaticAssets.NoStoreCacheControl, index.Headers["Cache-Control"]);
     }
 
-    private static int FreePort()
-    {
-        using var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        return ((IPEndPoint)listener.LocalEndpoint).Port;
-    }
 }

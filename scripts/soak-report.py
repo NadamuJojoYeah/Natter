@@ -12,10 +12,20 @@ Answers the questions a 24h soak acceptance actually needs:
     "lastDisconnectAt set + lastError null" heuristic, so a fixed host is never over-counted.
   * did anything fail to send (sendFailures / lastSendError)?
 
+Modes:
+  --mode wallclock   (default) one uninterrupted window. Any gap, restart or missing coverage
+                     fails it. Use this on a machine with stable power.
+  --mode cumulative  "effective runtime" across days, restarts and power cuts. Each segment is
+                     bounded by startedAt changes; only the first interval*1.5 of every sample gap
+                     counts as effective runtime; every gap must be attributed. Extra guards:
+                     a minimum segment length and a worst-segment RSS drift limit, so a run cannot
+                     be assembled out of many short fragments.
+
 Usage:
   python3 scripts/soak-report.py artifacts/ops/.../soak-2026-11-17.jsonl
-  python3 scripts/soak-report.py soak/*.jsonl --interval 300 --min-coverage 95
+  python3 scripts/soak-report.py soak/*.jsonl --interval 120 --min-coverage 95
   python3 scripts/soak-report.py soak.jsonl --json > soak-report.json
+  python3 scripts/soak-report.py soak-*.jsonl --mode cumulative --target-hours 24
   python3 scripts/soak-report.py --self-test          # synthetic fixtures, no input files
 
 Exit codes: 0 = PASS, 1 = FAIL, 2 = usage/unreadable input.
@@ -65,6 +75,9 @@ class Sample:
     at: dt.datetime
     raw: dict
     source: str = "unknown"
+    # An unreachable / parse-failed sample is still a point in time: the host was expected to
+    # answer and did not. Dropping it would hide an outage window (S1-10).
+    is_error: bool = False
 
 
 @dataclass
@@ -104,6 +117,9 @@ def load(paths: list[Path]) -> SoakAudit:
                 continue
             if row.get("error"):
                 audit.errors.append(row)
+                audit.samples.append(
+                    Sample(at=at, raw=row, source=row.get("source", "unknown"), is_error=True)
+                )
                 continue
             audit.samples.append(Sample(at=at, raw=row, source=row.get("source", "unknown")))
     audit.samples.sort(key=lambda s: s.at)
@@ -117,9 +133,21 @@ def upstream_view(sample: Sample, prefix: str) -> dict | None:
     return None
 
 
-def summarise(audit: SoakAudit, interval: int, max_gap: int) -> dict:
+def summarise(
+    audit: SoakAudit,
+    interval: int,
+    max_gap: int,
+    max_error_percent: float = 5.0,
+    # `plugins-failed` is allowed by default: it means a plugin is unconfigured, not that the runtime
+    # is unstable. Soak measures uptime/send-failure behaviour, so plugin config gaps must not
+    # invalidate every sample. Use --allow-status healthy to require a fully configured host.
+    allow_status: tuple[str, ...] = ("healthy", "plugins-failed"),
+) -> dict:
     samples = audit.samples
-    if not samples:
+    timeline = samples  # every timestamp, healthy or not
+    healthy = [s for s in samples if not s.is_error]
+
+    if not timeline:
         return {
             "files": audit.files,
             "samples": 0,
@@ -129,13 +157,34 @@ def summarise(audit: SoakAudit, interval: int, max_gap: int) -> dict:
             "reasons": ["no usable /health samples in the input"],
         }
 
-    first, last = samples[0].at, samples[-1].at
+    first, last = timeline[0].at, timeline[-1].at
     window = (last - first).total_seconds()
-    expected = int(window // interval) + 1 if interval > 0 else len(samples)
-    coverage = round(100.0 * len(samples) / expected, 1) if expected else 100.0
+
+    # Coverage denominator: the sampler declares its contract in the header
+    # (durationSeconds / intervalSeconds). Using it means "the host died for 23h and only 2 samples
+    # survived" cannot look like 100% coverage (S1-10). Observation span is only a fallback and the
+    # report says which basis was used.
+    declared_expected = 0
+    declared_intervals: list[int] = []
+    for header in audit.headers:
+        duration = header.get("durationSeconds")
+        header_interval = header.get("intervalSeconds", interval)
+        if isinstance(duration, (int, float)) and duration > 0 and isinstance(header_interval, (int, float)) and header_interval > 0:
+            declared_expected += int(duration // header_interval) + 1
+            declared_intervals.append(int(header_interval))
+    if declared_expected > 0:
+        expected = declared_expected
+        coverage_basis = "declared-header"
+    else:
+        expected = int(window // interval) + 1 if interval > 0 else len(timeline)
+        coverage_basis = "observed-span"
+    coverage = round(100.0 * len(healthy) / expected, 1) if expected else 100.0
+
+    error_samples = [s for s in timeline if s.is_error]
+    error_percent = round(100.0 * len(error_samples) / len(timeline), 2) if timeline else 0.0
 
     gaps: list[dict] = []
-    for prev, cur in zip(samples, samples[1:]):
+    for prev, cur in zip(timeline, timeline[1:]):
         delta = (cur.at - prev.at).total_seconds()
         if delta > interval * 1.5:
             gaps.append(
@@ -145,8 +194,30 @@ def summarise(audit: SoakAudit, interval: int, max_gap: int) -> dict:
                     "seconds": int(delta),
                     "missingSamples": max(0, int(round(delta / interval)) - 1),
                     "exceedsTolerance": delta > max_gap,
+                    "bordersErrorSample": prev.is_error or cur.is_error,
                 }
             )
+
+    # Consecutive error samples are an outage window, not "coverage". Each sample stands for one
+    # interval of expected runtime, so a run of N errors hides at least N*interval seconds.
+    unavailable_windows: list[dict] = []
+    run: list[Sample] = []
+    for sample in timeline + [None]:
+        if sample is not None and sample.is_error:
+            run.append(sample)
+            continue
+        if run:
+            end_at = run[-1].at
+            unavailable_windows.append(
+                {
+                    "from": run[0].at.isoformat(),
+                    "to": end_at.isoformat(),
+                    "errorSamples": len(run),
+                    "seconds": int((end_at - run[0].at).total_seconds() + interval),
+                }
+            )
+            run = []
+    unavailable_seconds = sum(window["seconds"] for window in unavailable_windows)
 
     restarts: list[dict] = []
     uptime_regressions = 0
@@ -282,9 +353,35 @@ def summarise(audit: SoakAudit, interval: int, max_gap: int) -> dict:
 
     conversations = [s.raw.get("conversations") for s in samples if isinstance(s.raw.get("conversations"), int)]
 
+    notes_only: list[str] = []
     reasons: list[str] = []
     if coverage < 95.0:
-        reasons.append(f"coverage {coverage}% < 95%")
+        reasons.append(
+            f"coverage {coverage}% < 95% (basis: {coverage_basis}; "
+            f"{len(healthy)} healthy of {expected} expected samples)"
+        )
+    if error_samples:
+        reasons.append(
+            f"{len(error_samples)}/{len(timeline)} samples were unreachable/unparsable "
+            f"({error_percent}%, allowed {max_error_percent}%)"
+        ) if error_percent > max_error_percent else notes_only.append(
+            f"{len(error_samples)}/{len(timeline)} samples were unreachable/unparsable "
+            f"({error_percent}%) — under the {max_error_percent}% limit"
+        )
+    if unavailable_windows:
+        reasons.append(
+            f"{len(unavailable_windows)} outage window(s) from consecutive error samples, "
+            f"{round(unavailable_seconds / 3600.0, 2)}h total"
+        )
+    disallowed = {
+        status: count for status, count in status_counts.items() if status not in allow_status
+    }
+    if disallowed:
+        reasons.append(
+            "status not allowed in "
+            + ", ".join(f"{status}×{count}" for status, count in sorted(disallowed.items()))
+            + f" (allowed: {', '.join(allow_status)})"
+        )
     over = [g for g in gaps if g["exceedsTolerance"]]
     if over:
         reasons.append(
@@ -316,7 +413,14 @@ def summarise(audit: SoakAudit, interval: int, max_gap: int) -> dict:
         "soakHeaders": audit.headers,
         "soakStops": audit.stops,
         "samples": len(samples),
-        "errorSamples": len(audit.errors),
+        "healthySamples": len(healthy),
+        "errorSamples": len(error_samples),
+        "errorPercent": error_percent,
+        "maxErrorPercent": max_error_percent,
+        "allowedStatus": list(allow_status),
+        "disallowedStatusCounts": disallowed,
+        "unavailableWindows": unavailable_windows,
+        "unavailableSeconds": unavailable_seconds,
         "unparsableLines": audit.unparsable_lines,
         "firstSample": first.isoformat(),
         "lastSample": last.isoformat(),
@@ -324,6 +428,7 @@ def summarise(audit: SoakAudit, interval: int, max_gap: int) -> dict:
         "windowHours": round(window / 3600.0, 2),
         "intervalSeconds": interval,
         "expectedSamples": expected,
+        "coverageBasis": coverage_basis,
         "coveragePercent": coverage,
         "gaps": gaps,
         "restarts": restarts,
@@ -335,6 +440,7 @@ def summarise(audit: SoakAudit, interval: int, max_gap: int) -> dict:
         "tier1ProviderUnavailableSamples": len(tier1_unavailable),
         "result": result,
         "reasons": reasons,
+        "notes": notes_only,
     }
 
 
@@ -352,7 +458,21 @@ def print_human(summary: dict) -> None:
     print(f"samples         : {summary['samples']}  (errors={summary['errorSamples']}, unparsable={summary['unparsableLines']})")
     print(f"window          : {summary['firstSample']} -> {summary['lastSample']}  ({summary['windowHours']}h)")
     print(f"interval        : {summary['intervalSeconds']}s   expected {summary['expectedSamples']} samples")
-    print(f"coverage        : {summary['coveragePercent']}%")
+    print(f"coverage        : {summary['coveragePercent']}%"
+          f" (basis: {summary.get('coverageBasis', 'unknown')};"
+          f" {summary.get('healthySamples', summary['samples'])} healthy of"
+          f" {summary['expectedSamples']} expected)")
+    error_count = summary.get("errorSamples", 0)
+    if error_count:
+        print(f"error samples   : {error_count} ({summary.get('errorPercent', 0)}%,"
+              f" allowed {summary.get('maxErrorPercent', 5)}%)")
+    windows = summary.get("unavailableWindows", [])
+    if windows:
+        total_h = round(sum(w["seconds"] for w in windows) / 3600.0, 2)
+        print(f"outage windows  : {len(windows)} from consecutive error samples, {total_h}h total")
+        for window in windows[:5]:
+            print(f"  {window['from']} -> {window['to']}  {window['seconds']}s"
+                  f"  ({window['errorSamples']} error samples)")
     print(f"status counts   : {summary['statusCounts']}")
     print(f"restarts        : {len(summary['restarts'])}   uptime regressions: {summary['uptimeRegressions']}")
     if summary["restarts"]:
@@ -389,6 +509,403 @@ def print_human(summary: dict) -> None:
         print(f"  - {reason}")
 
 
+def print_cumulative(summary: dict) -> None:
+    print(f"soak files      : {len(summary.get('files', []))}")
+    for name in summary.get("files", []):
+        print(f"                  {name}")
+    print(f"mode            : cumulative (effective runtime; gaps attributed, not fatal by themselves)")
+    effective = summary.get("effectiveHours", 0.0)
+    target = summary.get("targetHours", 24)
+    marker = "ok" if effective >= target else "SHORT"
+    print(f"effective       : {effective}h / target {target}h   [{marker}]  ({summary.get('effectiveSeconds', 0)}s)")
+    print(f"window          : {summary.get('sampleCount', summary.get('samples', 0))} samples, "
+          f"{round(summary.get('windowSeconds', 0) / 3600.0, 2)}h wall clock, interval "
+          f"{summary.get('intervalSeconds', '?')}s, tolerance {summary.get('toleranceSeconds', '?')}s")
+    print(f"segments        : {summary.get('segmentCount', 0)}   longest {summary.get('longestSegmentHours', 0)}h"
+          f" (required {summary.get('minSegmentHours', 6)}h)   restarts {summary.get('restartCount', 0)}")
+    attribution = summary.get("gapAttribution", {})
+    gaps = summary.get("gaps", [])
+    print(f"gaps            : {len(gaps)}   host-down={attribution.get('host-down', 0)}"
+          f" host-restart={attribution.get('host-restart', 0)}"
+          f" suspend-or-stall={attribution.get('suspend-or-stall', 0)}"
+          f" unknown={attribution.get('unknown', 0)}")
+    for gap in gaps:
+        flag = "!" if gap["attribution"] == "unknown" else " "
+        detail = gap.get("detail", {})
+        note = detail.get("note", "")
+        print(f" {flag} {gap['from']} -> {gap['to']}  {gap['seconds']}s  {gap['attribution']}"
+              f"{('  (' + note + ')') if note else ''}")
+    print(f"unexplained     : {summary.get('unexplainedPercent', 0)}%"
+          f" (allowed {summary.get('maxUnexplainedPercent', 2)}%),"
+          f" {summary.get('unexplainedSeconds', 0)}s of excess gap time")
+    worst = summary.get("worstRssDriftPercent")
+    if worst is None:
+        print(f"worst RSS drift : insufficient-data (allowed {summary.get('maxRssDriftPercent', 20)}%)")
+    else:
+        print(f"worst RSS drift : {worst}% (allowed {summary.get('maxRssDriftPercent', 20)}%)")
+    attribution_block = summary.get("disconnectAttribution", {})
+    print(f"disconnects     : attributed={attribution_block.get('attributed', 0)}"
+          f" silent-new={attribution_block.get('silentNewPayload', 0)}"
+          f" silent-legacy={attribution_block.get('silentLegacyPayload', 0)}"
+          f" rate={attribution_block.get('ratePercent', 100)}%")
+    print(f"error samples   : {summary.get('errorSamples', 0)}"
+          f" ({summary.get('errorPercent', 0)}%, allowed {summary.get('maxErrorPercent', 5)}%)"
+          f" — never counted as uptime")
+    print(f"allowed status  : {', '.join(summary.get('allowedStatus', ['healthy']))}"
+          f"   observed: {summary.get('statusCounts', {})}")
+    print(f"sendFailures    : max {summary.get('sendFailuresMax', 0)}")
+    print(f"host crashes    : {summary.get('hostCrashes', 0)}  (core dumps are outside the sample data;"
+          f" verify with `coredumpctl list natter`)")
+    for segment in summary.get("segments", []):
+        drift = segment.get("rssDriftPercent")
+        drift_text = "n/a" if drift is None else f"{drift}%"
+        print(f"  segment {segment['index']}: {segment['startAt']} -> {segment['endAt']}"
+              f"  effective={segment['effectiveHours']}h  samples={segment['sampleCount']}"
+              f"  rssDrift={drift_text}")
+    print(f"result          : {summary.get('result')}")
+    for reason in summary.get("verdictReasons", []):
+        print(f"  - {reason}")
+    for note in summary.get("notes", []):
+        print(f"  note: {note}")
+
+
+def _parse_boot(upstream_raw: dict) -> str | None:
+    boot = upstream_raw.get("bootId")
+    return str(boot) if isinstance(boot, str) and boot else None
+
+
+def _classify_gap(previous: "Sample", current: "Sample", tolerance: float) -> tuple[str, dict]:
+    """Attribute a gap using only what the samples themselves carry.
+
+    host-down          bootId changed  -> the machine rebooted (power cut, kernel update, ...)
+    host-restart       bootId same, startedAt changed -> the service was restarted
+    suspend-or-stall   bootId same, startedAt same -> the machine slept, or the sampler stalled
+    unknown            not enough information (older payloads without bootId and without startedAt)
+    """
+    prev_boot, cur_boot = _parse_boot(previous.raw), _parse_boot(current.raw)
+    prev_started, cur_started = previous.raw.get("startedAt"), current.raw.get("startedAt")
+    detail: dict = {}
+
+    if prev_boot and cur_boot:
+        if prev_boot != cur_boot:
+            detail["bootIdChanged"] = True
+            return "host-down", detail
+        if prev_started != cur_started:
+            detail["startedAtChanged"] = True
+            return "host-restart", detail
+        return "suspend-or-stall", detail
+
+    # Legacy payload: no bootId on one side. Fall back to startedAt, and mark the missing evidence.
+    detail["bootIdMissing"] = True
+    if prev_started and cur_started:
+        if prev_started != cur_started:
+            detail["startedAtChanged"] = True
+            detail["note"] = "bootId missing; attributed from startedAt"
+            return "host-restart", detail
+        detail["note"] = "bootId missing; startedAt unchanged, cannot distinguish suspend from power loss"
+        return "suspend-or-stall", detail
+    detail["note"] = "bootId missing and startedAt unavailable"
+    return "unknown", detail
+
+
+def summarise_cumulative(
+    audit: SoakAudit,
+    interval: int,
+    target_hours: float,
+    min_segment_hours: float,
+    max_unexplained_percent: float,
+    max_rss_drift_percent: float,
+    max_error_percent: float = 5.0,
+    # `plugins-failed` is allowed by default: it means a plugin is unconfigured, not that the runtime
+    # is unstable. Soak measures uptime/send-failure behaviour, so plugin config gaps must not
+    # invalidate every sample. Use --allow-status healthy to require a fully configured host.
+    allow_status: tuple[str, ...] = ("healthy", "plugins-failed"),
+) -> dict:
+    """Effective-runtime report: segments, gap attribution, RSS drift, verdict."""
+    timeline = audit.samples
+    tolerance = interval * 1.5
+    # Effective runtime may only be built from samples where the host actually answered. An error
+    # sample is a hole in time, not a unit of uptime (S1-10, requirement 5).
+    samples = [s for s in timeline if not s.is_error]
+    error_samples = [s for s in timeline if s.is_error]
+    error_percent = round(100.0 * len(error_samples) / len(timeline), 2) if timeline else 0.0
+
+    if not timeline:
+        return {
+            "mode": "cumulative",
+            "result": "FAIL",
+            "effectiveSeconds": 0,
+            "effectiveHours": 0.0,
+            "segments": [],
+            "gapAttribution": {},
+            "unexplainedPercent": 0.0,
+            "worstRssDriftPercent": None,
+            "verdictReasons": ["no usable /health samples in the input"],
+        }
+    if not samples:
+        return {
+            "mode": "cumulative",
+            "result": "FAIL",
+            "effectiveSeconds": 0,
+            "effectiveHours": 0.0,
+            "segments": [],
+            "gapAttribution": {"unreachable": len(error_samples)},
+            "unexplainedPercent": 100.0,
+            "worstRssDriftPercent": None,
+            "errorSamples": len(error_samples),
+            "errorPercent": error_percent,
+            "verdictReasons": [
+                f"no healthy samples at all ({len(error_samples)} error samples) — nothing to accrue"
+            ],
+        }
+
+    # --- segments: a new segment starts whenever startedAt changes -------------------------
+    raw_segments: list[dict] = []
+    for sample in samples:
+        started = sample.raw.get("startedAt")
+        if not raw_segments or raw_segments[-1]["startedAt"] != started:
+            raw_segments.append({"startedAt": started, "samples": []})
+        raw_segments[-1]["samples"].append(sample)
+
+    segments: list[dict] = []
+    for index, segment in enumerate(raw_segments):
+        members = segment["samples"]
+        effective = 0.0
+        for previous, current in zip(members, members[1:]):
+            delta = (current.at - previous.at).total_seconds()
+            effective += min(delta, tolerance)
+        rss_samples = [
+            m for m in members
+            if isinstance(m.raw.get("rssBytes"), (int, float)) and m.raw.get("rssBytes") > 0
+        ]
+        drift = None
+        if len(rss_samples) >= 2:
+            first, last = float(rss_samples[0].raw["rssBytes"]), float(rss_samples[-1].raw["rssBytes"])
+            drift = round((last - first) / first * 100.0, 2)
+        segments.append(
+            {
+                "index": index,
+                "startedAt": segment["startedAt"],
+                "startAt": members[0].at.isoformat(),
+                "endAt": members[-1].at.isoformat(),
+                "sampleCount": len(members),
+                "effectiveSeconds": int(round(effective)),
+                "effectiveHours": round(effective / 3600.0, 2),
+                "durationHours": round((members[-1].at - members[0].at).total_seconds() / 3600.0, 2),
+                "bootIds": sorted({_parse_boot(m.raw) for m in members if _parse_boot(m.raw)}),
+                "rssDriftPercent": drift,
+                "rssFirst": int(rss_samples[0].raw["rssBytes"]) if rss_samples else None,
+                "rssLast": int(rss_samples[-1].raw["rssBytes"]) if rss_samples else None,
+            }
+        )
+
+    # --- gaps are computed on the timeline, error samples included ------------------------
+    gaps: list[dict] = []
+    attribution_counts = {
+        "host-down": 0,
+        "host-restart": 0,
+        "suspend-or-stall": 0,
+        "unreachable": 0,
+        "unknown": 0,
+    }
+    unexplained_seconds = 0.0
+
+    def add_gap(previous: Sample | None, current: Sample | None, seconds: float, excess: float,
+                attribution: str, detail: dict, kind: str) -> None:
+        nonlocal unexplained_seconds
+        attribution_counts[attribution] = attribution_counts.get(attribution, 0) + 1
+        if attribution == "unknown":
+            unexplained_seconds += excess
+        gaps.append(
+            {
+                "kind": kind,
+                "from": previous.at.isoformat() if previous is not None else None,
+                "to": current.at.isoformat() if current is not None else None,
+                "seconds": int(seconds),
+                "toleranceSeconds": int(tolerance),
+                "excessSeconds": int(excess),
+                "attribution": attribution,
+                "detail": detail,
+            }
+        )
+
+    for previous, current in zip(timeline, timeline[1:]):
+        delta = (current.at - previous.at).total_seconds()
+        if delta <= tolerance:
+            continue
+        if previous.is_error or current.is_error:
+            # We know the sampler could not reach the host; that is already an explanation.
+            add_gap(previous, current, delta, delta - tolerance, "unreachable",
+                    {"note": "one end of the gap is an unreachable sample"}, "sample-gap")
+            continue
+        attribution, detail = _classify_gap(previous, current, tolerance)
+        add_gap(previous, current, delta, delta - tolerance, attribution, detail, "sample-gap")
+
+    # A run of consecutive error samples is an outage window even without a time gap between
+    # samples: those samples did not measure any uptime.
+    window_run: list[Sample] = []
+    for sample in timeline + [None]:
+        if sample is not None and sample.is_error:
+            window_run.append(sample)
+            continue
+        if window_run:
+            span = (window_run[-1].at - window_run[0].at).total_seconds() + interval
+            add_gap(window_run[0], window_run[-1], span, span, "unreachable",
+                    {"errorSamples": len(window_run),
+                     "note": "consecutive unreachable samples; counted as outage, not uptime"},
+                    "unavailable-window")
+            window_run = []
+
+    window_seconds = (samples[-1].at - samples[0].at).total_seconds()
+    unexplained_percent = round(unexplained_seconds / window_seconds * 100.0, 2) if window_seconds > 0 else 0.0
+
+    effective_seconds = sum(segment["effectiveSeconds"] for segment in segments)
+    effective_hours = round(effective_seconds / 3600.0, 2)
+    longest_hours = max((segment["effectiveHours"] for segment in segments), default=0.0)
+
+    drifts = [segment["rssDriftPercent"] for segment in segments if segment["rssDriftPercent"] is not None]
+    worst_drift = max(drifts) if drifts else None
+
+    # Reuse the wallclock summary for sendFailures / disconnect attribution / provider health.
+    base = summarise(
+        audit, interval, max(int(tolerance), 900),
+        max_error_percent=max_error_percent, allow_status=allow_status,
+    )
+    send_failures_max = max(
+        (data.get("sendFailuresMax", 0) for data in base.get("upstreams", {}).values()), default=0
+    )
+    silent_new = sum(
+        data.get("silentDisconnects", {}).get("newPayload", 0) for data in base.get("upstreams", {}).values()
+    )
+    silent_legacy = sum(
+        data.get("silentDisconnects", {}).get("legacyPayload", 0) for data in base.get("upstreams", {}).values()
+    )
+    attributed = sum(
+        data.get("disconnectsWithReason", {}).get("newPayload", 0)
+        + data.get("disconnectsWithReason", {}).get("legacyPayload", 0)
+        for data in base.get("upstreams", {}).values()
+    )
+    total_disconnect_events = attributed + silent_new + silent_legacy
+    attribution_rate = (
+        round(attributed / total_disconnect_events * 100.0, 2) if total_disconnect_events else 100.0
+    )
+
+    restart_count = len(segments) - 1
+    restarts_with_gap = attribution_counts["host-restart"] + attribution_counts["host-down"]
+    restarts_without_gap = max(0, restart_count - restarts_with_gap)
+
+    verdict_reasons: list[str] = []
+    notes: list[str] = []
+
+    if effective_hours < target_hours:
+        verdict_reasons.append(
+            f"effective runtime {effective_hours}h < target {target_hours}h"
+        )
+    if longest_hours < min_segment_hours:
+        verdict_reasons.append(
+            f"longest continuous segment {longest_hours}h < required minimum {min_segment_hours}h"
+        )
+    unexplained_gaps = attribution_counts.get("unknown", 0)
+    if unexplained_gaps:
+        verdict_reasons.append(f"{unexplained_gaps} gap(s) could not be attributed (unknown)")
+    if unexplained_percent > max_unexplained_percent:
+        verdict_reasons.append(
+            f"unexplained gap time {unexplained_percent}% > allowed {max_unexplained_percent}%"
+        )
+    if send_failures_max > 0:
+        verdict_reasons.append(f"sendFailures reached {send_failures_max}")
+    if silent_new > 0:
+        verdict_reasons.append(
+            f"{silent_new} disconnect(s) without reason on the new payload (OBS-019 regression)"
+        )
+    if error_percent > max_error_percent:
+        verdict_reasons.append(
+            f"{len(error_samples)}/{len(timeline)} samples were unreachable/unparsable "
+            f"({error_percent}%, allowed {max_error_percent}%) — they cannot count as uptime"
+        )
+    elif error_samples:
+        notes.append(
+            f"{len(error_samples)}/{len(timeline)} samples were unreachable/unparsable "
+            f"({error_percent}%), under the {max_error_percent}% limit; excluded from effective runtime"
+        )
+    unreachable_windows = attribution_counts.get("unreachable", 0)
+    if unreachable_windows:
+        notes.append(
+            f"{unreachable_windows} unreachable outage window(s) counted as gaps "
+            f"(never as uptime); see gapAttribution"
+        )
+    status_counts_cum: dict[str, int] = {}
+    for sample in samples:
+        key = str(sample.raw.get("status", "unknown"))
+        status_counts_cum[key] = status_counts_cum.get(key, 0) + 1
+    disallowed_cum = {
+        status: count for status, count in status_counts_cum.items() if status not in allow_status
+    }
+    if disallowed_cum:
+        verdict_reasons.append(
+            "status not allowed in "
+            + ", ".join(f"{status}×{count}" for status, count in sorted(disallowed_cum.items()))
+            + f" (allowed: {', '.join(allow_status)})"
+        )
+    if worst_drift is None:
+        notes.append("RSS drift: insufficient-data (need two samples with rssBytes in one segment)")
+    elif worst_drift > max_rss_drift_percent:
+        verdict_reasons.append(
+            f"worst-segment RSS drift {worst_drift}% > allowed {max_rss_drift_percent}%"
+        )
+    if silent_legacy:
+        notes.append(
+            f"{silent_legacy} legacy disconnect(s) have no reason field (pre-OBS-019 payload) — "
+            "counted for information, not as a failure"
+        )
+    if restarts_without_gap:
+        notes.append(
+            f"{restarts_without_gap} restart(s) happened between samples (no gap to attribute); "
+            "a host crash would look like this, so check `coredumpctl list natter` for core dumps"
+        )
+    if any(segment["rssDriftPercent"] is None for segment in segments):
+        notes.append("RSS drift: some segments had <2 rssBytes samples and are excluded from the worst-case")
+
+    return {
+        "mode": "cumulative",
+        "result": "PASS" if not verdict_reasons else "FAIL",
+        "effectiveSeconds": effective_seconds,
+        "effectiveHours": effective_hours,
+        "targetHours": target_hours,
+        "minSegmentHours": min_segment_hours,
+        "maxUnexplainedPercent": max_unexplained_percent,
+        "maxRssDriftPercent": max_rss_drift_percent,
+        "toleranceSeconds": int(tolerance),
+        "windowSeconds": int(window_seconds),
+        "segments": segments,
+        "segmentCount": len(segments),
+        "longestSegmentHours": longest_hours,
+        "restartCount": restart_count,
+        "restartsWithGap": restarts_with_gap,
+        "restartsWithoutGap": restarts_without_gap,
+        "gapAttribution": attribution_counts,
+        "gaps": gaps,
+        "unexplainedSeconds": int(unexplained_seconds),
+        "unexplainedPercent": unexplained_percent,
+        "worstRssDriftPercent": worst_drift,
+        "sendFailuresMax": send_failures_max,
+        "disconnectAttribution": {
+            "attributed": attributed,
+            "silentNewPayload": silent_new,
+            "silentLegacyPayload": silent_legacy,
+            "ratePercent": attribution_rate,
+        },
+        "hostCrashes": 0,
+        "errorSamples": len(error_samples),
+        "errorPercent": error_percent,
+        "maxErrorPercent": max_error_percent,
+        "allowedStatus": list(allow_status),
+        "statusCounts": status_counts_cum,
+        "verdictReasons": verdict_reasons,
+        "notes": notes,
+    }
+
+
 def _fixture_rows(
     *,
     payload: str,
@@ -399,11 +916,13 @@ def _fixture_rows(
 ) -> list[dict]:
     """Build one synthetic soak run: `payload` is "new" (reason fields) or "legacy" (no fields)."""
     start = dt.datetime(2026, 1, 1, tzinfo=dt.timezone.utc)
+    # Declare a run that matches the fixture length, so coverage is 100% and these fixtures test
+    # only what they are meant to test (disconnect attribution), not coverage.
     rows: list[dict] = [
         {
             "soakStart": start.isoformat(),
             "intervalSeconds": 300,
-            "durationSeconds": 86400,
+            "durationSeconds": max(samples - 1, 1) * 300,
             "port": 5099,
         }
     ]
@@ -438,28 +957,166 @@ def _fixture_rows(
     return rows
 
 
+def _timeline_fixture(
+    healthy: int,
+    errors: int = 0,
+    *,
+    interval: int = 300,
+    status: str = "healthy",
+    degraded_at: tuple[int, ...] = (),
+    error_positions: tuple[int, ...] = (),
+    header_duration: int | None = None,
+) -> list[dict]:
+    """Build a run with a mix of healthy and unreachable samples.
+
+    `error_positions` interleaves error rows at those absolute sample indexes; otherwise the error
+    rows come after the healthy ones (a host that died and stayed dead).
+    """
+    start = dt.datetime(2026, 3, 1, tzinfo=dt.timezone.utc)
+    total = healthy + errors
+    duration = header_duration if header_duration is not None else max(total - 1, 1) * interval
+    rows: list[dict] = [
+        {"soakStart": start.isoformat(), "intervalSeconds": interval,
+         "durationSeconds": duration, "port": 5099}
+    ]
+    error_set = set(error_positions) if error_positions else set(range(healthy, total))
+    for index in range(total):
+        at = start + dt.timedelta(seconds=interval * index)
+        if index in error_set:
+            rows.append({
+                "sampledAt": at.isoformat(),
+                "sampledWallClock": at.isoformat(),
+                "source": "loopback",
+                "error": "unreachable",
+                "httpCode": "000",
+            })
+            continue
+        row_status = "degraded" if index in degraded_at else status
+        rows.append({
+            "status": row_status,
+            "uptimeSeconds": interval * index,
+            "startedAt": start.isoformat(),
+            "sampledAt": at.isoformat(),
+            "upstreams": [{
+                "source": "discord:discord:1", "connected": True,
+                "reconnectCount": 0, "lastDisconnectAt": None, "lastError": None,
+                "sendFailures": 0,
+            }],
+            "providers": [{"id": "natter.feature.ai.deepseek#deepseek",
+                           "available": True, "supportTier": 1}],
+            "plugins": {"activated": 4, "failed": 0, "failures": []},
+            "conversations": 0,
+        })
+    return rows
+
+
+def _cumulative_fixture(
+    segment_specs: list[dict],
+    interval: int = 3600,
+    extra_gap: int = 0,
+    breaker=None,
+) -> list[dict]:
+    """Build a multi-segment soak run for cumulative-mode tests.
+
+    Each spec: {samples, bootId?, rss?, skip_after?}
+      rss        int or list of ints (per sample index) -> row-level rssBytes
+      skip_after {sampleIndex: extraSeconds} -> inject a gap after that sample (power cut/restart)
+    `breaker(seg_index, sample_index, row)` may delete fields to emulate legacy payloads.
+    """
+    start = dt.datetime(2026, 2, 1, tzinfo=dt.timezone.utc)
+    moment = start
+    rows: list[dict] = [
+        {"soakStart": start.isoformat(), "intervalSeconds": interval, "durationSeconds": 86400, "port": 5099}
+    ]
+    uptime = 0
+    for seg_index, spec in enumerate(segment_specs):
+        if seg_index > 0 and extra_gap:
+            moment = moment + dt.timedelta(seconds=extra_gap)
+        skip_after = spec.get("skip_after") or {}
+        rss_spec = spec.get("rss")
+        for index in range(int(spec["samples"])):
+            if isinstance(rss_spec, list):
+                rss = rss_spec[min(index, len(rss_spec) - 1)]
+            else:
+                rss = rss_spec
+            row: dict = {
+                "status": "healthy",
+                "uptimeSeconds": uptime,
+                "startedAt": spec.get("startedAt", f"2026-02-01T{seg_index:02d}:00:00Z"),
+                "sampledAt": moment.isoformat(),
+                "upstreams": [
+                    {
+                        "source": "discord:discord:1",
+                        "connected": True,
+                        "reconnectCount": 0,
+                        "lastDisconnectAt": None,
+                        "lastError": None,
+                        "sendFailures": 0,
+                        "sendFailuresTotal": 0,
+                    }
+                ],
+                "providers": [
+                    {"id": "natter.feature.ai.deepseek#deepseek", "available": True, "supportTier": 1}
+                ],
+                "plugins": {"activated": 4, "failed": 0, "failures": []},
+                "conversations": 0,
+            }
+            if spec.get("bootId"):
+                row["bootId"] = spec["bootId"]
+            if rss:
+                row["rssBytes"] = int(rss)
+            if breaker:
+                breaker(seg_index, index, row)
+            rows.append(row)
+            uptime += interval
+            moment = moment + dt.timedelta(seconds=interval)
+            if index in skip_after:
+                moment = moment + dt.timedelta(seconds=skip_after[index])
+                uptime += skip_after[index]
+    return rows
+
+
 def self_test() -> int:
     """Synthetic fixtures for both payload versions; no network, no real host, no secrets."""
     import tempfile
 
     failures = 0
+    assertions = 0
 
     def check(name: str, ok: bool, detail: str = "") -> None:
-        nonlocal failures
+        nonlocal failures, assertions
+        assertions += 1
         if ok:
             print(f"  ok   {name}")
         else:
             print(f"  FAIL {name} {detail}")
             failures += 1
 
-    def audit(rows: list[dict]) -> dict:
+    def run_audit(rows: list[dict]) -> SoakAudit:
         with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as handle:
             handle.write("\n".join(json.dumps(row) for row in rows) + "\n")
             path = Path(handle.name)
         try:
-            return summarise(load([path]), 300, 900)
+            return load([path])
         finally:
             path.unlink(missing_ok=True)
+
+    def audit(rows: list[dict], interval: int = 300, **overrides) -> dict:
+        options = {"max_error_percent": 5.0, "allow_status": ("healthy",)}
+        options.update(overrides)
+        return summarise(run_audit(rows), interval, 900, **options)
+
+    def audit_cumulative(rows: list[dict], interval: int = 3600, **overrides) -> dict:
+        options = {
+            "target_hours": 24.0,
+            "min_segment_hours": 6.0,
+            "max_unexplained_percent": 2.0,
+            "max_rss_drift_percent": 20.0,
+            "max_error_percent": 5.0,
+            "allow_status": ("healthy",),
+        }
+        options.update(overrides)
+        return summarise_cumulative(run_audit(rows), interval, **options)
 
     print("== soak-report self-test ==")
 
@@ -507,21 +1164,180 @@ def self_test() -> int:
           discord["silentDisconnects"] == {"newPayload": 0, "legacyPayload": 0} and summary["result"] == "PASS",
           discord["silentDisconnects"])
 
+    # ---- cumulative mode ------------------------------------------------------------------
+    # 6. Four 6h segments with power cuts in between: 24h effective runtime, every gap attributed.
+    passing = _cumulative_fixture(
+        [{"samples": 7, "bootId": f"boot-{i}", "rss": 100_000_000} for i in range(4)],
+        interval=3600,
+        extra_gap=2 * 3600,
+    )
+    summary = audit_cumulative(passing)
+    check("cumulative: 24h built from 4 segments passes", summary["result"] == "PASS", summary["verdictReasons"])
+    check("cumulative: effective runtime is 24h", summary["effectiveHours"] == 24.0, summary["effectiveHours"])
+    check("cumulative: segments and longest segment are reported",
+          summary["segmentCount"] == 4 and summary["longestSegmentHours"] == 6.0,
+          (summary["segmentCount"], summary["longestSegmentHours"]))
+    check("cumulative: power cuts attributed to host-down",
+          summary["gapAttribution"]["host-down"] == 3 and summary["gapAttribution"]["unknown"] == 0,
+          summary["gapAttribution"])
+    check("cumulative: RSS drift measured when rssBytes exists", summary["worstRssDriftPercent"] == 0.0,
+          summary["worstRssDriftPercent"])
+
+    # 7. Same 24h total, but assembled from 3h fragments -> must fail the min-segment guard.
+    fragmentary = _cumulative_fixture(
+        [{"samples": 4, "bootId": f"boot-{i}", "rss": 100_000_000} for i in range(8)],
+        interval=3600,
+        extra_gap=2 * 3600,
+    )
+    summary = audit_cumulative(fragmentary)
+    check("cumulative: fragmented 24h fails the min-segment guard",
+          summary["result"] == "FAIL"
+          and any("longest continuous segment" in reason for reason in summary["verdictReasons"]),
+          summary["verdictReasons"])
+
+    # 8. A gap whose endpoints carry neither bootId nor startedAt cannot be attributed.
+    def strip_identity(seg_index: int, sample_index: int, row: dict) -> None:
+        if seg_index == 0 and sample_index in (3, 4):
+            row.pop("bootId", None)
+            row.pop("startedAt", None)
+
+    unattributed = _cumulative_fixture(
+        [{"samples": 7, "bootId": "boot-a", "rss": 100_000_000,
+          "skip_after": {3: 2 * 3600}}],
+        interval=3600,
+        breaker=strip_identity,
+    )
+    summary = audit_cumulative(unattributed)
+    check("cumulative: unattributable gap is reported as unknown",
+          summary["gapAttribution"]["unknown"] == 1 and summary["result"] == "FAIL"
+          and any("could not be attributed" in reason for reason in summary["verdictReasons"]),
+          (summary["gapAttribution"], summary["verdictReasons"]))
+
+    # 9. Two 12h segments but memory grows 100MB -> 300MB in the first one.
+    drifting = _cumulative_fixture(
+        [
+            {"samples": 13, "bootId": "boot-a", "rss": [100_000_000] * 6 + [300_000_000] * 7},
+            {"samples": 13, "bootId": "boot-b", "rss": 300_000_000},
+        ],
+        interval=3600,
+        extra_gap=2 * 3600,
+    )
+    summary = audit_cumulative(drifting)
+    check("cumulative: RSS drift over the limit fails the run",
+          summary["result"] == "FAIL"
+          and any("RSS drift" in reason for reason in summary["verdictReasons"]),
+          (summary["worstRssDriftPercent"], summary["verdictReasons"]))
+    check("cumulative: drift uses the worst segment", summary["worstRssDriftPercent"] == 200.0,
+          summary["worstRssDriftPercent"])
+
+    # 10. Legacy payloads (no bootId/rssBytes) degrade instead of raising.
+    legacy = _cumulative_fixture(
+        [{"samples": 7, "rss": None} for _ in range(2)], interval=3600, extra_gap=2 * 3600
+    )
+    for row in legacy:
+        row.pop("bootId", None)
+        row.pop("rssBytes", None)
+    summary = audit_cumulative(legacy)
+    check("cumulative: legacy payload degrades RSS drift to insufficient-data",
+          summary["worstRssDriftPercent"] is None, summary["worstRssDriftPercent"])
+    check("cumulative: legacy payload still attributes gaps from startedAt",
+          summary["gapAttribution"]["host-restart"] == 1 and summary["gapAttribution"]["unknown"] == 0,
+          summary["gapAttribution"])
+
+    # ---- S1-10 regressions ---------------------------------------------------------------
+    # 11. Dead host: 2 good samples then 20 unreachable ones, header declares a 24h run.
+    #     Before the fix this looked like 100% coverage because errors were dropped from the
+    #     timeline and the denominator used the observed span.
+    dead = _timeline_fixture(healthy=2, errors=20, header_duration=86400)
+    summary = audit(dead)
+    check("s1-10 dead-host: coverage uses the declared header",
+          summary["coverageBasis"] == "declared-header" and summary["expectedSamples"] == 289,
+          (summary["coverageBasis"], summary["expectedSamples"]))
+    check("s1-10 dead-host: error samples counted, not dropped",
+          summary["errorSamples"] == 20 and summary["samples"] == 22, summary["errorSamples"])
+    check("s1-10 dead-host: run fails instead of a fake PASS",
+          summary["result"] == "FAIL"
+          and any("unreachable/unparsable" in reason for reason in summary["reasons"]),
+          summary["reasons"])
+    check("s1-10 dead-host: outage window is reported as a gap",
+          len(summary["unavailableWindows"]) == 1
+          and any("outage window" in reason for reason in summary["reasons"]),
+          summary["unavailableWindows"])
+
+    # 12. A non-allowed status must fail even when every sample is present and healthy-looking.
+    degraded = _timeline_fixture(healthy=10, degraded_at=(3, 5, 7))
+    summary = audit(degraded)
+    check("s1-10 status: non-allowed status fails the run",
+          summary["result"] == "FAIL"
+          and any("status not allowed" in reason for reason in summary["reasons"]),
+          summary["reasons"])
+    check("s1-10 status: same data passes once the status is explicitly allowed",
+          audit(degraded, allow_status=("healthy", "degraded"))["result"] == "PASS",
+          audit(degraded, allow_status=("healthy", "degraded"))["reasons"])
+
+    # 13. Error share above the limit fails even when the timeline has plenty of samples.
+    flaky = _timeline_fixture(healthy=40, errors=3, error_positions=(5, 17, 29))
+    summary = audit(flaky)
+    check("s1-10 error share: above the limit is reported",
+          summary["errorPercent"] > 5.0
+          and any("unreachable/unparsable" in reason for reason in summary["reasons"]),
+          (summary["errorPercent"], summary["reasons"]))
+    check("s1-10 error share: below a raised limit it becomes a note, not a failure",
+          any("under the" in note for note in audit(flaky, max_error_percent=50)["notes"])
+          or audit(flaky, max_error_percent=50)["result"] == "PASS",
+          audit(flaky, max_error_percent=50).get("notes"))
+
+    # 14. Cumulative mode must not convert error samples into uptime.
+    dead_cumulative = _timeline_fixture(healthy=2, errors=20, header_duration=86400)
+    summary = audit_cumulative(dead_cumulative, interval=300, target_hours=0.01,
+                               min_segment_hours=0.0)
+    check("s1-10 cumulative: error samples are not uptime",
+          summary["effectiveHours"] < 0.2, summary["effectiveHours"])
+    check("s1-10 cumulative: unreachable gaps are attributed, not unknown",
+          summary["gapAttribution"].get("unreachable", 0) >= 1
+          and summary["gapAttribution"].get("unknown", 0) == 0, summary["gapAttribution"])
+    check("s1-10 cumulative: error share fails the run",
+          summary["result"] == "FAIL"
+          and any("unreachable/unparsable" in reason for reason in summary["verdictReasons"]),
+          summary["verdictReasons"])
+
     if failures:
         print(f"self-test FAILED ({failures} case(s))", file=sys.stderr)
         return 1
-    print("self-test passed (5 scenarios)")
+    print(f"self-test passed ({assertions} assertions; wallclock + cumulative + S1-10 fixtures)")
     return 0
 
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="Audit a Natter passive soak jsonl.")
     parser.add_argument("files", nargs="*", type=Path, help="soak jsonl file(s)")
-    parser.add_argument("--interval", type=int, default=300, help="expected sampling interval in seconds (default 300)")
-    parser.add_argument("--max-gap", type=int, default=900, help="largest tolerated gap in seconds (default 900)")
+    parser.add_argument("--interval", type=int, default=120, help="expected sampling interval in seconds (default 120)")
+    parser.add_argument("--max-gap", type=int, default=360, help="largest tolerated gap in seconds (default 360)")
     parser.add_argument("--min-coverage", type=float, default=95.0, help="minimum coverage percent (default 95)")
     parser.add_argument("--json", action="store_true", help="emit the report as JSON")
     parser.add_argument("--self-test", action="store_true", help="run synthetic fixtures and exit")
+    parser.add_argument(
+        "--mode",
+        choices=("wallclock", "cumulative"),
+        default="wallclock",
+        help="wallclock = one uninterrupted window (default); cumulative = effective runtime across "
+             "restarts and power cuts",
+    )
+    parser.add_argument("--target-hours", type=float, default=24.0,
+                        help="cumulative: effective runtime target (default 24)")
+    parser.add_argument("--min-segment-hours", type=float, default=6.0,
+                        help="cumulative: required longest continuous segment (default 6)")
+    parser.add_argument("--max-unexplained-percent", type=float, default=2.0,
+                        help="cumulative: allowed share of unexplained gap time (default 2)")
+    parser.add_argument("--max-rss-drift-percent", type=float, default=20.0,
+                        help="cumulative: allowed worst-segment RSS growth (default 20)")
+    parser.add_argument("--max-error-percent", type=float, default=5.0,
+                        help="allowed share of unreachable/unparsable samples (default 5); "
+                             "error samples never count as coverage or uptime")
+    parser.add_argument("--allow-status", default="healthy",
+                        help="comma-separated health.status values that do not fail the run "
+                             "(default 'healthy'; Tier 1-only deployments may pass "
+                             "'healthy,degraded' and must say why in the record)")
     args = parser.parse_args(argv)
 
     if args.self_test:
@@ -535,7 +1351,47 @@ def main(argv: list[str]) -> int:
         return 2
 
     audit = load(args.files)
-    summary = summarise(audit, args.interval, args.max_gap)
+    allow_status = tuple(part.strip() for part in args.allow_status.split(",") if part.strip())
+    if not allow_status:
+        allow_status = ("healthy",)
+
+    if args.mode == "cumulative":
+        # The wallclock coverage/durationale rules do not apply: gaps are expected and attributed.
+        wallclock = summarise(
+            audit, args.interval, args.max_gap,
+            max_error_percent=args.max_error_percent, allow_status=allow_status,
+        )
+        cumulative = summarise_cumulative(
+            audit,
+            args.interval,
+            args.target_hours,
+            args.min_segment_hours,
+            args.max_unexplained_percent,
+            args.max_rss_drift_percent,
+            max_error_percent=args.max_error_percent,
+            allow_status=allow_status,
+        )
+        summary = {
+            **wallclock,
+            **cumulative,
+            "wallclock": {
+                "result": wallclock.get("result"),
+                "coveragePercent": wallclock.get("coveragePercent"),
+                "reasons": wallclock.get("reasons", []),
+            },
+        }
+        summary["reasons"] = cumulative["verdictReasons"]
+        if args.json:
+            print(json.dumps(summary, indent=2, ensure_ascii=False))
+        else:
+            print_cumulative(summary)
+        return 0 if summary["result"] == "PASS" else 1
+
+    summary = summarise(
+        audit, args.interval, args.max_gap,
+        max_error_percent=args.max_error_percent, allow_status=allow_status,
+    )
+    summary["mode"] = "wallclock"
     # Coverage threshold is a policy knob; fold it into the verdict.
     if summary.get("samples", 0) and summary["coveragePercent"] < args.min_coverage:
         if summary["result"] == "PASS":

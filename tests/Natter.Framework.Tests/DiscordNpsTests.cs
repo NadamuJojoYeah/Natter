@@ -27,7 +27,7 @@ public sealed class DiscordNpsTests
             Path.Combine(pluginDirectory, "config.schema.json"),
             ReadEmbedded("Natter.Sample.Plugin.Discord.config.schema.json"));
         File.WriteAllText(
-            Path.Combine(configDirectory, "natter.transport.discord.json"),
+            Path.Combine(configDirectory, "natter.transport.messaging.discord.json"),
             """
             {
               "token": "${secret:DISCORD_BOT_TOKEN}",
@@ -90,7 +90,7 @@ public sealed class DiscordNpsTests
         var manifest = new PluginManifest
         {
             SchemaVersion = 1,
-            Id = "natter.transport.discord.test",
+            Id = "natter.transport.messaging.discord.test",
             Name = "Discord test",
             Version = "0.1.0",
             Kind = PluginKind.Transport,

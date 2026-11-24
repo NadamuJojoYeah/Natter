@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "id": "natter.feature.character.state-vitals",
+  "name": "Natter State & Vitals",
+  "version": "0.1.0",
+  "kind": "feature",
+  "hostApi": ">=0.1.0 <1.0.0",
+  "entry": {
+    "assembly": "lib/Natter.Plugin.StateVitals.dll",
+    "type": "Natter.Plugin.StateVitals.StateVitalsPlugin"
+  },
+  "description": "Global character state and time-decayed vitals (asserted states, derived views) rendered as a bucketed prompt fragment. Content lives in packs, mechanism lives here. Opt-in, no UI in the first version.",
+  "author": "Natter",
+  "license": "MIT",
+  "homepage": "https://github.com/natter-framework/natter",
+  "permissions": [
+    "chat.read",
+    "ai.complete",
+    "storage",
+    "cli.commands"
+  ],
+  "configSchema": "config.schema.json",
+  "contributions": [
+    {
+      "type": "prompt.fragment",
+      "id": "state"
+    },
+    {
+      "type": "cli.command",
+      "id": "states.validate"
+    },
+    {
+      "type": "cli.command",
+      "id": "states.explain"
+    }
+  ],
+  "platforms": [
+    "windows",
+    "linux",
+    "macos"
+  ],
+  "capabilities": [
+    "state:character-vitals"
+  ]
+}

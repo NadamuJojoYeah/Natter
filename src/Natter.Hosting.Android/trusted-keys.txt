@@ -1,0 +1,9 @@
+# Natter Android publisher trust anchors.
+#
+# One Base64 SubjectPublicKeyInfo (the same format consumed by
+# PluginStoreOptions.TrustedPublicKeys) per line. Comments and blank lines are ignored.
+#
+# This file is compiled into the APK as an embedded resource. It is intentionally NOT read from
+# FilesDir (app-private storage) at runtime: anyone who can write app data must not be able to
+# replace the root of trust. To ship a dynamic-plugin Release build, replace this file at build
+# time with the publisher key(s) and rebuild the APK.

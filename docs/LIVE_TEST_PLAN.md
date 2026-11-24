@@ -1,16 +1,20 @@
 # Natter 真实 API 联调测试方案（Discord + DeepSeek）
 
-> **状态**：Accepted · L1–L4 已在本机对真实 DeepSeek / Discord API 执行通过；L5 人工闸门待人工触发  
-> **日期**：2026-11-15  
-> **被测对象**：`natter.transport.discord`（`Natter.Sample.Plugin.Discord` + `Natter.Chat.Discord`）、`natter.feature.ai.deepseek`（`Natter.Feature.Ai.DeepSeek`）  
-> **入口**：`tests/Natter.Live.Tests`、`scripts/live-test.sh`  
+> **状态**：Accepted · **已验证**：L1–L4 已在本机对真实 DeepSeek / Discord API 执行通过（27/27）；
+> **已验证（人工）**：L5 人工闸门修复后已复测通过（2026-11-15 13:50，见 §0 链接）；
+> **待人工/未执行**：24h 被动 soak（口径见 [passive-soak-24h](operations/passive-soak-24h.md) 的「累计有效运行」，
+> 当前无合格记录，按「未完成」计，不得写成 PASS）。
+
+> **日期**：2026-11-15
+> **被测对象**：`natter.transport.messaging.discord`（`Natter.Sample.Plugin.Discord` + `Natter.Chat.Discord`）、`natter.feature.ai.deepseek`（`Natter.Feature.Ai.DeepSeek`）
+> **入口**：`tests/Natter.Live.Tests`、`scripts/live-test.sh`
 > **关联**：[Discord 传输设计](DISCORD_PLUGIN_DESIGN.md)、[AI Provider 设计](AI_PROVIDER_DESIGN.md)、[NPS v1](PLUGIN_SPEC.md)
 
 ---
 
 ## 0. 一句话结论
 
-> 第二上游/消费者（钉钉 + 星火）的验证见 [第二上游/消费者验证](SECOND_ADAPTER_VALIDATION.md)；当前为 fake/HTTP 契约与 NPS 交叉验证，真实平台凭据未接入。
+> 第二上游/消费者（钉钉 + 星火）的验证见 [第二上游/消费者验证](archive/P5-SECOND-ADAPTER-VALIDATION.md)；当前为 fake/HTTP 契约与 NPS 交叉验证，真实平台凭据未接入。
 
 两个插件在 **真实 Discord 网关 + 真实 DeepSeek Chat Completions** 上完成了「入站 → NLMP → responder → 出站」的完整链路。开发修复后已从正式修复构建重跑全部自动 live：**27/27 通过**（L1 8、L2 9、L2b 2、L3/L3b/L3c 3、L4 5），**214/214 框架回归通过**；L5 人工闸门修复后复测通过（见下方链接）。过程中记录并修复了 2 个会直接导致 CLI 无法加载插件的真实缺陷（见 §7）。
 
@@ -47,6 +51,11 @@
 | L3c 真实入站 E2E | `RealInboundMentionLiveTests` | Gateway 入站 + orchestrator + DeepSeek + REST | 真实 `MESSAGE_CREATE`（REST 发送，`allowed_mentions` 含 bot）→ mapper → mention 门控 → 真实 AI 回复；专门覆盖 BUG-003 类盲区 | 1 |
 | L4 部署 | `DeploymentCliLiveTests` | 独立 CLI 进程 + 文件插件 + 环境 secret | 插件布局加载、`upstreams`/`discord status`/`ai status`、缺 secret 诊断 | 5 |
 | L5 人工闸门 | `ManualGateLiveTests` | 真人 + 全链路 | 人类消息触发 AI 回复（`NATTER_LIVE_MANUAL=1`） | 1（默认 skip） |
+| L6 钉钉 Stream | `DingTalkStreamLiveTests` | 真实钉钉 gateway | Stream 建连/挂载/正常断开、错误 client secret → 401 且不泄漏 | 2 |
+| L7 星火 MaaS | `SparkLiveTests` | 真实讯飞 Spark API | `/models`、thinking 开关与 reasoning 隔离、无效 key、未知模型、不可达端点、3 并发 | 7 |
+| L8 记忆召回 | `MemoryRecallLiveTests`、`MemoryRecallLifecycleLiveTests` | Gateway + DeepSeek + REST | 显式记忆被真实回复召回、`forget` 后不再召回、重启后记忆仍可召回 | 3 |
+
+> **数量口径**：本表「数量」按**测试方法数**计。当前共 **40 个方法**（来源：`tests/Natter.Live.Tests/` 下 `[LiveFact]`/`[DeepSeekLiveFact]`/`[DiscordLiveFact]`/`[SparkLiveFact]`/`[DingTalkLiveFact]`/`[ManualLiveFact]`/`[LiveE2EFact]` 特性逐条计数，2026-11-22 核对）。该套件**没有 `Theory`**，因此「方法数 = 展开后的用例数」；若将来加入 `Theory`，需在记录里分别写明两个数。数字会随用例增删变化，**以源码计数为准**（`grep -rE '\[[A-Za-z0-9]*Live[A-Za-z0-9]*(Fact|Theory)' tests/Natter.Live.Tests | wc -l`），不要长期引用本表数字。
 
 设计要点：
 
@@ -102,8 +111,12 @@ scripts/live-test.sh discord    # 网关 + REST + upstream
 scripts/live-test.sh ingress    # 真实入站映射
 scripts/live-test.sh e2e        # 端到端（真实 AI + 真实发送）
 scripts/live-test.sh deploy     # 独立 CLI 进程
+scripts/live-test.sh spark      # 星火 MaaS 真实 API
+scripts/live-test.sh dingtalk   # 钉钉 Stream 真实握手
 scripts/live-test.sh manual     # 人工闸门，需人在频道 @bot
 ```
+
+> **记忆召回用例（L8）没有独立分层入口**：`scripts/live-test.sh` 目前只定义 `deepseek/discord/ingress/e2e/deploy/spark/dingtalk/manual` 与 `all`。要单独跑 L8，用 `scripts/live-test.sh all` 或直接 `dotnet test tests/Natter.Live.Tests --filter "FullyQualifiedName~MemoryRecall"`。若希望它有独立入口，需要改脚本（不在本文档范围内）。
 
 未设置 `NATTER_LIVE=1` 时，全部 live 用例以 `Skipped` 出现在报告中，离线 `dotnet test` 不受影响。CI 不配置凭据即可保持绿色。
 
@@ -151,7 +164,7 @@ text=natter-live-ingress-56e5d1e0764545189242e70504615fa3
 ### 5.4 L3 端到端（1/1 通过，12s）
 
 ```text
-plugin natter.transport.discord      state=Activated trust=bundled
+plugin natter.transport.messaging.discord      state=Activated trust=bundled
 plugin natter.feature.ai.deepseek    state=Activated trust=bundled
 upstream discord:discord:1571154023493410836 connected=True
 reply author=1571154023493410836 chars=14 text=17 + 25 is 42.
@@ -167,7 +180,7 @@ ai status: requests=1 errors=0 p50LatencyMs=678 inputTokens=35 outputTokens=8
 staged .../discord from samples/Natter.Sample.Plugin.Discord/bin/Debug/net10.0
 staged .../deepseek from src/Natter.Feature.Ai.DeepSeek/bin/Debug/net10.0
 plugin natter.feature.ai.deepseek  state=Activated trust=local
-plugin natter.transport.discord    state=Activated trust=local
+plugin natter.transport.messaging.discord    state=Activated trust=local
 file-plugin reply chars=11 text=6 × 7 = 42.
 discord status: connected=true guildCount=1 channelCount=4 latencyMs=497
 ```
@@ -216,7 +229,7 @@ Live re-run after fixes: L1 8/8, L2 9/9, L2b 2/2, L3/L3b 2/2, L4 5/5 = 26/26
 ### BUG-001 · 插件加载上下文把所有 `Natter.*` / `Microsoft.Extensions.*` 当作宿主共享
 
 - **现象**：把插件目录放进 CLI 后，`plugins list` 显示
-  - `natter.transport.discord` → `load-failed: Could not load file or assembly 'Natter.Chat.Discord'`
+  - `natter.transport.messaging.discord` → `load-failed: Could not load file or assembly 'Natter.Chat.Discord'`
   - `natter.feature.ai.deepseek` → `load-failed: Could not load file or assembly 'Microsoft.Extensions.AI.Abstractions, Version=10.11.0.0'`
 - **根因**：`PluginLoadContext.SharedPrefixes` 用 `Natter.` / `Microsoft.Extensions.` 前缀判定为「宿主共享」，返回 `null` 交给默认 ALC；但宿主（`Natter.Cli`）并不引用这两个程序集，默认 ALC 里没有，于是加载失败。插件目录里明明带着这两个 DLL。
 - **测试侧临时处置**（不是修复，待开发评审）：

@@ -1,0 +1,47 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <RootNamespace>Natter.Plugin.PromptLibrary.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="coverlet.collector">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../plugins/Natter.Plugin.PromptLibrary/Natter.Plugin.PromptLibrary.csproj" />
+    <ProjectReference Include="../../src/Natter.Infrastructure/Natter.Infrastructure.csproj" />
+    <ProjectReference Include="../../src/Natter.Cli.Core/Natter.Cli.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="../../plugins/Natter.Plugin.PromptLibrary/plugin.json"
+          Link="plugin.json"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../plugins/Natter.Plugin.PromptLibrary/config.schema.json"
+          Link="config.schema.json"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../plugins/Natter.Plugin.PromptLibrary/config.sample.json"
+          Link="config.sample.json"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../plugins/Natter.Plugin.PromptLibrary/presets.extra.json"
+          Link="presets.extra.json"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../plugins/Natter.Plugin.PromptLibrary/prompts/**"
+          Link="prompts/%(RecursiveDir)%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

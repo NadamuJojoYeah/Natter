@@ -234,7 +234,18 @@ public sealed class CommandPhase3HttpTests
     {
         var runner = new FakeAdminCommandRunner();
 
-        using (var disabled = WebConsoleHarness.Create(adminCommand: runner))
+        using (var readOnly = WebConsoleHarness.Create(adminCommand: runner))
+        {
+            var login = await readOnly.LoginAsync();
+            var response = await readOnly.Handler.HandleAsync(readOnly.Request(
+                "POST", "/api/commands", body: Body("health"), cookie: login.Cookie, csrf: login.Csrf));
+            Assert.Equal(403, response.StatusCode);
+            Assert.Equal("console.read_only", Code(response));
+        }
+
+        using (var disabled = WebConsoleHarness.Create(
+                   new WebConsoleOptions { Port = 5090, ReadOnly = false, AllowCommandConsole = false },
+                   adminCommand: runner))
         {
             var login = await disabled.LoginAsync();
             var response = await disabled.Handler.HandleAsync(disabled.Request(

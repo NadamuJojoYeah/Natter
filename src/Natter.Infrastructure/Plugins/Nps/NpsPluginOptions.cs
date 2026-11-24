@@ -125,6 +125,32 @@ public static class NpsPermissionPolicy
                 [PluginPermissions.CliCommands],
             PluginContributionTypes.MemoryStore =>
                 [PluginPermissions.Storage],
-            _ => [],
+            // Prompt/context contributions read the conversation, memory and summary facts; a
+            // zero-permission plugin must not be able to observe them (S2-C2).
+            PluginContributionTypes.ContextAssembler =>
+                [PluginPermissions.ChatRead],
+            PluginContributionTypes.PromptProvider =>
+                [PluginPermissions.ChatRead],
+            PluginContributionTypes.PromptFragment =>
+                [PluginPermissions.ChatRead],
+            // Embedding/rerank providers call an external service and need a key. The concrete
+            // secret name is checked separately because "secrets:<name>" is a permission prefix.
+            PluginContributionTypes.EmbeddingProvider or PluginContributionTypes.RerankProvider =>
+                [PluginPermissions.Network],
+
+            // Explicitly empty, not "forgotten": overriding a host port is a wiring act, and today the
+            // only plugins that do it are bundled samples that ship with the host. See
+            // docs/CONTRIBUTION_OBLIGATIONS.md §3.5 for the pending decision (a dedicated
+            // port.override permission) before this can require anything without breaking them.
+            PluginContributionTypes.PortAdapter => [],
+
+            // No silent default: a contribution type that is not listed here has no permission policy,
+            // and a new type must not be able to acquire one by being forgotten. Falling through to []
+            // is how 'port.adapter' ended up unguarded in the first place.
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(contributionType),
+                contributionType,
+                "Every contribution type must declare its required permissions explicitly "
+                + "(see docs/CONTRIBUTION_OBLIGATIONS.md)."),
         };
 }

@@ -1,10 +1,15 @@
 # Natter 运维手册（Tier 1）
 
+> **命令校验状态（2026-11-23，基线 `99b99cc`）**：本文命令分三类——
+> - ✓ 本轮实跑通过：`natter version`/`doctor`/`ports`/`upstreams`/`plugins list`/`plugins contributions`/`plugins graph`/`plugins permissions`/`plugins inspect`/`health --offline`/`memory list`/`satori status`/`events list`/`exec`；staging 脚本 `--feature --skip-build`。
+> - 未验证（需 root/真 systemd/Docker/真机/长驻宿主/上游凭据）：`serve` 长驻、`deploy/systemd/*`、`deploy/docker/*`。
+> - 见 [REVIEW_2026-11-23_ARCHITECTURE.md §19](REVIEW_2026-11-23_ARCHITECTURE.md#19-第三部分执行结果命令实跑校验)。
+
 > **状态**：Runbook v1  
 > **适用版本**：P4 Go 基线（.NET 10 / Natter 0.1.0-preview）  
 > **适用对象**：负责 Natter Discord/DeepSeek 主链路、DingTalk/Spark 辅助链路的运维人员  
 > **目标**：让服务可部署、可观察、可备份、可恢复、可升级、可排障  
-> **关联**：[部署示例](../deploy/README.md)、[P4 产品化](P4_TIER1_PRODUCTIZATION.md)、[依赖演进策略](DEPENDENCY_EVOLUTION_POLICY.md)、[首次部署测试记录](testing/2026-11-16-first-deployment-test.md)、[P4.5 修复验证（运维）](operations/2026-11-17-p4-5-ops-verification.md)、[P4.5 运维验收执行记录](operations/2026-11-17-p4-5-ops-verification-run.md)、[P4.5 联合复测（运维侧）](operations/2026-11-17-p4-5-retest-run.md)、[P4.5 收尾复测](operations/2026-11-17-p4-5-final-retest-run.md)
+> **关联**：[部署示例](../deploy/README.md)、[P4 产品化](archive/P4-TIER1-PRODUCTIZATION.md)、[依赖演进策略](DEPENDENCY_EVOLUTION_POLICY.md)、[首次部署测试记录](testing/2026-11-16-first-deployment-test.md)、[P4.5 修复验证（运维）](operations/2026-11-17-p4-5-ops-verification.md)、[P4.5 实机验收交接](operations/P4.5_REAL_MACHINE_HANDOFF.md)、[P4.5 运维验收执行记录](operations/2026-11-17-p4-5-ops-verification-run.md)、[P4.5 联合复测（运维侧）](operations/2026-11-17-p4-5-retest-run.md)、[P4.5 收尾复测](operations/2026-11-17-p4-5-final-retest-run.md)
 
 ---
 
@@ -35,7 +40,7 @@
 /etc/natter/
 ├── config/                     # profiles.json + 插件 config（只读）
 │   ├── profiles.json
-│   ├── natter.transport.discord.json
+│   ├── natter.transport.messaging.discord.json
 │   ├── natter.feature.ai.deepseek.json
 │   └── ...
 ├── live.env                    # 0600，secret
@@ -180,7 +185,7 @@ SPARK_API_KEY
 "memory": { "store": "host#sqlite" }
 ```
 
-Tier 2 profile 可以选 `natter.feature.ai.spark#spark` / `natter.sample.memory#file`，但不要让 Tier 2 失败影响 Tier 1。
+Tier 2 profile 可以选 `natter.feature.ai.spark#spark` / `natter.sample.memory.demo#file`，但不要让 Tier 2 失败影响 Tier 1。
 
 ### 3.4 出网代理
 
@@ -292,6 +297,104 @@ chmod 600 "$out"
 
 > `natter health --json`（无 `--offline`）会启动完整 host 并新建 Discord 网关会话，和主实例抢同一个 bot 连接；cron 必须使用 loopback 或 `--offline`。
 > 主实例在跑时采样一律走 loopback `/health`，CLI 版本只用于人工排障。
+
+### 5.4 CLI 命令与 host 启动语义（S1-11）
+
+**默认不启动 host。** 只有显式声明"需要运行态"的命令才会 `StartAsync`，其余命令只读配置、state 库与插件元数据（`dotnet build` 级别的图构建不连接任何网关）。
+
+| 命令 | 启动 host | 需要它的原因 / 离线降级 |
+| --- | --- | --- |
+| `serve` | **是** | 长驻服务本体 |
+| `health`（不带 `--offline`） | **是** | 读运行态 uptime / upstream / provider；`health --offline` 走静态视图 |
+| `upstreams` | **是** | 读 upstream 的**实时**连接状态；加 `--no-host` 退化为静态列表 |
+| `events list` / `events watch` / `events clear` | **是** | 操作运行中的内存事件日志 |
+| `exec` | **是** | 在同一个 host 内跑多条命令 |
+| `demo` | **是** | 端到端演练运行中的 host |
+| `discord status`（插件命令） | **是** | 读 Discord 网关状态 |
+| `plugins graph` / `plugins contributions` / `plugins permissions` / `plugins doctor` | **是** | 读**已激活**插件的图/贡献/授权/诊断 |
+| `memory list` / `memory export` / `memory import` / `remember` / `forget` | **是** | 读写 host 打开的 memory store |
+| 其余全部：`plugins list` / `plugins inspect` / `plugins config validate`、`plugins store *`（list/install/enable/disable/rollback/uninstall/cleanup）、`doctor`、`ports`、`version`、`help`、`satori status`、`ai status`、**插件贡献命令的默认值** | **否** | 只读配置/state/插件元数据（如 `plugins list` 显示的是扫描结果 `Discovered`，激活态需启动 host）；插件若要运行态可用 `ICliHostRequirementProvider` 声明 |
+
+> 未解析的命令（不在内置表、也没声明规则）按**插件命令**处理 → 会启动 host 让插件有机会注册；若最终无人提供，命令报 `Unknown command`。
+> `ai status` 属于插件命令的默认档：主实例在跑时它不会启动第二个 host；若它确实需要运行态，由插件自带规则或改用 loopback `/health`。
+
+为什么这样设计：`plugins list`、`upstreams`、`ai status` 这类巡检命令以前也会拉起完整 host，**主实例运行时执行它们会建立第二条网关会话，导致其中一条被 Discord 断开**。现在读命令不再产生写副作用。
+
+#### 主实例在跑时执行"需要 host"的命令
+
+需要 host 的命令与 `serve` 共用 `<state-dir>/.lock`，因此**第二个进程会被拒绝**而不是抢会话：
+
+```bash
+$ natter --state-dir /var/lib/natter upstreams --json
+error: HL-CLI-HOST-BUSY: another Natter instance is using state directory '/var/lib/natter'.
+       'upstreams' needs a running host (...), and starting a second host would open a second
+       gateway session (one of them would be disconnected by Discord).
+       options:
+         - inspect the running instance: curl -s http://127.0.0.1:5099/health | jq
+         - run this command without a host: natter upstreams --no-host   (output is degraded)
+         - or stop the running instance first: sudo systemctl stop natter
+$ echo $?
+3
+```
+
+- **退出码 `3` = `HL-CLI-HOST-BUSY`**（与 `1` 一般失败、`2` 用法错误区分，脚本可直接判断）；
+- 不会静默返回空数据：拒绝时给错误码 + 提示，降级时给 note。
+
+#### 逃生口
+
+| 方式 | 作用 |
+| --- | --- |
+| `--no-host`（全局） | 任何命令都不启动 host；需要运行态的命令打印降级 note |
+| `--offline`（`health` 专有） | 等价于对 `health` 不启动 host，输出 `status=offline` 的静态视图 |
+
+```bash
+natter --state-dir /var/lib/natter plugins list --json      # 安全：不建网关会话
+natter --state-dir /var/lib/natter upstreams --no-host      # 显式降级
+natter --state-dir /var/lib/natter health --offline --json  # 静态健康视图
+```
+
+#### 巡检推荐顺序
+
+1. 服务在跑：`curl -s http://127.0.0.1:5099/health | jq`（零副作用）；
+2. 服务在跑且想看插件状态：`natter plugins list --detail`（离线，安全）；
+3. 服务停了想排障：`natter health --offline --json`、`natter doctor --json`、`natter plugins inspect <dir>`；
+4. 确实要看运行态：先停实例，或直接读 loopback `/health`。
+
+---
+
+### 5.5 CLI 退出码与错误码（S2 加固后）
+
+自动化不要只看"命令有没有输出"，要看退出码：
+
+| 退出码 | 含义 | 典型来源 |
+| --- | --- | --- |
+| `0` | 成功；`health` 表示 `healthy`（或 `offline`/`unknown` 这类静态视图） | 大多数命令 |
+| `1` | 命令执行失败（异常、未预期错误） | 任意命令 |
+| `2` | 用法错误：未知命令、**未知选项**、**全局选项缺值** | `natter version --typo`、`natter --config-dir` |
+| `3` | `HL-CLI-HOST-BUSY`：需要运行态的命令被另一个实例的锁拒绝 | 主实例在跑时执行 `upstreams`/`health` |
+| `4` | `health` 判定为 `degraded`（插件失败 / upstream 未连接 / Tier1 provider 不可用） | CI 健康闸门 |
+| `5` | `HL-CLI-STATE-DIR-UNUSABLE`：state 目录不可用（权限、只读根、路径非法） | 容器只读根、错误挂载 |
+
+行为约定（本轮加固）：
+
+- **`health` 在 `degraded` 时返回 4**（不再是 0），CI 可以直接用它做闸门：
+  ```bash
+  natter --config-dir /etc/natter/config --state-dir /var/lib/natter health --json; code=$?
+  # 0 healthy / 4 degraded / 1 失败 / 2 用法
+  ```
+  `serve` 是长驻进程，退出码不表达健康（用 `health` 或 loopback `/health` 判断）。
+- **`health --offline` 明确表达"插件未激活"**：`status=offline` + `pluginActivation=not-activated`，文本输出会写一行 `mode: offline (host not started, plugins not activated)`，不会把静态视图伪装成"断线"。
+- **未知选项报错**（`Unknown option '--x' for command 'y'`，exit 2）；以前会被静默接受并吞掉下一个位置参数。
+- **全局选项缺值报错**（`option '--config-dir' requires a value`，exit 2）；以前 `--config-dir --state-dir /x` 会静默吞掉 `--state-dir`。
+- **`--no-plugins` 只影响插件加载**：config/state/profile 解析与单实例锁照常工作。
+- **`/health` 与 `--json` 的所有错误字段统一脱敏**（`lastError`、`lastSendError`、`lastDisconnectError` 都过同一套 secret 正则），soak 证据里不会再出现原文明文。
+- **`--json` 输出统一单一序列化策略**（camelCase、紧凑）；`/health`、`health --json`、`memory export` 字段命名一致。
+- **`/health` 有并发上限**（4 个并发处理槽，超时回 503），本机客户端打不满线程池。
+
+供应链与脚本：
+
+- `Directory.Build.props` **默认开启 NuGet 审计**（`NuGetAudit=true`，`AuditMode=all`，`AuditLevel=moderate`）；需要豁免的工程要在自己 csproj 里显式关闭并写原因。
+- `scripts/p2-collect.sh` 采集 Discord 时通过 `curl -K -` 从 stdin 传 header，**token 不再出现在 argv**（`ps`/`/proc/*/cmdline` 看不到）。
 
 ---
 

@@ -162,6 +162,15 @@ public sealed class DingTalkChatUpstream : IChatUpstream, IChatUpstreamHealth, I
                 "DingTalk sessionWebhook is missing or expired; wait for the next inbound message."));
         }
 
+        // Defence in depth: the session was validated when it arrived, but a stale/tampered value
+        // must never reach HttpClient.
+        if (!DingTalkSessionWebhookPolicy.TryValidate(session.Webhook, out _, out var rejection))
+        {
+            return ChatAck.Failure(command, ChatError.Create(
+                ChatErrorCodes.InvalidRequest,
+                $"{DingTalkSessionWebhookPolicy.RejectedCode}: {rejection}"));
+        }
+
         var degraded = ChatCapabilityDegrader.DegradeSend(command, _capabilities);
         degraded.Payload.Content.EnsureValid();
         var chunks = ChatTextChunker.Chunk(degraded.Payload.Content, _capabilities.MaxMessageLength);
@@ -190,6 +199,15 @@ public sealed class DingTalkChatUpstream : IChatUpstream, IChatUpstreamHealth, I
         {
             case DingTalkTransportEventKind.Message when transportEvent.Message is { } message:
                 OnMessage(message);
+                break;
+            case DingTalkTransportEventKind.Connected:
+                // S2-A6: the transport reconnected internally (backoff loop). Without this the
+                // upstream kept connected=false and /health reported an outage that had ended.
+                LastError = null;
+                _lastConnectedAt = _clock.UtcNow;
+                lock (_gate)
+                    _connected = true;
+                PublishStatus(UpstreamState.Ready);
                 break;
             case DingTalkTransportEventKind.Error:
                 LastError = transportEvent.ErrorMessage;
@@ -226,9 +244,20 @@ public sealed class DingTalkChatUpstream : IChatUpstream, IChatUpstreamHealth, I
 
         if (!string.IsNullOrWhiteSpace(message.SessionWebhook))
         {
-            _sessions[message.ConversationId] = new SessionWebhook(
-                message.SessionWebhook,
-                message.SessionWebhookExpiresAt ?? _clock.UtcNow.AddMinutes(30));
+            // S2-A5: the webhook arrives inside the callback payload, so it is untrusted data.
+            // Remember it only when it is https on a DingTalk host; otherwise drop it and make the
+            // rejection visible instead of turning the reply path into an SSRF primitive.
+            if (DingTalkSessionWebhookPolicy.TryValidate(message.SessionWebhook, out _, out var rejection))
+            {
+                _sessions[message.ConversationId] = new SessionWebhook(
+                    message.SessionWebhook,
+                    message.SessionWebhookExpiresAt ?? _clock.UtcNow.AddMinutes(30));
+            }
+            else
+            {
+                LastError = $"{DingTalkSessionWebhookPolicy.RejectedCode}: {rejection}";
+                PublishStatus(UpstreamState.Error, LastError);
+            }
         }
 
         var conversation = new Conversation(
@@ -284,7 +313,7 @@ public sealed class DingTalkChatUpstream : IChatUpstream, IChatUpstreamHealth, I
             Sequence = _sequence,
             OccurredAt = _clock.UtcNow,
             ReceivedAt = _clock.UtcNow,
-            Payload = new UpstreamStatusPayload(state, detail),
+            Payload = new UpstreamStatusPayload(state, DingTalkDiagnostics.Redact(detail)),
         });
 
     private sealed class Observer(DingTalkChatUpstream owner) : IObserver<DingTalkTransportEvent>

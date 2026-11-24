@@ -20,7 +20,7 @@
 | 插件 Host API | `Natter.Plugin.Abstractions` 的 manifest、`INatterPlugin`、`IPluginContext`、contribution、配置/秘密/权限/诊断模型 |
 | 插件运行时 | `Natter.Infrastructure/Plugins/Nps` 的 manifest reader、依赖图、插件本地容器、contribution staging、激活回滚、端口路由与诊断 |
 | 插件包/存储 | `Natter.Plugin.Store` 的 `.natter-plugin.zip` 校验、SHA-256/ECDSA 签名、app 私有安装/更新/回退 store |
-| Discord transport | `Natter.Chat.Discord` 的 Discord.Net transport、DTO 映射与 `DiscordChatUpstream`；示例 NPS 插件 `natter.transport.discord` |
+| Discord transport | `Natter.Chat.Discord` 的 Discord.Net transport、DTO 映射与 `DiscordChatUpstream`；示例 NPS 插件 `natter.transport.messaging.discord` |
 | AI responder | `Natter.Feature.Ai.DeepSeek` 的 M.E.AI `IChatClient`、DeepSeek adapter、history/gate 与 `chat.responder` |
 | 共享 AI 边界 | `Natter.Feature.Ai` 的 `AiChatResponder`、`IAiContextAssembler`、`IAiConversationStore` |
 | 第二 transport/provider | `Natter.Chat.DingTalk` 的 Stream WebSocket transport + `Natter.Feature.Ai.Spark` MaaS `IChatClient` |
