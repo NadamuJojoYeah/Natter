@@ -284,7 +284,7 @@ public sealed class ReviewAcceptanceTests
         Assert.Equal(1, CountOccurrences(manifest, "<uses-permission"));
     }
 
-    [Fact]
+    [RequiresAndroidReleaseBuildFact]
     public void Release_build_manifest_keeps_exactly_one_internet_permission()
     {
         var androidRoot = Path.Combine(RepoRoot(), "src", "Natter.Hosting.Android");

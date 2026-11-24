@@ -117,7 +117,10 @@ jobs:
           python3 - <<'PY'
           import json
           report = json.load(open("soak-report.json"))
-          assert report["samples"] == 24, report["samples"]
+          # Must match the fixture above: 289 samples over the declared 24h window. These two
+          # numbers used to drift (fixture 289 / assertion 24 → AssertionError) because the fixture
+          # and the assertion live in separate heredocs.
+          assert report["samples"] == 289, report["samples"]
           assert report["result"] == "PASS", report
           assert report["upstreams"]["discord"]["reconnects"] == 0
           print("soak report PASS as expected")

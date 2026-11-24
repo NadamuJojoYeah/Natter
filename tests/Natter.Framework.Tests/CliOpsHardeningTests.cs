@@ -285,6 +285,11 @@ public sealed class CliOpsHardeningTests : IDisposable
         using var server = new HealthHttpServer(port, () => ValueTask.FromResult<object>(new { status = "healthy" }));
         server.Start();
         using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+        // FreeTcpPort() releases its probe socket before HttpListener binds the same port, so on a
+        // busy runner the first connects can land in that window and fail with HttpRequestException
+        // (recorded as -1). Wait for the endpoint to answer once, then assert the bounding behaviour;
+        // a genuinely unreachable listener still fails below with a clear message instead of -1s.
+        await WaitUntilListeningAsync(client, port);
         var statuses = await Task.WhenAll(Enumerable.Range(0, 12).Select(async _ =>
         {
             try
@@ -356,6 +361,28 @@ public sealed class CliOpsHardeningTests : IDisposable
     }
 
     // ---------------------------------------------------------------- helpers
+    private static async Task WaitUntilListeningAsync(HttpClient client, int port)
+    {
+        const int attempts = 50;
+        for (var attempt = 0; attempt < attempts; attempt++)
+        {
+            try
+            {
+                using var response = await client
+                    .GetAsync($"http://127.0.0.1:{port}/health")
+                    .ConfigureAwait(false);
+                return; // any HTTP status proves the listener is accepting
+            }
+            catch (HttpRequestException)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(100)).ConfigureAwait(false);
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"health endpoint on 127.0.0.1:{port} never started accepting within {attempts * 100}ms");
+    }
+
     private static int FreeTcpPort()
     {
         var listener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
