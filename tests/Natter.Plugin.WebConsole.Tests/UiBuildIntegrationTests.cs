@@ -14,7 +14,7 @@ namespace Natter.Plugin.WebConsole.Tests;
 public sealed class UiBuildIntegrationTests
 {
     private const string Csp =
-        "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
+        "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
         + "connect-src 'self'; font-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 
     private static string RepositoryRoot()
@@ -174,9 +174,17 @@ public sealed class UiBuildIntegrationTests
         using var harness = WebConsoleHarness.Create();
         var response = await harness.Handler.HandleAsync(harness.Request("GET", "/api/session"));
 
-        Assert.Equal(Csp, response.Headers["Content-Security-Policy"]);
-        Assert.DoesNotContain("unsafe-eval", response.Headers["Content-Security-Policy"], StringComparison.Ordinal);
-        Assert.DoesNotContain("unsafe-inline", response.Headers["Content-Security-Policy"], StringComparison.Ordinal);
+        var csp = response.Headers["Content-Security-Policy"];
+        Assert.Equal(Csp, csp);
+
+        // Assert the SHAPE, not the absence of a keyword: script-src must stay strict, while style-src
+        // carries 'unsafe-inline' because Ant Design v5 injects <style> at runtime and the bundle ships
+        // no static .css. A blanket DoesNotContain("unsafe-inline") would fail on that deliberate
+        // choice and invite someone to relax script-src instead — the exact regression to prevent.
+        Assert.Contains("script-src 'self';", csp, StringComparison.Ordinal);
+        Assert.DoesNotContain("script-src 'self' 'unsafe-inline'", csp, StringComparison.Ordinal);
+        Assert.DoesNotContain("unsafe-eval", csp, StringComparison.Ordinal);
+        Assert.DoesNotContain("'unsafe-inline'", csp.Replace("style-src 'self' 'unsafe-inline'", string.Empty), StringComparison.Ordinal);
     }
 
     // ---------------------------------------------------------------- real build output

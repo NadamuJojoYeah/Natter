@@ -25,7 +25,7 @@ public sealed class WebConsoleServerTests
             Assert.Equal(HttpStatusCode.OK, index.StatusCode);
             Assert.Equal("text/html; charset=utf-8", index.Content.Headers.ContentType?.ToString());
             Assert.Equal(
-                "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
+                "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
                 + "connect-src 'self'; font-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
                 Assert.Single(index.Headers.GetValues("Content-Security-Policy")));
 

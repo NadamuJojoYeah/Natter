@@ -21,7 +21,14 @@ public sealed class WebConsoleRequestHandler
         ["Cross-Origin-Resource-Policy"] = "same-origin",
         ["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()",
         ["Content-Security-Policy"] =
-            "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
+            // style-src needs 'unsafe-inline': Ant Design v5 styles components through CSS-in-JS, which
+            // injects <style> elements at runtime, and the bundle ships no static .css at all. A nonce
+            // would cover the <style> elements but not the inline style ATTRIBUTES AntD sets for
+            // dynamic geometry (virtual table height, popup positioning), so it would still leave the
+            // UI partly unstyled. The relaxation is scoped to styles only and stays bounded by the rest
+            // of the policy: script-src is still 'self' (no inline/eval), and img-src/connect-src/font-src
+            // are all 'self', so injected CSS cannot exfiltrate to an external host.
+            "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
             + "connect-src 'self'; font-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
     };
 

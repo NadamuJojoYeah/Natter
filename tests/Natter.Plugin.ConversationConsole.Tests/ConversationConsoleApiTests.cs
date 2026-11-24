@@ -297,9 +297,19 @@ public sealed class ConversationConsoleApiTests
 
         var csp = response.Headers["Content-Security-Policy"];
         Assert.Contains("default-src 'none'", csp, StringComparison.Ordinal);
+        // The invariant worth protecting is that SCRIPT stays strict. style-src carries
+        // 'unsafe-inline' by design: Ant Design v5 styles through CSS-in-JS (runtime <style> injection,
+        // no static .css in the bundle), and a nonce cannot cover the inline style attributes it sets
+        // for dynamic geometry. Asserting "no unsafe-inline anywhere" would either fail on a correct
+        // policy or pressure someone into weakening script-src to compensate — so scope the check.
         Assert.Contains("script-src 'self'", csp, StringComparison.Ordinal);
-        Assert.DoesNotContain("unsafe-inline", csp, StringComparison.Ordinal);
+        Assert.DoesNotContain("script-src 'self' 'unsafe-inline'", csp, StringComparison.Ordinal);
         Assert.DoesNotContain("unsafe-eval", csp, StringComparison.Ordinal);
+
+        var styleDirective = csp.Split(';').Single(part => part.TrimStart().StartsWith("style-src", StringComparison.Ordinal));
+        Assert.Contains("'self'", styleDirective, StringComparison.Ordinal);
+        Assert.Contains("'unsafe-inline'", styleDirective, StringComparison.Ordinal);
+        Assert.DoesNotContain("'unsafe-eval'", styleDirective, StringComparison.Ordinal);
 
         Assert.DoesNotContain(ConversationConsoleTestFactory.ValidToken, body, StringComparison.Ordinal);
     }
