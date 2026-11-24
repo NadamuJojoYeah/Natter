@@ -52,6 +52,7 @@ public sealed class SatoriChatUpstream : IChatUpstream, IDisposable
     private Capabilities _capabilities;
     private bool _connected;
     private bool _disposed;
+    private int _chunkingWarningLogged;
 
     public SatoriChatUpstream(
         Source source,
@@ -72,6 +73,7 @@ public sealed class SatoriChatUpstream : IChatUpstream, IDisposable
         _capabilities = SatoriCapabilityMapper.Map(null, capabilityOptions);
         _events = Subject.Synchronize(_subject);
         _idempotency = new ChatIdempotencyCache(clock: () => _clock.UtcNow);
+        WarnIfChunkingDisabled();
     }
 
     public Source Source { get; }
@@ -350,7 +352,10 @@ public sealed class SatoriChatUpstream : IChatUpstream, IDisposable
         try
         {
             if (satoriEvent.Login?.Features is { Count: > 0 } features)
+            {
                 _capabilities = SatoriCapabilityMapper.Map(features, _capabilityOptions);
+                WarnIfChunkingDisabled();
+            }
 
             // Replayed/older frames are skipped before mapping. The sequence is committed only
             // after a successful mapping: a mapping failure must not silently advance past the
@@ -383,6 +388,31 @@ public sealed class SatoriChatUpstream : IChatUpstream, IDisposable
                 "Satori event processing failed type={Type} sn={Sn}; sn not advanced",
                 satoriEvent.Type,
                 satoriEvent.Sn);
+        }
+    }
+
+    /// <summary>
+    /// Chunking only happens when an upper bound is known. <c>null</c> is a legitimate deployment
+    /// choice (unknown platform limit), but it must never be silent: a fix that quietly does nothing
+    /// is worse than no fix, because nobody goes looking for it.
+    /// </summary>
+    private void WarnIfChunkingDisabled()
+    {
+        if (_capabilities.MaxMessageLength is not null)
+        {
+            // Re-arm so a later switch back to "unknown" is reported again.
+            Volatile.Write(ref _chunkingWarningLogged, 0);
+            return;
+        }
+
+        if (Interlocked.Exchange(ref _chunkingWarningLogged, 1) == 0)
+        {
+            _logger?.LogWarning(
+                "Satori chunking is disabled because MaxMessageLength is not declared; replies longer "
+                + "than the platform limit will be rejected as a whole. Set "
+                + "SatoriCapabilityOptions.MaxMessageLength for this deployment's platform "
+                + "(default {DefaultMaxMessageLength}).",
+                SatoriCapabilityOptions.DefaultMaxMessageLength);
         }
     }
 

@@ -1,4 +1,5 @@
 using System.Reactive.Subjects;
+using Microsoft.Extensions.Logging;
 using Natter.Chat;
 using Natter.Chat.Satori;
 using Xunit;
@@ -16,7 +17,7 @@ public sealed class SatoriChunkingTests
     [Fact]
     public async Task Long_message_is_split_into_chunks_within_the_declared_limit()
     {
-        var (upstream, transport, clock) = await NewUpstream(maxMessageLength: 40);
+        var (upstream, transport, clock) = await NewUpstream(new SatoriCapabilityOptions { MaxMessageLength = 40 });
 
         var text = string.Join(" ", Enumerable.Repeat("lorem ipsum", 40));
         var ack = await upstream.ExecuteAsync(Send(clock, text));
@@ -34,7 +35,7 @@ public sealed class SatoriChunkingTests
     [Fact]
     public async Task Short_message_is_sent_as_one_request_unchanged()
     {
-        var (upstream, transport, clock) = await NewUpstream(maxMessageLength: 40);
+        var (upstream, transport, clock) = await NewUpstream(new SatoriCapabilityOptions { MaxMessageLength = 40 });
 
         var ack = await upstream.ExecuteAsync(Send(clock, "hi"));
 
@@ -45,11 +46,11 @@ public sealed class SatoriChunkingTests
     }
 
     [Fact]
-    public async Task Message_longer_than_the_limit_is_left_alone_when_no_limit_is_declared()
+    public async Task Explicit_null_disables_chunking_instead_of_chunking_at_a_guessed_limit()
     {
-        // Capability not declared => "unknown limit" keeps the previous behaviour (one request).
-        // Chunking starts at an explicit MaxMessageLength, never at a guessed default.
-        var (upstream, transport, clock) = await NewUpstream(maxMessageLength: null);
+        // null is the "we do not know this platform's limit" escape hatch. It is allowed, but the
+        // upstream must say so out loud (see Explicit_null_disables_chunking_and_is_warned_about).
+        var (upstream, transport, clock) = await NewUpstream(new SatoriCapabilityOptions { MaxMessageLength = null });
 
         var text = new string('x', 500);
         var ack = await upstream.ExecuteAsync(Send(clock, text));
@@ -61,7 +62,7 @@ public sealed class SatoriChunkingTests
     [Fact]
     public async Task Fenced_code_block_is_closed_and_reopened_so_every_chunk_renders()
     {
-        var (upstream, transport, clock) = await NewUpstream(maxMessageLength: 60);
+        var (upstream, transport, clock) = await NewUpstream(new SatoriCapabilityOptions { MaxMessageLength = 60 });
 
         var code = string.Join("\n", Enumerable.Repeat("var value = 1;", 10));
         var text = "before\n```csharp\n" + code + "\n```\nafter";
@@ -86,7 +87,7 @@ public sealed class SatoriChunkingTests
     public async Task Plain_text_does_not_get_fence_markers_injected()
     {
         // Fence repair is markdown-only; a plain-text reply must never gain ``` markers.
-        var (upstream, transport, clock) = await NewUpstream(maxMessageLength: 30);
+        var (upstream, transport, clock) = await NewUpstream(new SatoriCapabilityOptions { MaxMessageLength = 30 });
 
         var text = "```not a fence``` " + new string('y', 120);
         var ack = await upstream.ExecuteAsync(Send(clock, text));
@@ -101,7 +102,7 @@ public sealed class SatoriChunkingTests
     [Fact]
     public async Task Emoji_is_never_cut_in_the_middle_of_a_surrogate_pair()
     {
-        var (upstream, transport, clock) = await NewUpstream(maxMessageLength: 24);
+        var (upstream, transport, clock) = await NewUpstream(new SatoriCapabilityOptions { MaxMessageLength = 24 });
 
         const string family = "👨‍👩‍👧‍👦";
         const string flag = "🇨🇳";
@@ -120,7 +121,7 @@ public sealed class SatoriChunkingTests
     [Fact]
     public async Task Only_the_first_chunk_keeps_the_reply_reference()
     {
-        var (upstream, transport, clock) = await NewUpstream(maxMessageLength: 30);
+        var (upstream, transport, clock) = await NewUpstream(new SatoriCapabilityOptions { MaxMessageLength = 30 });
 
         var text = string.Join(" ", Enumerable.Repeat("reply text", 30));
         var ack = await upstream.ExecuteAsync(Send(clock, text, replyTo: "parent-1"));
@@ -135,7 +136,7 @@ public sealed class SatoriChunkingTests
     [Fact]
     public async Task Failing_chunk_ends_the_send_with_that_chunks_error_and_is_not_cached()
     {
-        var (upstream, transport, clock) = await NewUpstream(maxMessageLength: 30);
+        var (upstream, transport, clock) = await NewUpstream(new SatoriCapabilityOptions { MaxMessageLength = 30 });
         var send = Send(
             clock,
             string.Join(" ", Enumerable.Repeat("retry me", 40)),
@@ -164,7 +165,7 @@ public sealed class SatoriChunkingTests
     public async Task Successful_send_is_cached_by_idempotency_key()
     {
         // Regression lock for the existing behaviour that must survive the chunking change.
-        var (upstream, transport, clock) = await NewUpstream(maxMessageLength: 40);
+        var (upstream, transport, clock) = await NewUpstream(new SatoriCapabilityOptions { MaxMessageLength = 40 });
         var send = Send(clock, string.Join(" ", Enumerable.Repeat("once", 40)), idempotencyKey: "chunk-ok-1");
 
         var first = await upstream.ExecuteAsync(send);
@@ -177,12 +178,64 @@ public sealed class SatoriChunkingTests
         Assert.Equal(first.Result!.MessageIds, second.Result!.MessageIds);
     }
 
+    [Fact]
+    public async Task Host_default_options_chunk_at_the_conservative_default()
+    {
+        // No explicit limit from the host: the conservative default must already be in force,
+        // otherwise this fix would ship silently inert (which is worse than no fix at all).
+        var (upstream, transport, clock) = await NewUpstream(new SatoriCapabilityOptions());
+
+        var text = new string('z', SatoriCapabilityOptions.DefaultMaxMessageLength + 500);
+        var ack = await upstream.ExecuteAsync(Send(clock, text));
+
+        Assert.True(ack.Ok);
+        Assert.True(transport.Requests.Count > 1);
+        Assert.All(
+            transport.Requests.Select(ContentOf),
+            body => Assert.True(body.Length <= SatoriCapabilityOptions.DefaultMaxMessageLength, $"chunk over default: {body.Length}"));
+        Assert.Equal(text, string.Concat(transport.Requests.Select(ContentOf)));
+    }
+
+    [Fact]
+    public async Task Explicit_null_disables_chunking_and_is_warned_about()
+    {
+        var logger = new RecordingLogger<SatoriChatUpstream>();
+        var (upstream, transport, clock) = await NewUpstream(
+            new SatoriCapabilityOptions { MaxMessageLength = null },
+            logger);
+
+        var text = new string('w', SatoriCapabilityOptions.DefaultMaxMessageLength + 500);
+        var ack = await upstream.ExecuteAsync(Send(clock, text));
+
+        Assert.True(ack.Ok);
+        // Chunking really is off (the deployment asked for that) ...
+        Assert.Equal(text, ContentOf(Assert.Single(transport.Requests)));
+        // ... and the decision is visible in the journal instead of being a silent no-op.
+        Assert.Contains(
+            logger.Entries,
+            entry => entry.Contains("chunking is disabled", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task Chunk_boundary_is_exact_at_the_declared_limit()
+    {
+        var (upstream, transport, clock) = await NewUpstream(new SatoriCapabilityOptions { MaxMessageLength = 10 });
+
+        Assert.True((await upstream.ExecuteAsync(Send(clock, new string('a', 10)))).Ok);
+        Assert.Single(transport.Requests);
+
+        transport.Requests.Clear();
+        Assert.True((await upstream.ExecuteAsync(Send(clock, new string('b', 11)))).Ok);
+        Assert.Equal(2, transport.Requests.Count);
+    }
+
     // ─────────────────────────────────────────────────────────────────────────────
     // helpers
     // ─────────────────────────────────────────────────────────────────────────────
 
     private static async Task<(SatoriChatUpstream Upstream, RecordingSatoriTransport Transport, TestClock Clock)> NewUpstream(
-        int? maxMessageLength)
+        SatoriCapabilityOptions options,
+        ILogger<SatoriChatUpstream>? logger = null)
     {
         var clock = new TestClock();
         var transport = new RecordingSatoriTransport();
@@ -190,7 +243,8 @@ public sealed class SatoriChunkingTests
             ChatTestData.Source(),
             transport,
             clock,
-            capabilityOptions: new SatoriCapabilityOptions { MaxMessageLength = maxMessageLength });
+            capabilityOptions: options,
+            logger: logger);
         await upstream.ConnectAsync();
         return (upstream, transport, clock);
     }
@@ -245,6 +299,36 @@ public sealed class SatoriChunkingTests
         }
 
         return false;
+    }
+
+    private sealed class RecordingLogger<T> : ILogger<T>
+    {
+        private readonly Lock _gate = new();
+        private readonly List<string> _entries = [];
+
+        public IReadOnlyList<string> Entries
+        {
+            get
+            {
+                lock (_gate)
+                    return _entries.ToArray();
+            }
+        }
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            lock (_gate)
+                _entries.Add($"{logLevel}: {formatter(state, exception)}");
+        }
     }
 
     private sealed class RecordingSatoriTransport : ISatoriTransport
