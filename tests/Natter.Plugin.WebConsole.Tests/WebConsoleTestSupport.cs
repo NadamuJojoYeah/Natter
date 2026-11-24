@@ -189,10 +189,33 @@ internal sealed class FakeTaskInspection : Natter.Application.Chat.IAgentTaskIns
 
     public Dictionary<string, Natter.Application.Chat.AgentTaskTrace> Traces { get; } = new(StringComparer.Ordinal);
 
+    /// <summary>Last filter the handler passed in (task-72 ② assertions).</summary>
+    public Natter.Application.Chat.AgentTaskFilter? LastFilter { get; private set; }
+
     public ValueTask<IReadOnlyList<Natter.Application.Chat.AgentTaskSummary>> GetRecentAsync(
         int limit,
         CancellationToken cancellationToken = default)
-        => ValueTask.FromResult<IReadOnlyList<Natter.Application.Chat.AgentTaskSummary>>(Recent.Take(limit).ToArray());
+        => GetRecentAsync(limit, null, cancellationToken);
+
+    public ValueTask<IReadOnlyList<Natter.Application.Chat.AgentTaskSummary>> GetRecentAsync(
+        int limit,
+        Natter.Application.Chat.AgentTaskFilter? filter,
+        CancellationToken cancellationToken = default)
+    {
+        LastFilter = filter;
+
+        // Mirror the host's SQL semantics so the endpoint tests can assert each filter independently.
+        var items = Recent
+            .Where(task => string.IsNullOrEmpty(filter?.Source) || task.Source == filter!.Source)
+            .Where(task => string.IsNullOrEmpty(filter?.Status)
+                || string.Equals(task.Status, filter!.Status, StringComparison.OrdinalIgnoreCase))
+            .Where(task => filter?.Since is null || task.UpdatedAt >= filter.Since)
+            .Where(task => filter?.Until is null || task.UpdatedAt <= filter.Until)
+            .Take(limit)
+            .ToArray();
+
+        return ValueTask.FromResult<IReadOnlyList<Natter.Application.Chat.AgentTaskSummary>>(items);
+    }
 
     public ValueTask<Natter.Application.Chat.AgentTaskTrace?> GetTraceAsync(
         string taskId,

@@ -16,7 +16,9 @@ public sealed record AgentTaskTraceEntry(
     string? Name = null,
     string? Code = null,
     int? Step = null,
-    string? Status = null);
+    string? Status = null,
+    /// <summary>Real duration measured by the writer; null means the console must estimate.</summary>
+    long? DurationMs = null);
 
 /// <summary>Task-level header: the fields <c>/status</c> prints before its trace lines.</summary>
 public sealed record AgentTaskTraceHeader(
@@ -50,6 +52,20 @@ public sealed record AgentTaskSummary(
     int Version);
 
 /// <summary>
+/// Filters for the recent-tasks list (task-72). All fields are optional; a null field means "no
+/// filter". <see cref="Since"/>/<see cref="Until"/> bound <c>updated_at</c> inclusively.
+/// </summary>
+public sealed record AgentTaskFilter(
+    string? Source = null,
+    string? Status = null,
+    string? SessionId = null,
+    DateTimeOffset? Since = null,
+    DateTimeOffset? Until = null)
+{
+    public static AgentTaskFilter Empty { get; } = new();
+}
+
+/// <summary>
 /// Read-only task inspection port (task-65). The WebConsole plugin consumes it through the admin
 /// bridge; it exposes only whitelisted, already-redacted task data (see <see cref="TaskTracePayload"/>),
 /// never prompts or tool bodies.
@@ -57,7 +73,10 @@ public sealed record AgentTaskSummary(
 public interface IAgentTaskInspection
 {
     /// <summary>Recent tasks, newest first. Used by the trace list and the overview counters.</summary>
-    ValueTask<IReadOnlyList<AgentTaskSummary>> GetRecentAsync(int limit, CancellationToken cancellationToken = default);
+    ValueTask<IReadOnlyList<AgentTaskSummary>> GetRecentAsync(
+        int limit,
+        AgentTaskFilter? filter = null,
+        CancellationToken cancellationToken = default);
 
     /// <summary>Full trace for one task, or null when the task does not exist.</summary>
     ValueTask<AgentTaskTrace?> GetTraceAsync(string taskId, CancellationToken cancellationToken = default);

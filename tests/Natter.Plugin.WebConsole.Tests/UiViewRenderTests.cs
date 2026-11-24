@@ -135,6 +135,60 @@ public sealed class UiViewRenderTests
     }
 
     [Fact]
+    public void Duration_prefers_the_measured_value_and_labels_the_fallback_as_estimate()
+    {
+        var html = Report().GetProperty("durations").GetString()!;
+
+        // ① Measured: 45ms shown as the tool's own duration, no estimate marker on that row.
+        Assert.Contains("45ms", html, StringComparison.Ordinal);
+        // Fallback (step without ms): the gap is shown but explicitly tagged as an estimate.
+        Assert.Contains("估算", html, StringComparison.Ordinal);
+        Assert.Contains("estimated", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Config_dirty_detection_covers_edits_and_whitespace()
+    {
+        var dirty = Report().GetProperty("dirty");
+
+        Assert.False(dirty.GetProperty("unchanged").GetBoolean());
+        Assert.True(dirty.GetProperty("changed").GetBoolean());
+        Assert.False(dirty.GetProperty("bothEmpty").GetBoolean());
+        Assert.True(dirty.GetProperty("trailingWhitespace").GetBoolean());
+    }
+
+    [Fact]
+    public void Downloads_use_a_blob_anchor_not_browser_navigation()
+    {
+        var download = Report().GetProperty("download");
+
+        Assert.Equal("natter-logs-1.jsonl", download.GetProperty("fileName").GetString());
+        Assert.Equal(6, download.GetProperty("bytes").GetInt32());
+        Assert.Equal("blob:probe", download.GetProperty("url").GetString());
+        Assert.Equal("blob:probe", download.GetProperty("anchorHref").GetString());
+        Assert.Equal("natter-logs-1.jsonl", download.GetProperty("anchorDownload").GetString());
+        Assert.Equal("blob:probe", download.GetProperty("revoked").GetString());
+        Assert.True(download.GetProperty("truncated").GetBoolean());
+        Assert.Equal(10, download.GetProperty("files").GetInt32());
+    }
+
+    [Fact]
+    public void Frontend_sources_never_use_location_assign_for_downloads()
+    {
+        var root = Path.Combine(RepositoryRoot(), "ui", "src");
+        var sources = Directory.GetFiles(root, "*.tsx", SearchOption.AllDirectories)
+            .Concat(Directory.GetFiles(root, "*.ts", SearchOption.AllDirectories))
+            .Where(file => !file.Contains($"{Path.DirectorySeparatorChar}legacy{Path.DirectorySeparatorChar}", StringComparison.Ordinal));
+
+        foreach (var source in sources)
+        {
+            // Comments may mention the forbidden API; only an actual call is a violation.
+            Assert.DoesNotMatch(new System.Text.RegularExpressions.Regex(@"location\s*\.\s*assign\s*\("),
+                File.ReadAllText(source));
+        }
+    }
+
+    [Fact]
     public void Conversation_messages_are_escaped_not_rendered_as_html()
     {
         var html = Report().GetProperty("messages").GetString()!;

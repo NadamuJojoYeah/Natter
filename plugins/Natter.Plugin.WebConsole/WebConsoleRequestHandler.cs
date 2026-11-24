@@ -535,14 +535,35 @@ public sealed class WebConsoleRequestHandler
         }
 
         var limit = ReadLimit(request, 50);
-        var recent = await tasks.GetRecentAsync(limit, cancellationToken).ConfigureAwait(false);
-        Audit(request, "trace.list", "ok", startedAt, $"limit={limit} count={recent.Count}");
+        var query = ParseQuery(request.Query);
+        var filter = new Natter.Application.Chat.AgentTaskFilter(
+            Source: NullIfBlank(query.GetValueOrDefault("source")),
+            Status: NullIfBlank(query.GetValueOrDefault("status")),
+            SessionId: NullIfBlank(query.GetValueOrDefault("session")),
+            Since: ParseInstant(query.GetValueOrDefault("since")),
+            Until: ParseInstant(query.GetValueOrDefault("until")));
+
+        var recent = await tasks.GetRecentAsync(limit, filter, cancellationToken).ConfigureAwait(false);
+        Audit(
+            request,
+            "trace.list",
+            "ok",
+            startedAt,
+            $"limit={limit} count={recent.Count} source={filter.Source ?? "-"} status={filter.Status ?? "-"}");
 
         return WebConsoleHttpResponse.Json(200, new
         {
             available = true,
             limit,
             count = recent.Count,
+            filter = new
+            {
+                source = filter.Source,
+                status = filter.Status,
+                session = filter.SessionId,
+                since = filter.Since,
+                until = filter.Until,
+            },
             tasks = recent,
         });
     }
@@ -1255,6 +1276,26 @@ public sealed class WebConsoleRequestHandler
         _audit.Write(action, null, client, target, result, _clock.GetUtcNow() - startedAt);
     }
 
+    private static string? NullIfBlank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    /// <summary>Accepts ISO-8601 or a bare unix-seconds value; invalid input means "no bound".</summary>
+    private static DateTimeOffset? ParseInstant(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        if (long.TryParse(value, System.Globalization.CultureInfo.InvariantCulture, out var unixSeconds))
+            return DateTimeOffset.FromUnixTimeSeconds(unixSeconds);
+
+        return DateTimeOffset.TryParse(
+            value,
+            System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal,
+            out var parsed)
+            ? parsed
+            : null;
+    }
+
     private static string? SessionUser(WebConsoleHttpRequest request)
     {
         var role = request.Headers.TryGetValue("X-WebConsole-Role", out var explicitRole) ? explicitRole : null;
@@ -1317,7 +1358,8 @@ public sealed class WebConsoleRequestHandler
         if (string.IsNullOrWhiteSpace(query))
             return result;
 
-        foreach (var pair in query.Split('&', StringSplitOptions.RemoveEmptyEntries))
+        // Accept both `a=1&b=2` and `?a=1&b=2`: HttpListener's Url.Query keeps the '?', callers may not.
+        foreach (var pair in query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries))
         {
             var separator = pair.IndexOf('=');
             if (separator <= 0)

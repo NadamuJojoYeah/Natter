@@ -157,6 +157,58 @@ public sealed class SqliteConversationQuery : IConversationQuery
 
     public async ValueTask<IReadOnlyList<StoredMessage>> GetMessagesAsync(
         string sessionId,
+        MessageCursor cursor,
+        int limit,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
+        ArgumentNullException.ThrowIfNull(cursor);
+
+        var clamped = ConversationQueryLimits.ClampMessagePageSize(limit);
+        if (clamped == 0)
+            return [];
+
+        if (!File.Exists(_databasePath))
+            return [];
+
+        await using var connection = await OpenAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        // Keyset on (created_at, message_id): timestamps are not unique (several messages can share a
+        // second), so the id breaks ties. Ordering matches the cursor exactly, which is what makes
+        // paging reproducible; an id-only cursor could skip a row whose created_at equals the previous
+        // page's last row but whose id is smaller.
+        command.CommandText = """
+            SELECT role, text, source_event_id, created_at, message_id
+            FROM messages
+            WHERE session_id = $session
+              AND (created_at > $created OR (created_at = $created AND message_id > $id))
+            ORDER BY created_at ASC, message_id ASC
+            LIMIT $limit;
+            """;
+        command.Parameters.AddWithValue("$session", sessionId);
+        command.Parameters.AddWithValue(
+            "$created",
+            cursor.CreatedAt.ToUniversalTime().ToString("O", System.Globalization.CultureInfo.InvariantCulture));
+        command.Parameters.AddWithValue("$id", Math.Max(0, cursor.MessageId));
+        command.Parameters.AddWithValue("$limit", clamped);
+
+        var result = new List<StoredMessage>(Math.Min(clamped, 32));
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            result.Add(new StoredMessage(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.IsDBNull(2) ? null : reader.GetString(2),
+                ParseTimestamp(reader.GetString(3)),
+                reader.GetInt64(4)));
+        }
+
+        return result;
+    }
+
+    public async ValueTask<IReadOnlyList<StoredMessage>> GetMessagesAsync(
+        string sessionId,
         long afterMessageId,
         int limit,
         CancellationToken cancellationToken = default)

@@ -382,9 +382,10 @@ public sealed class ConversationQueryTests
             .Where(method => !method.IsSpecialName)
             .ToArray();
 
-        Assert.Equal(2, methods.Length);
+        // Two read methods, plus the composite-cursor overload of GetMessagesAsync (task-72 ⑤).
+        // The guard is about *shape* (read-only, ValueTask only), not about an exact count.
         Assert.Equal(
-            ["GetMessagesAsync", "ListAsync"],
+            ["GetMessagesAsync", "GetMessagesAsync", "ListAsync"],
             methods.Select(method => method.Name).OrderBy(name => name, StringComparer.Ordinal).ToArray());
 
         string[] writeVerbs = ["write", "append", "clear", "delete", "remove", "save", "update", "set", "add", "create", "import"];

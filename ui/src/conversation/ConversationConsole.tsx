@@ -18,6 +18,9 @@ interface SessionListResponse {
 interface MessageListResponse {
   messages?: ConversationMessage[];
   nextAfter?: number | null;
+  /** Composite (createdAt,id) cursor for the next page; preferred over nextAfter. */
+  nextCursor?: string | null;
+  items?: ConversationMessage[];
   available?: boolean;
   gapCode?: string | null;
 }
@@ -46,6 +49,7 @@ export function ConversationConsole() {
   const [messagePhase, setMessagePhase] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [messageError, setMessageError] = useState<{ code: string; message: string } | null>(null);
   const [nextAfter, setNextAfter] = useState<number | null>(null);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
 
   const withAuth = useCallback(
     async <T,>(path: string, options: { method?: "GET" | "POST"; body?: unknown } = {}): Promise<T> => {
@@ -114,15 +118,21 @@ export function ConversationConsole() {
   );
 
   const loadMessages = useCallback(
-    (session: ConversationSession, after: number) => {
+    (session: ConversationSession, after: number, cursor: string | null = null) => {
       setMessagePhase("loading");
+      const parameters = new URLSearchParams({ after: String(after), limit: String(MESSAGE_PAGE) });
+      if (cursor) {
+        parameters.set("cursor", cursor);
+      }
+
       withAuth<MessageListResponse>(
-        `/api/sessions/${encodeURIComponent(session.sessionId)}/messages?after=${after}&limit=${MESSAGE_PAGE}`,
+        `/api/sessions/${encodeURIComponent(session.sessionId)}/messages?${parameters.toString()}`,
       )
         .then((payload) => {
-          const next = payload.messages ?? [];
-          setMessages((current) => (after > 0 ? [...current, ...next] : next));
+          const next = payload.items ?? payload.messages ?? [];
+          setMessages((current) => (after > 0 || cursor !== null ? [...current, ...next] : next));
           setNextAfter(payload.nextAfter ?? null);
+          setNextCursor(payload.nextCursor ?? null);
           setMessagePhase("ready");
           setMessageError(null);
         })
@@ -150,6 +160,7 @@ export function ConversationConsole() {
     setSelected(session);
     setMessages([]);
     setNextAfter(null);
+    setNextCursor(null);
     loadMessages(session, 0);
   };
 
@@ -284,16 +295,16 @@ export function ConversationConsole() {
                     <ErrorState
                       code={messageError.code}
                       message={messageError.message}
-                      onRetry={() => loadMessages(selected, nextAfter ?? 0)}
+                      onRetry={() => loadMessages(selected, nextAfter ?? 0, nextCursor)}
                     />
                   ) : null}
                   {messagePhase === "ready" && messages.length === 0 ? (
                     <EmptyState reason="no-data" detail="该会话还没有消息。" />
                   ) : null}
                   <MessageReplay messages={messages} />
-                  {nextAfter ? (
+                  {nextAfter || nextCursor ? (
                     <Space>
-                      <Button onClick={() => loadMessages(selected, nextAfter)}>加载更多消息</Button>
+                      <Button onClick={() => loadMessages(selected, nextAfter ?? 0, nextCursor)}>加载更多消息</Button>
                       <Typography.Text type="secondary">
                         {truncationText({ original: selected.messageCount ?? messages.length, shown: messages.length, unit: "条" })}
                       </Typography.Text>

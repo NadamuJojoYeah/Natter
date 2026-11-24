@@ -26,7 +26,7 @@ public sealed class TaskInspectionTests
         await store.AppendEventAsync(
             task.TaskId,
             TaskTraceKinds.Tool,
-            TaskTracePayload.Build(("name", "clock"), ("status", "ok")));
+            TaskTracePayload.Build(("name", "clock"), ("status", "ok"), ("ms", 45L)));
         await store.AppendEventAsync(
             task.TaskId,
             TaskTraceKinds.Final,
@@ -41,6 +41,11 @@ public sealed class TaskInspectionTests
         Assert.Equal(1, trace.Entries[1].Step);
         Assert.Equal("native", trace.Entries[1].Name);
         Assert.Equal("clock", trace.Entries[2].Name);
+        // ① The measured duration survives the store → port mapping; the console must prefer it.
+        Assert.Equal(45, trace.Entries[2].DurationMs);
+        // Events without a measured duration stay null so the UI labels its fallback as an estimate.
+        Assert.Null(trace.Entries[0].DurationMs);
+        Assert.Null(trace.Entries[1].DurationMs);
         Assert.Equal("agent.timeout", trace.Entries[3].Code);
         Assert.True(trace.Task.ElapsedMs >= 0);
     }

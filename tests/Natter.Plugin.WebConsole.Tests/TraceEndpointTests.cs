@@ -145,6 +145,96 @@ public sealed class TraceEndpointTests
         Assert.Equal(200, response.StatusCode);
     }
 
+    [Fact]
+    public async Task Trace_list_passes_every_filter_to_the_host()
+    {
+        var tasks = new FakeTaskInspection();
+        using var harness = WebConsoleHarness.Create(tasks: tasks);
+        var login = await harness.LoginAsync();
+
+        var response = await harness.Handler.HandleAsync(harness.Request(
+            "GET",
+            "/api/trace",
+            cookie: login.Cookie,
+            query: "?source=discord:discord:11&status=Failed&session=session-1&since=2026-11-24T10:00:00Z&until=2026-11-24T11:00:00Z&limit=7"));
+
+        Assert.Equal(200, response.StatusCode);
+        var filter = tasks.LastFilter;
+        Assert.NotNull(filter);
+        Assert.Equal("discord:discord:11", filter!.Source);
+        Assert.Equal("Failed", filter.Status);
+        Assert.Equal("session-1", filter.SessionId);
+        Assert.Equal(DateTimeOffset.Parse("2026-11-24T10:00:00Z", System.Globalization.CultureInfo.InvariantCulture), filter.Since);
+        Assert.Equal(DateTimeOffset.Parse("2026-11-24T11:00:00Z", System.Globalization.CultureInfo.InvariantCulture), filter.Until);
+    }
+
+    [Theory]
+    [InlineData("status=Failed", "Failed", null, null)]
+    [InlineData("source=discord:discord:11", null, "discord:discord:11", null)]
+    [InlineData("session=session-1", null, null, "session-1")]
+    public async Task Trace_filter_works_individually(string query, string? status, string? source, string? session)
+    {
+        var tasks = new FakeTaskInspection();
+        using var harness = WebConsoleHarness.Create(tasks: tasks);
+        var login = await harness.LoginAsync();
+
+        var response = await harness.Handler.HandleAsync(harness.Request(
+            "GET", "/api/trace", cookie: login.Cookie, query: "?" + query));
+
+        Assert.Equal(200, response.StatusCode);
+        Assert.Equal(status, tasks.LastFilter!.Status);
+        Assert.Equal(source, tasks.LastFilter.Source);
+        Assert.Equal(session, tasks.LastFilter.SessionId);
+    }
+
+    [Fact]
+    public async Task Trace_filter_narrows_the_list()
+    {
+        var tasks = new FakeTaskInspection();
+        tasks.Recent.Add(new AgentTaskSummary("task_a", "Failed", "discord:discord:11", DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch, 1, "x", 1));
+        tasks.Recent.Add(new AgentTaskSummary("task_b", "Completed", "discord:discord:11", DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch, 1, null, 1));
+
+        using var harness = WebConsoleHarness.Create(tasks: tasks);
+        var login = await harness.LoginAsync();
+
+        var response = await harness.Handler.HandleAsync(harness.Request(
+            "GET", "/api/trace", cookie: login.Cookie, query: "?status=Completed"));
+
+        Assert.Equal(200, response.StatusCode);
+        using var document = JsonDocument.Parse(response.Body);
+        var ids = document.RootElement.GetProperty("tasks").EnumerateArray()
+            .Select(task => task.GetProperty("taskId").GetString()).ToArray();
+        Assert.Equal(["task_b"], ids);
+    }
+
+    [Fact]
+    public async Task Trace_detail_reports_the_measured_duration()
+    {
+        var tasks = new FakeTaskInspection();
+        var trace = SampleTrace() with
+        {
+            Entries =
+            [
+                new("started", DateTimeOffset.UnixEpoch),
+                new("tool", DateTimeOffset.UnixEpoch.AddSeconds(1), Name: "clock", DurationMs: 45),
+            ],
+        };
+        tasks.Traces["task_abc"] = trace;
+
+        using var harness = WebConsoleHarness.Create(tasks: tasks);
+        var login = await harness.LoginAsync();
+
+        var response = await harness.Handler.HandleAsync(harness.Request("GET", "/api/trace/task_abc", cookie: login.Cookie));
+
+        Assert.Equal(200, response.StatusCode);
+        using var document = JsonDocument.Parse(response.Body);
+        var entries = document.RootElement.GetProperty("entries");
+        Assert.Equal(45, entries[1].GetProperty("durationMs").GetInt64());
+        // Unmeasured events omit the field entirely (nulls are not serialised) — the UI must treat a
+        // missing durationMs as "estimate", not as zero.
+        Assert.False(entries[0].TryGetProperty("durationMs", out _));
+    }
+
     private static string? ErrorCode(WebConsoleHttpResponse response)
     {
         using var document = JsonDocument.Parse(response.Body);

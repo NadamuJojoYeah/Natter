@@ -23,9 +23,18 @@ public sealed class TaskInspectionService : IAgentTaskInspection
 
     public async ValueTask<IReadOnlyList<AgentTaskSummary>> GetRecentAsync(
         int limit,
+        AgentTaskFilter? filter = null,
         CancellationToken cancellationToken = default)
     {
-        var tasks = await ListRecentTasksAsync(Math.Clamp(limit, 1, 200), cancellationToken).ConfigureAwait(false);
+        filter ??= AgentTaskFilter.Empty;
+        var tasks = await _store.ListRecentAsync(
+            Math.Clamp(limit, 1, 200),
+            filter.Source,
+            filter.Status,
+            filter.SessionId,
+            filter.Since,
+            filter.Until,
+            cancellationToken).ConfigureAwait(false);
         var now = _clock.GetUtcNow();
 
         return tasks
@@ -57,7 +66,14 @@ public sealed class TaskInspectionService : IAgentTaskInspection
             .Select(TaskTraceEntry.From)
             .Where(entry => entry.Kind is TaskTraceKinds.Started or TaskTraceKinds.Step
                 or TaskTraceKinds.Tool or TaskTraceKinds.Final)
-            .Select(entry => new AgentTaskTraceEntry(entry.Kind, entry.At, entry.Name, entry.Code, entry.Step, entry.Status))
+            .Select(entry => new AgentTaskTraceEntry(
+                entry.Kind,
+                entry.At,
+                entry.Name,
+                entry.Code,
+                entry.Step,
+                entry.Status,
+                entry.DurationMs))
             .ToArray();
 
         var now = _clock.GetUtcNow();
@@ -79,18 +95,6 @@ public sealed class TaskInspectionService : IAgentTaskInspection
             truncated);
 
         return new AgentTaskTrace(header, entries);
-    }
-
-    private async ValueTask<IReadOnlyList<AgentTask>> ListRecentTasksAsync(
-        int limit,
-        CancellationToken cancellationToken)
-    {
-        // ITaskStore has no "recent across sessions" query; recoverable tasks (Pending/Running) are
-        // exactly the set an operator needs first, so they are listed ahead of terminal ones. The
-        // store contract is extended with ListRecentAsync when the schema allows ordering by
-        // updated_at descending.
-        var recent = await _store.ListRecentAsync(limit, cancellationToken).ConfigureAwait(false);
-        return recent;
     }
 
     private static long ElapsedMs(AgentTask task, DateTimeOffset now)

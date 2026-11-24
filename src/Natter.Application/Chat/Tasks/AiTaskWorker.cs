@@ -187,6 +187,7 @@ public sealed class AiTaskWorker(
                 protocol);
 
             TaskModelReply reply;
+            var stepStartedAt = Stopwatch.GetTimestamp();
             try
             {
                 using var stepBudget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -217,7 +218,10 @@ public sealed class AiTaskWorker(
                 TaskTracePayload.Build(
                     ("step", stepIndex),
                     ("protocol", protocol == ToolCallProtocol.Native ? "native" : "text"),
-                    ("toolCall", reply.ToolCall is not null))).ConfigureAwait(false);
+                    ("toolCall", reply.ToolCall is not null),
+                    // Real model-call duration: without it a step's cost is only inferable from the
+                    // gap between events, which also contains queueing and network time.
+                    ("ms", (long)Stopwatch.GetElapsedTime(stepStartedAt).TotalMilliseconds))).ConfigureAwait(false);
 
             if (!reply.Ok)
                 return new TaskResult(null, reply.ErrorCode, reply.ErrorMessage ?? "The AI provider failed.");

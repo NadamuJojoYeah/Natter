@@ -143,11 +143,27 @@ public sealed class InMemoryTaskStore : ITaskStore
     }
 
     public ValueTask<IReadOnlyList<AgentTask>> ListRecentAsync(int limit, CancellationToken cancellationToken = default)
+        => ListRecentAsync(limit, null, null, null, null, null, cancellationToken);
+
+    public ValueTask<IReadOnlyList<AgentTask>> ListRecentAsync(
+        int limit,
+        string? source = null,
+        string? status = null,
+        string? sessionId = null,
+        DateTimeOffset? since = null,
+        DateTimeOffset? until = null,
+        CancellationToken cancellationToken = default)
     {
         lock (_gate)
         {
             return ValueTask.FromResult<IReadOnlyList<AgentTask>>(
                 _tasks.Values
+                    .Where(task => string.IsNullOrEmpty(source) || task.Source.Key == source)
+                    .Where(task => string.IsNullOrEmpty(status)
+                        || string.Equals(task.Status.ToString(), status, StringComparison.OrdinalIgnoreCase))
+                    .Where(task => string.IsNullOrEmpty(sessionId) || task.SessionId == sessionId)
+                    .Where(task => since is null || task.UpdatedAt >= since)
+                    .Where(task => until is null || task.UpdatedAt <= until)
                     .OrderByDescending(task => task.UpdatedAt)
                     .ThenByDescending(task => task.TaskId, StringComparer.Ordinal)
                     .Take(Math.Max(1, limit))

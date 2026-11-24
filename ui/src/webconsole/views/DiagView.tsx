@@ -3,12 +3,15 @@ import { Alert, Button, Card, Space, Table, Typography } from "antd";
 import { EmptyState } from "../../shared/states";
 import { formatBytes } from "../../shared/format";
 import { describeError } from "../../shared/api";
+import { downloadFile } from "../../shared/download";
 import type { DiagManifestFile } from "../../shared/types";
 
 interface DiagState {
   fileName: string;
   totalBytes: number;
   truncated: boolean;
+  /** Entry count from the response header (the browser cannot read the downloaded ZIP). */
+  fileCount: number | null;
   files: DiagManifestFile[];
 }
 
@@ -22,34 +25,13 @@ export function DiagView() {
     setState("running");
     setError(null);
 
-    fetch("/api/diagnostics", { credentials: "same-origin", cache: "no-store" })
-      .then(async (response) => {
-        if (!response.ok) {
-          const payload = await response.json().catch(() => null);
-          throw Object.assign(new Error(payload?.error?.message ?? `HTTP ${response.status}`), {
-            code: payload?.error?.code ?? `http.${response.status}`,
-          });
-        }
-
-        const blob = await response.blob();
-        const disposition = response.headers.get("Content-Disposition") ?? "";
-        const match = /filename="?([^";]+)"?/i.exec(disposition);
-        const fileName = match ? match[1] : "natter-diag.zip";
-
-        const location = globalThis.location;
-        if (location && typeof location.assign === "function" && typeof URL.createObjectURL === "function") {
-          const url = URL.createObjectURL(blob);
-          const anchor = document.createElement("a");
-          anchor.href = url;
-          anchor.download = fileName;
-          anchor.click();
-          URL.revokeObjectURL(url);
-        }
-
+    downloadFile("/api/diagnostics", "natter-diag.zip")
+      .then((result) => {
         setDiag({
-          fileName,
-          totalBytes: blob.size,
-          truncated: response.headers.get("X-WebConsole-Diag-Truncated") === "true",
+          fileName: result.fileName,
+          totalBytes: result.bytes,
+          truncated: result.truncated ?? false,
+          fileCount: result.files ?? null,
           files: [],
         });
         setState("ready");
@@ -84,7 +66,8 @@ export function DiagView() {
         {state === "ready" && diag ? (
           <Space direction="vertical" size={8} style={{ width: "100%", marginTop: 12 }}>
             <Typography.Text>
-              {`${diag.fileName} · ${formatBytes(diag.totalBytes)} · truncated=${String(diag.truncated)}`}
+              {`${diag.fileName} · ${formatBytes(diag.totalBytes)} · files=${diag.fileCount ?? "?"}`
+                + ` · truncated=${String(diag.truncated)}`}
             </Typography.Text>
             {diag.files.length ? (
               <Table

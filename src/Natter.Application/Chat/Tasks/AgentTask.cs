@@ -77,6 +77,21 @@ public interface ITaskStore
     /// </summary>
     ValueTask<IReadOnlyList<AgentTask>> ListRecentAsync(int limit, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Filtered variant (task-72 ②). The default implementation ignores the filters and delegates to
+    /// the unfiltered member, so existing stores/ test doubles keep compiling; the SQLite store
+    /// overrides it and pushes the filters into SQL.
+    /// </summary>
+    ValueTask<IReadOnlyList<AgentTask>> ListRecentAsync(
+        int limit,
+        string? source,
+        string? status,
+        string? sessionId,
+        DateTimeOffset? since,
+        DateTimeOffset? until,
+        CancellationToken cancellationToken = default)
+        => ListRecentAsync(limit, cancellationToken);
+
     /// <summary>Appends one trace event (P5.3). seq is allocated by the store monotonically.</summary>
     ValueTask AppendEventAsync(
         string taskId,

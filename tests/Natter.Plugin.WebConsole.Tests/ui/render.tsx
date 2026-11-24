@@ -6,11 +6,12 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { OverviewView } from "../../../ui/src/webconsole/views/OverviewView";
 import { TraceTimeline } from "../../../ui/src/webconsole/views/TraceView";
-import { ConfigView, DiffBlock } from "../../../ui/src/webconsole/views/ConfigView";
+import { ConfigView, DiffBlock, hasUnsavedChanges } from "../../../ui/src/webconsole/views/ConfigView";
 import { CommandsView } from "../../../ui/src/webconsole/views/CommandsView";
 import { DiagView } from "../../../ui/src/webconsole/views/DiagView";
 import { LogsView } from "../../../ui/src/webconsole/views/LogsView";
 import { LoginPrompt } from "../../../ui/src/shared/login";
+import { downloadFile } from "../../../ui/src/shared/download";
 import { EmptyState, ErrorState, LoadingState } from "../../../ui/src/shared/states";
 import { MessageReplay } from "../../../ui/src/conversation/views/MessageReplay";
 import type { Snapshot, TraceHeader, TraceEntry } from "../../../ui/src/shared/types";
@@ -122,11 +123,57 @@ const traceEntries: TraceEntry[] = [
   { kind: "final", at: "2026-11-23T00:00:12Z", code: "agent.timeout" },
 ];
 
+// ① duration attribution: one measured tool event + one step without ms.
+const measuredHeader: TraceHeader = { ...traceHeader, taskId: "task_duration", errorCode: null, resultText: null };
+const measuredEntries: TraceEntry[] = [
+  { kind: "started", at: "2026-11-23T00:00:00Z" },
+  { kind: "tool", at: "2026-11-23T00:00:01Z", name: "clock", status: "ok", durationMs: 45 },
+  { kind: "step", at: "2026-11-23T00:00:02Z", name: "native" },
+];
+
+async function probeDownload() {
+  const captured: { href?: string; download?: string; revoke?: string } = {};
+  const result = await downloadFile("/api/logs/export?format=jsonl", "fallback.txt", {
+    fetchImpl: (async () =>
+      new Response(new Blob(["abcdef"]), {
+        status: 200,
+        headers: {
+          "Content-Disposition": "attachment; filename=\"natter-logs-1.jsonl\"",
+          "X-WebConsole-Diag-Truncated": "true",
+          "X-WebConsole-Diag-Files": "10",
+        },
+      })) as unknown as typeof fetch,
+    createObjectUrl: () => "blob:probe",
+    revokeObjectUrl: (url) => {
+      captured.revoke = url;
+    },
+    createAnchor: () => {
+      const element = { href: "", download: "", click: () => undefined } as unknown as HTMLAnchorElement;
+      Object.defineProperty(element, "href", { get: () => captured.href, set: (value: string) => (captured.href = value) });
+      Object.defineProperty(element, "download", {
+        get: () => captured.download,
+        set: (value: string) => (captured.download = value),
+      });
+      return element;
+    },
+    scheduleRevoke: false,
+  });
+
+  return { result, captured };
+}
+
 const report = {
   overview: renderToStaticMarkup(
     <OverviewView phase="ready" snapshot={snapshot} error={null} reload={() => {}} recentTasks={[]} />,
   ),
   trace: renderToStaticMarkup(<TraceTimeline header={traceHeader} entries={traceEntries} />),
+  durations: renderToStaticMarkup(<TraceTimeline header={measuredHeader} entries={measuredEntries} />),
+  dirty: {
+    unchanged: hasUnsavedChanges("a", "a"),
+    changed: hasUnsavedChanges("a", "b"),
+    bothEmpty: hasUnsavedChanges("", ""),
+    trailingWhitespace: hasUnsavedChanges("a", "a "),
+  },
   traceEmpty: renderToStaticMarkup(
     <TraceTimeline header={{ ...traceHeader, errorCode: null, resultText: null }} entries={[]} />,
   ),
@@ -200,4 +247,22 @@ const report = {
   ),
 };
 
-process.stdout.write(JSON.stringify(report));
+async function main(): Promise<void> {
+  const downloadProbe = await probeDownload();
+  const payload = {
+    ...report,
+    download: {
+      fileName: downloadProbe.result.fileName,
+      bytes: downloadProbe.result.bytes,
+      truncated: downloadProbe.result.truncated ?? null,
+      files: downloadProbe.result.files ?? null,
+      url: downloadProbe.result.url,
+      anchorHref: downloadProbe.captured.href ?? null,
+      anchorDownload: downloadProbe.captured.download ?? null,
+      revoked: downloadProbe.captured.revoke ?? null,
+    },
+  };
+  process.stdout.write(JSON.stringify(payload));
+}
+
+void main();

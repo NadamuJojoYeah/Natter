@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Alert, Button, Card, Descriptions, Input, Select, Space, Table, Tag, Typography } from "antd";
+import { Alert, Button, Card, Descriptions, Input, Modal, Select, Space, Table, Tag, Typography } from "antd";
 import { EmptyState, LoadingState } from "../../shared/states";
 import { formatBytes, formatTime, truncationText } from "../../shared/format";
 import { request } from "../../shared/api";
@@ -14,6 +14,14 @@ import type {
 } from "../../shared/types";
 
 const DIFF_VISIBLE_LINES = 60;
+
+/**
+ * Dirty check for the config editor (task-72 ③). Exported so the switch-guard rule is testable
+ * without mounting a component or simulating a click.
+ */
+export function hasUnsavedChanges(loadedContent: string, currentContent: string): boolean {
+  return loadedContent !== currentContent;
+}
 const MESSAGE_CLIP = 400;
 
 export interface ConfigViewProps {
@@ -39,8 +47,12 @@ export function ConfigView(props: ConfigViewProps) {
   const [validation, setValidation] = useState<ConfigValidation | null>(null);
   const [undo, setUndo] = useState<UndoEntry[]>([]);
   const [conflict, setConflict] = useState<string | null>(null);
+  // Dirty tracking (task-72 ③): `loaded` is the last server content; anything else is unsaved work.
+  const [loadedContent, setLoadedContent] = useState("");
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
 
   const writable = props.configStoreAvailable && props.writeEnabled && canWrite(props.role, props.permissions);
+  const dirty = hasUnsavedChanges(loadedContent, content);
 
   const describeFailure = (cause: { code?: string; message?: string; status?: number }) => {
     if (cause.status === 401) {
@@ -65,6 +77,13 @@ export function ConfigView(props: ConfigViewProps) {
         setDocument(payload);
         setEtag(payload.exists ? payload.eTag ?? null : null);
         setContent(payload.content ?? "");
+        setLoadedContent(payload.content ?? "");
+        // Opening a document clears its draft: the server content is now the baseline.
+        setDrafts((current) => {
+          const next = { ...current };
+          delete next[documentId];
+          return next;
+        });
         setPhase("ready");
         setMessageIsError(false);
         setMessage(
@@ -174,9 +193,32 @@ export function ConfigView(props: ConfigViewProps) {
             style={{ width: 240 }}
             value={documentId}
             onChange={(value) => {
-              setDocumentId(value);
-              setValidation(null);
-              setUndo([]);
+              if (value === documentId) {
+                return;
+              }
+
+              const switchDocument = () => {
+                // Keep the edited text as a draft so an accidental switch is recoverable, then load.
+                if (dirty) {
+                  setDrafts((current) => ({ ...current, [documentId]: content }));
+                }
+                setDocumentId(value);
+                setValidation(null);
+                setUndo([]);
+              };
+
+              if (!dirty) {
+                switchDocument();
+                return;
+              }
+
+              Modal.confirm({
+                title: "当前文档有未保存的修改",
+                content: `切换到 ${value} 会先保留草稿；选择“继续编辑”可留在当前文档。`,
+                okText: "保留草稿并切换",
+                cancelText: "继续编辑",
+                onOk: switchDocument,
+              });
             }}
             options={props.documents.map((doc) => ({ value: doc.id, label: `${doc.id}${doc.exists ? "" : " (不存在)"}` }))}
           />
@@ -194,6 +236,32 @@ export function ConfigView(props: ConfigViewProps) {
             message={props.readOnly ? "功能未启用：readOnly=true" : "功能未启用：allowConfigWrite=false"}
             description={`当前角色 ${props.role}；写入需要 admin 且服务端允许，服务端始终强制校验。`}
           />
+        ) : null}
+        {dirty ? (
+          <Alert
+            style={{ marginTop: 12 }}
+            type="warning"
+            showIcon
+            message="有未保存的修改"
+            description={`当前 ${documentId} 存在未保存编辑；切换文档会保留草稿，重新打开时可恢复。`}
+            action={
+              drafts[documentId] ? undefined : (
+                <Button
+                  size="small"
+                  onClick={() => {
+                    setContent(loadedContent);
+                  }}
+                >
+                  放弃修改
+                </Button>
+              )
+            }
+          />
+        ) : null}
+        {drafts[documentId] && drafts[documentId] !== content ? (
+          <Button size="small" style={{ marginTop: 8 }} onClick={() => setContent(drafts[documentId])}>
+            恢复 {documentId} 的草稿
+          </Button>
         ) : null}
         {message ? (
           <Typography.Paragraph style={{ marginTop: 12, marginBottom: 0 }} type={messageIsError ? "danger" : "secondary"}>

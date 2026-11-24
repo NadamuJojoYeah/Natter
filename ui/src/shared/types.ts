@@ -248,6 +248,8 @@ export interface TraceEntry {
   code?: string | null;
   step?: number | null;
   status?: string | null;
+  /** Real duration measured by the host writer; null/absent means the UI must estimate. */
+  durationMs?: number | null;
 }
 
 export interface TraceHeader {
@@ -265,10 +267,19 @@ export interface TraceHeader {
   resultTruncated: boolean;
 }
 
+export interface TraceFilter {
+  source?: string;
+  status?: string;
+  session?: string;
+  since?: string;
+  until?: string;
+}
+
 export interface TraceListResponse {
   available: boolean;
   limit: number;
   count: number;
+  filter?: TraceFilter | null;
   tasks: Array<{
     taskId: string;
     status: string;

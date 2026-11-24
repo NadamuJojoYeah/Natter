@@ -166,13 +166,53 @@ public sealed class SqliteTaskStore : ITaskStore
         await AddEventAsync(connection, taskId, kind, payloadJson, cancellationToken).ConfigureAwait(false);
     }
 
-    public async ValueTask<IReadOnlyList<AgentTask>> ListRecentAsync(int limit, CancellationToken cancellationToken = default)
+    public ValueTask<IReadOnlyList<AgentTask>> ListRecentAsync(int limit, CancellationToken cancellationToken = default)
+        => ListRecentAsync(limit, null, null, null, null, null, cancellationToken);
+
+    public async ValueTask<IReadOnlyList<AgentTask>> ListRecentAsync(
+        int limit,
+        string? source = null,
+        string? status = null,
+        string? sessionId = null,
+        DateTimeOffset? since = null,
+        DateTimeOffset? until = null,
+        CancellationToken cancellationToken = default)
     {
         await using var connection = await _database.OpenAsync(cancellationToken).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
-        // SELECT * keeps the row mapping identical to GetAsync (columns evolved with schema v4).
-        command.CommandText = """
+
+        // Filters run in SQL so a session with 100k tasks never materialises in the console process.
+        // source_key is the readable "protocol:platform:self" projection of the structured columns.
+        var where = new List<string>();
+        if (!string.IsNullOrWhiteSpace(source))
+        {
+            where.Add("source_key = $source");
+            command.Parameters.AddWithValue("$source", source);
+        }
+        if (!string.IsNullOrWhiteSpace(status))
+        {
+            where.Add("status = $status COLLATE NOCASE");
+            command.Parameters.AddWithValue("$status", status);
+        }
+        if (!string.IsNullOrWhiteSpace(sessionId))
+        {
+            where.Add("session_id = $session");
+            command.Parameters.AddWithValue("$session", sessionId);
+        }
+        if (since is not null)
+        {
+            where.Add("updated_at >= $since");
+            command.Parameters.AddWithValue("$since", since.Value.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture));
+        }
+        if (until is not null)
+        {
+            where.Add("updated_at <= $until");
+            command.Parameters.AddWithValue("$until", until.Value.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture));
+        }
+
+        command.CommandText = $"""
             SELECT * FROM agent_tasks
+            {(where.Count > 0 ? "WHERE " + string.Join(" AND ", where) : string.Empty)}
             ORDER BY updated_at DESC, task_id DESC
             LIMIT $limit;
             """;

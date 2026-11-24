@@ -101,13 +101,25 @@ public sealed class ConversationConsoleQueryGateway
         long afterMessageId,
         int limit,
         CancellationToken cancellationToken = default)
+        => await GetMessagesAsync(sessionId, afterMessageId, cursor: null, limit, cancellationToken).ConfigureAwait(false);
+
+    /// <summary>
+    /// Paged read with the composite cursor (task-72 ⑤). A null cursor keeps the legacy id-only
+    /// behaviour so older clients (`after=`) are unaffected.
+    /// </summary>
+    public async ValueTask<IReadOnlyList<ConversationConsoleMessage>?> GetMessagesAsync(
+        string sessionId,
+        long afterMessageId,
+        Natter.Application.Chat.MessageCursor? cursor,
+        int limit,
+        CancellationToken cancellationToken = default)
     {
         if (_query is null || !_query.HasDataSource)
             return null;
 
-        var messages = await _query
-            .GetMessagesAsync(sessionId, afterMessageId, limit, cancellationToken)
-            .ConfigureAwait(false);
+        var messages = cursor is null
+            ? await _query.GetMessagesAsync(sessionId, afterMessageId, limit, cancellationToken).ConfigureAwait(false)
+            : await _query.GetMessagesAsync(sessionId, cursor, limit, cancellationToken).ConfigureAwait(false);
 
         return messages
             .Select(message =>

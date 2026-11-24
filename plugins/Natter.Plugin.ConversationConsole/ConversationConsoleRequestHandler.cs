@@ -229,7 +229,12 @@ public sealed class ConversationConsoleRequestHandler
         if (!TryGetLong(parameters, "after", out var after, out var afterError))
             return InvalidFilter(afterError);
 
-        var messages = await _query.GetMessagesAsync(sessionId, after, limit, cancellationToken).ConfigureAwait(false);
+        // ⑤ composite cursor (createdAt,id). `after` stays supported: it maps onto the id part with no
+        // time bound, which is exactly the pre-task-72 behaviour for existing clients.
+        var cursor = Natter.Application.Chat.MessageCursor.TryDecode(parameters.GetValueOrDefault("cursor"));
+        var messages = await _query
+            .GetMessagesAsync(sessionId, after, cursor, limit, cancellationToken)
+            .ConfigureAwait(false);
         if (messages is null)
             return QueryUnavailable();
 
@@ -240,12 +245,17 @@ public sealed class ConversationConsoleRequestHandler
             ConversationConsoleTokenAuthenticator.Actor);
 
         var nextAfter = messages.Count > 0 ? messages[^1].MessageId : after;
+        var nextCursor = messages.Count > 0
+            ? new Natter.Application.Chat.MessageCursor(messages[^1].CreatedAt, messages[^1].MessageId).Encode()
+            : null;
 
         return ConversationConsoleHttpResponse.Json(200, new
         {
             sessionId,
             items = messages,
             nextAfter,
+            nextCursor,
+            cursorStrategy = cursor is null ? "after-id" : "created-at+id",
             limit,
         });
     }

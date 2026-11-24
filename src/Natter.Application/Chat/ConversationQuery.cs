@@ -124,6 +124,74 @@ public interface IConversationQuery
         long afterMessageId,
         int limit,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Same query, paged by the composite <c>(createdAt, messageId)</c> cursor (task-72 ⑤). A single
+    /// timestamp is not unique — several messages can share a second — so an id-only or time-only
+    /// cursor can skip or repeat rows. The default implementation falls back to the id cursor, which
+    /// keeps existing hosts compiling; SQLite hosts override it with the keyset query.
+    /// </summary>
+    ValueTask<IReadOnlyList<StoredMessage>> GetMessagesAsync(
+        string sessionId,
+        MessageCursor cursor,
+        int limit,
+        CancellationToken cancellationToken = default)
+        => GetMessagesAsync(sessionId, cursor.MessageId, limit, cancellationToken);
+}
+
+/// <summary>
+/// Keyset cursor for message pagination: the last row's <c>created_at</c> plus its numeric id, base64url
+/// encoded so clients treat it as an opaque token.
+/// </summary>
+public sealed record MessageCursor(DateTimeOffset CreatedAt, long MessageId)
+{
+    public static MessageCursor Start { get; } = new(DateTimeOffset.MinValue, 0);
+
+    public string Encode()
+        => Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(
+                CreatedAt.ToUniversalTime().ToString("O", System.Globalization.CultureInfo.InvariantCulture)
+                + "\n"
+                + MessageId.ToString(System.Globalization.CultureInfo.InvariantCulture)))
+            .TrimEnd('=')
+            .Replace('+', '-')
+            .Replace('/', '_');
+
+    /// <summary>Decodes a cursor; a forged or stale value returns null so the caller starts over.</summary>
+    public static MessageCursor? TryDecode(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        try
+        {
+            var padded = value.Replace('-', '+').Replace('_', '/');
+            padded = padded.PadRight(padded.Length + ((4 - padded.Length % 4) % 4), '=');
+            var payload = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(padded));
+            var separator = payload.LastIndexOf('\n');
+            if (separator <= 0)
+                return null;
+
+            if (!DateTimeOffset.TryParse(
+                    payload[..separator],
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal,
+                    out var createdAt))
+            {
+                return null;
+            }
+
+            return long.TryParse(
+                payload[(separator + 1)..],
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var messageId)
+                ? new MessageCursor(createdAt, messageId)
+                : null;
+        }
+        catch (FormatException)
+        {
+            return null;
+        }
+    }
 }
 
 /// <summary>

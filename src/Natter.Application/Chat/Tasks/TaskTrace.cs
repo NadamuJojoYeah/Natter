@@ -157,7 +157,8 @@ public sealed record TaskTraceEntry(
     string? Name = null,
     string? Code = null,
     int? Step = null,
-    string? Status = null)
+    string? Status = null,
+    long? DurationMs = null)
 {
     public static TaskTraceEntry From(TaskEvent taskEvent)
     {
@@ -166,6 +167,7 @@ public sealed record TaskTraceEntry(
         string? code = null;
         int? step = null;
         string? status = null;
+        long? durationMs = null;
 
         if (!string.IsNullOrWhiteSpace(taskEvent.PayloadJson))
         {
@@ -183,6 +185,10 @@ public sealed record TaskTraceEntry(
                         step = stepNumber;
                     if (root.TryGetProperty("status", out var statusElement) && statusElement.ValueKind == JsonValueKind.String)
                         status = statusElement.GetString();
+                    // "ms" is the *real* duration measured by the writer (tool audit / model step /
+                    // total). Without it the console can only estimate from event timestamps.
+                    if (root.TryGetProperty("ms", out var msElement) && msElement.TryGetInt64(out var ms) && ms >= 0)
+                        durationMs = ms;
                 }
             }
             catch (JsonException)
@@ -191,6 +197,6 @@ public sealed record TaskTraceEntry(
             }
         }
 
-        return new TaskTraceEntry(taskEvent.Kind, taskEvent.CreatedAt, name, code, step, status);
+        return new TaskTraceEntry(taskEvent.Kind, taskEvent.CreatedAt, name, code, step, status, durationMs);
     }
 }

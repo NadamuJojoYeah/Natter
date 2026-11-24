@@ -3,6 +3,7 @@ import { Button, Card, Input, Select, Space, Tag, Table, Typography } from "antd
 import { EmptyState, ErrorState, LoadingState } from "../../shared/states";
 import { formatBytes, formatTime, truncationText } from "../../shared/format";
 import { request } from "../../shared/api";
+import { downloadFile } from "../../shared/download";
 import type { LogEntry, LogQueryResponse } from "../../shared/types";
 
 export function LogsView({ onUnauthorized }: { onUnauthorized: (error: { code: string; message: string }) => void }) {
@@ -12,6 +13,8 @@ export function LogsView({ onUnauthorized }: { onUnauthorized: (error: { code: s
   const [limit, setLimit] = useState(200);
   const [offset, setOffset] = useState(0);
   const [phase, setPhase] = useState<"loading" | "ready" | "error">("loading");
+  const [exportState, setExportState] = useState<"idle" | "running" | "done" | "error">("idle");
+  const [exportMessage, setExportMessage] = useState<string>("");
   const [payload, setPayload] = useState<LogQueryResponse | null>(null);
   const [error, setError] = useState<{ code: string; message: string } | null>(null);
 
@@ -48,16 +51,28 @@ export function LogsView({ onUnauthorized }: { onUnauthorized: (error: { code: s
   const entries: LogEntry[] = payload?.hostLogs?.data ?? [];
   const shownCharacters = entries.reduce((total, entry) => total + (entry.message?.length ?? 0), 0);
 
+  // ⑥ Blob download: no `location.assign`, so the path is testable and works headless.
   const exportLogs = (format: "text" | "jsonl") => {
     const parameters = new URLSearchParams({ format, limit: String(limit) });
     if (level) parameters.set("level", level);
     if (source.trim()) parameters.set("source", source.trim());
     if (query.trim()) parameters.set("q", query.trim());
-    const url = `/api/logs/export?${parameters.toString()}`;
-    const location = globalThis.location;
-    if (location && typeof location.assign === "function") {
-      location.assign(url);
-    }
+
+    setExportState("running");
+    setExportMessage("");
+    downloadFile(`/api/logs/export?${parameters.toString()}`, `natter-logs.${format === "jsonl" ? "jsonl" : "txt"}`)
+      .then((result) => {
+        setExportState("done");
+        setExportMessage(`${result.fileName} · ${formatBytes(result.bytes)}`);
+      })
+      .catch((cause: { code?: string; message?: string; status?: number }) => {
+        if (cause.status === 401) {
+          onUnauthorized({ code: cause.code ?? "auth.required", message: cause.message ?? "会话已过期" });
+          return;
+        }
+        setExportState("error");
+        setExportMessage(`${cause.code ?? "download.failed"}：${cause.message ?? "导出失败"}`);
+      });
   };
 
   return (
@@ -113,8 +128,11 @@ export function LogsView({ onUnauthorized }: { onUnauthorized: (error: { code: s
               <EmptyState reason="no-data" detail="没有匹配的日志行。" />
             ) : (
               <>
+                {/* ④ Virtualised rows: a page can be 1000 entries; only the visible window is mounted. */}
                 <Table
                   size="small"
+                  virtual
+                  scroll={{ y: 560, x: 1100 }}
                   rowKey={(row, index) => `${row.timestamp}-${index}`}
                   dataSource={entries}
                   pagination={false}
@@ -136,6 +154,11 @@ export function LogsView({ onUnauthorized }: { onUnauthorized: (error: { code: s
                 <Typography.Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>
                   {truncationText({ original: shownCharacters, shown: shownCharacters, unit: "字符", extra: `每页上限 ${formatBytes(1024 * 1024)}` })}
                 </Typography.Paragraph>
+                {exportState !== "idle" ? (
+                  <Typography.Paragraph type={exportState === "error" ? "danger" : "secondary"} style={{ marginTop: 8 }}>
+                    {exportState === "running" ? "导出中…" : exportMessage}
+                  </Typography.Paragraph>
+                ) : null}
                 <Space style={{ marginTop: 8 }}>
                   <Button disabled={offset === 0} onClick={() => load(Math.max(0, offset - limit))}>
                     上一页
