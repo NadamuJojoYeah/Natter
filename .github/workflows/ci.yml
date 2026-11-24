@@ -52,6 +52,20 @@ jobs:
           restore-keys: |
             nuget-${{ runner.os }}-
 
+      # The two console plugins build their UI from ui/ during `dotnet build` (MSBuild target
+      # BuildWebUi). Without node the build fails, and without the cache `npm ci` re-downloads
+      # ~250 MB on every run. Node is therefore a build dependency of the solution, not a
+      # deploy-time one: published plugins already contain the built assets.
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Restore UI dependencies
+        run: npm ci --prefix ui
+
       - name: Explain the Android toolchain requirements
         run: |
           echo "ANDROID_HOME=${ANDROID_HOME:-<unset>}"
@@ -85,6 +99,17 @@ jobs:
           key: nuget-${{ runner.os }}-${{ hashFiles('global.json', 'Directory.Build.props', 'Directory.Packages.props', '**/*.csproj', 'Natter.slnx') }}
           restore-keys: |
             nuget-${{ runner.os }}-
+
+      # Same reason as solution-build: the console plugins compile their UI during `dotnet build`.
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Restore UI dependencies
+        run: npm ci --prefix ui
 
       # Enumerating from Natter.slnx (instead of a hand-written list) means a new project is covered
       # the moment it is added to the solution. Android is the only exclusion; see solution-build.

@@ -32,14 +32,14 @@ dotnet publish src/Natter.Cli/Natter.Cli.csproj -c Release -o /opt/natter
 ./scripts/stage-tier1-plugins.sh -o /opt/natter/plugins -c Release --tier2  # 另加 DingTalk + Spark
 
 # 不启 host 的离线校验（不需要 secret，不会抢 bot 会话）
-/opt/natter/natter plugins inspect /opt/natter/plugins/discord
+/opt/natter/natter plugins inspect /opt/natter/plugins/natter.transport.messaging.discord
 ```
 
 staging 布局（NPS 加载器要求）：
 
 ```text
-/opt/natter/plugins/discord/{plugin.json,config.schema.json,lib/*}
-/opt/natter/plugins/deepseek/{...}
+/opt/natter/plugins/natter.transport.messaging.discord/{plugin.json,config.schema.json,lib/*}
+/opt/natter/plugins/natter.feature.ai.deepseek/{...}
 /opt/natter/plugins/staging-manifest.json      # 审计用清单，记录 id/文件数/时间
 ```
 

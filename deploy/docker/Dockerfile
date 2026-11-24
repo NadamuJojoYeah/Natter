@@ -56,11 +56,11 @@ RUN chmod +x scripts/stage-tier1-plugins.sh \
  && grep -q '"mismatches": 0' /out/plugins/staging-manifest.json
 
 # 3. Fail-fast manifest check inside the build (no secrets, no network, no upstream started).
-RUN dotnet /out/natter.dll plugins inspect /out/plugins/discord \
- && dotnet /out/natter.dll plugins inspect /out/plugins/deepseek \
+RUN dotnet /out/natter.dll plugins inspect /out/plugins/natter.transport.messaging.discord \
+ && dotnet /out/natter.dll plugins inspect /out/plugins/natter.feature.ai.deepseek \
  && if [ "$TIER2" = "true" ]; then \
-      dotnet /out/natter.dll plugins inspect /out/plugins/dingtalk \
-      && dotnet /out/natter.dll plugins inspect /out/plugins/spark; \
+      dotnet /out/natter.dll plugins inspect /out/plugins/natter.transport.messaging.dingtalk \
+      && dotnet /out/natter.dll plugins inspect /out/plugins/natter.feature.ai.spark; \
     fi
 
 

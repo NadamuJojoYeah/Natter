@@ -142,15 +142,15 @@ jobs:
         run: |
           set -euo pipefail
           docker run --rm --entrypoint sh natter:tier1-ci -c 'ls -1 /app/plugins' | tee plugins.txt
-          grep -qx discord plugins.txt
-          grep -qx deepseek plugins.txt
-          grep -qx greetings plugins.txt
-          grep -qx metrics plugins.txt
+          grep -qx "natter.transport.messaging.discord" plugins.txt
+          grep -qx "natter.feature.ai.deepseek" plugins.txt
+          grep -qx "natter.sample.port.greetings" plugins.txt
+          grep -qx "natter.sample.event.metrics" plugins.txt
 
       - name: Plugin manifests are valid
         run: |
           set -euo pipefail
-          for plugin in discord deepseek; do
+          for plugin in natter.transport.messaging.discord natter.feature.ai.deepseek; do
             docker run --rm --entrypoint dotnet natter:tier1-ci \
               /app/natter.dll plugins inspect "/app/plugins/${plugin}" | tee "inspect-${plugin}.txt"
             grep -q 'valid          : True' "inspect-${plugin}.txt"
