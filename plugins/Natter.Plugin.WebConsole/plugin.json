@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "id": "natter.plugin.webconsole",
+  "id": "natter.tool.admin.webconsole",
   "name": "Natter WebConsole",
   "version": "0.1.0",
   "kind": "tool",
@@ -13,21 +13,47 @@
   "author": "Natter",
   "license": "MIT",
   "homepage": "https://github.com/natter-framework/natter",
+  "dataDirs": [
+    {
+      "path": "audit",
+      "purpose": "Audit trail for authenticated admin actions. Written by the service user, so the deployment must hand this directory to User= with mode 0750."
+    }
+  ],
   "permissions": [
     "network",
     "secrets:WEBCONSOLE_TOKEN",
     "cli.commands",
     "admin.read",
     "admin.config.write",
-    "admin.command.execute"
+    "admin.command.execute",
+    "secrets:WEBCONSOLE_VIEWER_TOKEN"
   ],
   "secrets": [
-    { "name": "WEBCONSOLE_TOKEN", "required": true }
+    {
+      "name": "WEBCONSOLE_TOKEN",
+      "required": true
+    },
+    {
+      "name": "WEBCONSOLE_VIEWER_TOKEN",
+      "required": false
+    }
   ],
   "configSchema": "config.schema.json",
   "contributions": [
-    { "type": "cli.command", "id": "web.status" }
+    {
+      "type": "cli.command",
+      "id": "web.status"
+    }
   ],
-  "platforms": ["windows", "linux", "macos"],
-  "capabilities": ["admin:diagnostics", "admin:config", "admin:commands", "cli:web.status"]
+  "platforms": [
+    "windows",
+    "linux",
+    "macos"
+  ],
+  "capabilities": [
+    "admin:diagnostics",
+    "admin:config",
+    "admin:commands",
+    "cli:web.status"
+  ]
 }

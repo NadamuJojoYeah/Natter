@@ -90,7 +90,11 @@ jobs:
               "soakStart": start.isoformat(), "intervalSeconds": 300,
               "durationSeconds": 86400, "port": 5099,
           })]
-          for i in range(24):  # 24 samples * 5 min = ~2h of a healthy host
+          # The header declares durationSeconds=86400, and soak-report.py now derives the expected
+          # sample count from that declaration (82f6866: "coverage 改用头部声明口径"). Emitting only
+          # a couple of hours therefore reads as 8% coverage and fails the 95% gate. Cover the whole
+          # declared window: 288 intervals * 300s = 86400s, +1 for the sample at t=0.
+          for i in range(289):  # 289 samples * 5 min = the full declared 24h
               at = start + datetime.timedelta(seconds=300 * i)
               lines.append(json.dumps({
                   "status": "healthy",
@@ -113,7 +117,10 @@ jobs:
           python3 - <<'PY'
           import json
           report = json.load(open("soak-report.json"))
-          assert report["samples"] == 24, report["samples"]
+          # Must match the fixture above: 289 samples over the declared 24h window. These two
+          # numbers used to drift (fixture 289 / assertion 24 → AssertionError) because the fixture
+          # and the assertion live in separate heredocs.
+          assert report["samples"] == 289, report["samples"]
           assert report["result"] == "PASS", report
           assert report["upstreams"]["discord"]["reconnects"] == 0
           print("soak report PASS as expected")
@@ -142,15 +149,15 @@ jobs:
         run: |
           set -euo pipefail
           docker run --rm --entrypoint sh natter:tier1-ci -c 'ls -1 /app/plugins' | tee plugins.txt
-          grep -qx discord plugins.txt
-          grep -qx deepseek plugins.txt
-          grep -qx greetings plugins.txt
-          grep -qx metrics plugins.txt
+          grep -qx "natter.transport.messaging.discord" plugins.txt
+          grep -qx "natter.feature.ai.deepseek" plugins.txt
+          grep -qx "natter.sample.port.greetings" plugins.txt
+          grep -qx "natter.sample.event.metrics" plugins.txt
 
       - name: Plugin manifests are valid
         run: |
           set -euo pipefail
-          for plugin in discord deepseek; do
+          for plugin in natter.transport.messaging.discord natter.feature.ai.deepseek; do
             docker run --rm --entrypoint dotnet natter:tier1-ci \
               /app/natter.dll plugins inspect "/app/plugins/${plugin}" | tee "inspect-${plugin}.txt"
             grep -q 'valid          : True' "inspect-${plugin}.txt"
@@ -179,7 +186,10 @@ jobs:
           docker rm -f natter-smoke >/dev/null
           test "$status" = "running"
 
-      - name: Upload staging manifest
+      # S2-E13: this job never produces soak-report.json (the soak audit runs in ci.yml), so it used
+      # to upload a set that silently missed one file. Only list what this job actually creates, and
+      # fail when nothing is there instead of accepting an empty artifact.
+      - name: Upload image verification evidence
         if: always()
         uses: actions/upload-artifact@v5
         with:
@@ -189,5 +199,4 @@ jobs:
             inspect-discord.txt
             inspect-deepseek.txt
             healthcheck.json
-            soak-report.json
-          if-no-files-found: ignore
+          if-no-files-found: error

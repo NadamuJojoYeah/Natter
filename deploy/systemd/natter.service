@@ -33,12 +33,19 @@ KillMode=control-group
 TimeoutStopSec=20
 
 # --- hardening ---------------------------------------------------------------
-# State and logs are the only writable paths; the release and config stay read-only.
+# Plugin-owned data lives in the plugin directory so "uninstall = delete the directory". The code
+# itself stays root-owned and read-only; only the `audit` subdirectory of a writing plugin is carved
+# out below. `update-release.sh` hands exactly those directories to User=/Group=.
+#
+# ReadWritePaths does not glob, so each writing plugin needs an explicit line. Prefix with `-` so a
+# plugin that is not installed in this release does not make the unit fail to start.
 StateDirectory=natter
 LogsDirectory=natter
 StateDirectoryMode=0700
 LogsDirectoryMode=0700
-ReadWritePaths=/var/lib/natter /var/log/natter
+ReadWritePaths=/var/lib/natter /var/log/natter \
+               -/opt/natter/plugins/natter.tool.admin.webconsole/audit \
+               -/opt/natter/plugins/natter.tool.conversation.conversation-console/audit
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes

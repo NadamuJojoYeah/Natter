@@ -1,4 +1,5 @@
 using Natter.Application.Admin;
+using Natter.Application.Chat;
 
 namespace Natter.Plugin.WebConsole;
 
@@ -12,15 +13,19 @@ public sealed record WebConsoleAdminSurface(
     IAdminConfigStore? ConfigStore,
     IAdminCommandRunner? CommandRunner,
     IAdminLogReader? LogReader,
-    IAdminRedactor? Redactor)
+    IAdminRedactor? Redactor,
+    IAgentTaskInspection? Tasks)
 {
-    public static WebConsoleAdminSurface Empty { get; } = new(null, null, null, null);
+    public static WebConsoleAdminSurface Empty { get; } = new(null, null, null, null, null);
 
     public bool HasConfigStore => ConfigStore is not null;
 
     public bool HasCommandRunner => CommandRunner is not null;
 
     public bool HasLogReader => LogReader is not null;
+
+    /// <summary>Structured task inspection (task-65); absent when <c>admin.read</c> was not granted.</summary>
+    public bool HasTasks => Tasks is not null;
 
     /// <summary>Resolves the admin contracts from the plugin provider; never throws.</summary>
     public static WebConsoleAdminSurface FromServices(IServiceProvider? provider)
@@ -32,7 +37,8 @@ public sealed record WebConsoleAdminSurface(
             Resolve<IAdminConfigStore>(provider),
             Resolve<IAdminCommandRunner>(provider),
             Resolve<IAdminLogReader>(provider),
-            Resolve<IAdminRedactor>(provider));
+            Resolve<IAdminRedactor>(provider),
+            Resolve<IAgentTaskInspection>(provider));
     }
 
     public string DescribeConfig()

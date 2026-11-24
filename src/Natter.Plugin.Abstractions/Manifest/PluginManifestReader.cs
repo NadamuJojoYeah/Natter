@@ -141,7 +141,7 @@ public static partial class PluginManifestReader
                 errors.Add(new PluginManifestIssue(
                     "/kind",
                     "invalid-kind",
-                    "Kind is required and must be transport, feature, tool or memory."));
+                    "Kind is required and must be transport, feature, tool, memory or sample."));
             }
 
             if (schemaVersion.ValueKind != JsonValueKind.Number
@@ -191,7 +191,8 @@ public static partial class PluginManifestReader
            && (string.Equals(kind, "transport", StringComparison.OrdinalIgnoreCase)
                || string.Equals(kind, "feature", StringComparison.OrdinalIgnoreCase)
                || string.Equals(kind, "tool", StringComparison.OrdinalIgnoreCase)
-               || string.Equals(kind, "memory", StringComparison.OrdinalIgnoreCase));
+               || string.Equals(kind, "memory", StringComparison.OrdinalIgnoreCase)
+               || string.Equals(kind, "sample", StringComparison.OrdinalIgnoreCase));
 
     private static void Validate(
         PluginManifest manifest,
@@ -209,7 +210,7 @@ public static partial class PluginManifestReader
             errors.Add(new PluginManifestIssue("/version", "invalid-version", "Plugin version must be SemVer 2.0."));
 
         if (!Enum.IsDefined(manifest.Kind))
-            errors.Add(new PluginManifestIssue("/kind", "invalid-kind", "Kind must be transport, feature or tool."));
+            errors.Add(new PluginManifestIssue("/kind", "invalid-kind", "Kind must be transport, feature, tool, memory or sample."));
 
         if (!VersionRange.TryParse(manifest.HostApi, out _))
             errors.Add(new PluginManifestIssue("/hostApi", "invalid-range", "hostApi must be a SemVer range."));
@@ -220,6 +221,23 @@ public static partial class PluginManifestReader
             && !IsSafeRelativePath(manifest.ConfigSchema!, pluginDirectory, out var schemaError))
         {
             errors.Add(new PluginManifestIssue("/configSchema", "invalid-path", schemaError!));
+        }
+
+        // dataDirs become writable by the service user at deploy time, so a hostile or careless
+        // manifest must not be able to point that grant at an arbitrary absolute path or at `..`.
+        if (manifest.DataDirs is { Count: > 0 } dataDirs)
+        {
+            for (var index = 0; index < dataDirs.Count; index++)
+            {
+                var declared = dataDirs[index];
+                if (!IsSafeRelativePath(declared?.Path, pluginDirectory, out var dataDirError))
+                {
+                    errors.Add(new PluginManifestIssue(
+                        $"/dataDirs/{index}/path",
+                        "invalid-path",
+                        dataDirError ?? "dataDirs path must be a relative subpath of the plugin directory."));
+                }
+            }
         }
 
         ValidateDependencies(manifest.DependsOn, "/dependsOn", required: true, errors);

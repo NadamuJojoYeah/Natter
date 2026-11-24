@@ -6,7 +6,7 @@
 > **范围**：RuntimeProfile、provider 路由、`natter serve`、插件配置目录、SQLite 会话持久化、健康/指标、一等/二等公民支持策略。
 > **不包含**：Context/Memory 插件化（P3）、Task Worker、第三方插件市场、Android 动态宿主、跨平台身份自动合并。
 > **验收计划**：[P2 Acceptance Test Plan](testing/P2_ACCEPTANCE.md)。
-> **当前结论**：No-Go；4 个 High 待修，见 [P2 验收处置](testing/2026-11-15-p2-acceptance-response.md)。
+> **当前结论**：**Closed · Go**（4 个 High 已修复并复测通过，记录已归档）；见 [P2 验收处置（归档）](testing/archive/2026-11-15-p2-acceptance-response.md) 与 [P2 验收测试（归档）](testing/archive/2026-11-15-p2-acceptance.md)。
 
 ---
 

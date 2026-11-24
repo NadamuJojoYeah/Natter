@@ -1,0 +1,17 @@
+{
+  "enabled": false,
+  "packs": "definitions",
+  "stateId": "character",
+  "fragmentOrder": 800000,
+  "includeDescriptions": true,
+  "descriptionTimeoutMilliseconds": 300,
+  "minAdvanceIntervalSeconds": 0,
+  "maxStep": 0.5,
+  "maxDeltaHours": 720,
+  "maxStepPerTickFraction": 0.5,
+  "maxAdvanceAttempts": 8,
+  "maxFragmentCharacters": 1000,
+  "maxPacks": 16,
+  "maxDefinitionsPerKind": 32,
+  "maxEffectsPerPack": 128
+}

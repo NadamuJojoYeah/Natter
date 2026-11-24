@@ -44,7 +44,7 @@ public sealed class DeploymentCliLiveTests(ITestOutputHelper output)
                 item => item,
                 StringComparer.Ordinal);
 
-        foreach (var id in new[] { "natter.transport.discord", "natter.feature.ai.deepseek" })
+        foreach (var id in new[] { "natter.transport.messaging.discord", "natter.feature.ai.deepseek" })
         {
             Assert.True(plugins.ContainsKey(id), $"Plugin '{id}' was not discovered. Output: {LiveDeployment.Tail(text)}");
             var state = plugins[id].GetProperty("state").GetString();

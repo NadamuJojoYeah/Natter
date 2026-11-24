@@ -7,6 +7,11 @@ public static class PluginPermissions
     public const string FileSystemRead = "filesystem.read";
     public const string FileSystemWrite = "filesystem.write";
     public const string SecretsPrefix = "secrets:";
+    /// <summary>
+    /// Read NLMP messages/events and the conversation/memory/summary context handed to prompt
+    /// contributions. Required by <c>context.assembler</c>, <c>prompt.provider</c> and
+    /// <c>prompt.fragment</c> (S2-C2).
+    /// </summary>
     public const string ChatRead = "chat.read";
     public const string ChatSend = "chat.send";
     public const string ChatEdit = "chat.edit";

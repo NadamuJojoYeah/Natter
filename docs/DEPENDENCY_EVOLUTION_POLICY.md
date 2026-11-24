@@ -4,7 +4,7 @@
 > **日期**：2026-11-16
 > **适用范围**：.NET SDK/runtime、NuGet 包、Android workload、C# 语言特性、NPS 插件 ABI、公共类型设计
 > **目标基线**：**.NET 10 LTS 现在 → .NET 12 LTS 下一次 major upgrade**
-> **关联**：[Harness 架构](HARNESS_ARCHITECTURE.md)、[P4 Tier 1 产品化](P4_TIER1_PRODUCTIZATION.md)、[插件规范](PLUGIN_SPEC.md)
+> **关联**：[Harness 架构](HARNESS_ARCHITECTURE.md)、[P4 Tier 1 产品化](archive/P4-TIER1-PRODUCTIZATION.md)、[插件规范](PLUGIN_SPEC.md)
 
 ---
 

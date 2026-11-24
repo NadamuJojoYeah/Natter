@@ -24,6 +24,8 @@ public static class PluginContractAssemblies
     public static IReadOnlySet<string> All { get; } = new HashSet<string>(StringComparer.Ordinal)
     {
         "Natter.Abstractions",
+        "Natter.Contracts",
+        "Natter.Prompting",
         "Natter.Application",
         "Natter.Chat",
         "Natter.Cli.Abstractions",

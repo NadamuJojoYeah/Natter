@@ -90,7 +90,8 @@ public sealed class DingTalkStatusCommandHandler(DingTalkOptions options, DingTa
             lastConnectedAt = upstream.Health.LastConnectedAt,
             lastDisconnectAt = upstream.Health.LastDisconnectAt,
             reconnectCount = upstream.Health.ReconnectCount,
-            lastError = upstream.Health.LastError,
+            lastError = Natter.Application.Redaction.SecretRedaction.Apply(
+                upstream.Health.LastError, Natter.Application.Redaction.SecretRedactionOptions.Admin),
             botId = options.BotId,
             streamGatewayUrl = options.StreamGatewayUrl,
             streamTopic = options.StreamTopic,

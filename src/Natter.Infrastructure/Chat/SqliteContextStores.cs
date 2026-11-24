@@ -30,6 +30,8 @@ internal sealed class SqliteContextDatabase
     {
         var connection = new SqliteConnection(ConnectionString);
         await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+        // S2-B5: foreign_keys + busy_timeout are set by the single schema owner for every store.
+        SqliteSchema.Prepare(connection);
         SecureFiles();
         return connection;
     }
@@ -55,112 +57,10 @@ internal sealed class SqliteContextDatabase
     {
         using var connection = new SqliteConnection(ConnectionString);
         connection.Open();
-        using var version = connection.CreateCommand();
-        version.CommandText = "PRAGMA user_version;";
-        var current = Convert.ToInt32(version.ExecuteScalar());
-
-        if (current < 1)
-        {
-            Execute(connection, """
-                CREATE TABLE IF NOT EXISTS sessions (
-                    session_id      TEXT PRIMARY KEY,
-                    source_key      TEXT NOT NULL,
-                    protocol        TEXT NOT NULL,
-                    platform        TEXT NOT NULL,
-                    conversation_id TEXT NOT NULL,
-                    guild_id        TEXT NULL,
-                    actor_id        TEXT NULL,
-                    created_at      TEXT NOT NULL,
-                    updated_at      TEXT NOT NULL,
-                    version         INTEGER NOT NULL DEFAULT 0,
-                    UNIQUE(source_key, conversation_id, guild_id, actor_id)
-                );
-                CREATE TABLE IF NOT EXISTS summaries (
-                    summary_id      TEXT PRIMARY KEY,
-                    session_id      TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
-                    from_message_id INTEGER NOT NULL,
-                    to_message_id   INTEGER NOT NULL,
-                    text            TEXT NOT NULL,
-                    version         INTEGER NOT NULL,
-                    prompt_version  TEXT NOT NULL,
-                    created_at      TEXT NOT NULL
-                );
-                CREATE INDEX IF NOT EXISTS ix_summaries_session ON summaries(session_id, version DESC);
-                """);
-            current = 1;
-        }
-
-        if (current < 2)
-        {
-            Execute(connection, """
-                CREATE TABLE IF NOT EXISTS memory_items (
-                    memory_id       TEXT PRIMARY KEY,
-                    scope_type      TEXT NOT NULL,
-                    scope_id        TEXT NOT NULL,
-                    subject_id      TEXT NULL,
-                    kind            TEXT NOT NULL,
-                    text            TEXT NOT NULL,
-                    data_json       TEXT NULL,
-                    confidence      REAL NOT NULL,
-                    sensitivity     TEXT NOT NULL,
-                    user_confirmed  INTEGER NOT NULL,
-                    source_message_ids_json TEXT NULL,
-                    created_at      TEXT NOT NULL,
-                    updated_at      TEXT NOT NULL,
-                    expires_at      TEXT NULL,
-                    version         INTEGER NOT NULL
-                );
-                CREATE INDEX IF NOT EXISTS ix_memory_scope ON memory_items(scope_type, scope_id, updated_at DESC);
-                """);
-            current = 2;
-        }
-
-        if (current < 3)
-        {
-            Execute(connection, """
-                CREATE TABLE IF NOT EXISTS agent_tasks (
-                    task_id         TEXT PRIMARY KEY,
-                    session_id      TEXT NOT NULL,
-                    source_key      TEXT NOT NULL,
-                    conversation_id TEXT NOT NULL,
-                    guild_id        TEXT NULL,
-                    actor_id        TEXT NULL,
-                    prompt          TEXT NOT NULL,
-                    status          TEXT NOT NULL,
-                    lease_owner     TEXT NULL,
-                    lease_expires_at TEXT NULL,
-                    result_text     TEXT NULL,
-                    error_code      TEXT NULL,
-                    error_message   TEXT NULL,
-                    created_at      TEXT NOT NULL,
-                    updated_at      TEXT NOT NULL,
-                    version         INTEGER NOT NULL
-                );
-                CREATE INDEX IF NOT EXISTS ix_agent_tasks_session ON agent_tasks(session_id, status);
-                CREATE TABLE IF NOT EXISTS task_events (
-                    task_id     TEXT NOT NULL,
-                    seq         INTEGER NOT NULL,
-                    kind        TEXT NOT NULL,
-                    payload_json TEXT NULL,
-                    created_at  TEXT NOT NULL,
-                    PRIMARY KEY(task_id, seq)
-                );
-                """);
-            current = 3;
-        }
-
-        using var setVersion = connection.CreateCommand();
-        setVersion.CommandText = $"PRAGMA user_version = {current};";
-        setVersion.ExecuteNonQuery();
+        SqliteSchema.Migrate(connection);
         SecureFiles();
     }
 
-    private static void Execute(SqliteConnection connection, string sql)
-    {
-        using var command = connection.CreateCommand();
-        command.CommandText = sql;
-        command.ExecuteNonQuery();
-    }
 }
 
 public sealed class SqliteMemoryStore : IMemoryStore
@@ -213,9 +113,9 @@ public sealed class SqliteMemoryStore : IMemoryStore
         await using var insert = connection.CreateCommand();
         insert.CommandText = """
             INSERT INTO memory_items
-                (memory_id, scope_type, scope_id, subject_id, kind, text, data_json, confidence,
+                (memory_id, scope_type, scope_id, subject_id, kind, text, text_index, data_json, confidence,
                  sensitivity, user_confirmed, source_message_ids_json, created_at, updated_at, expires_at, version)
-            VALUES ($id, $scope_type, $scope, $subject, $kind, $text, $data, $confidence,
+            VALUES ($id, $scope_type, $scope, $subject, $kind, $text, $index, $data, $confidence,
                     $sensitivity, $confirmed, $sources, $created, $updated, $expires, $version);
             """;
         AddParameters(insert, item);
@@ -225,6 +125,7 @@ public sealed class SqliteMemoryStore : IMemoryStore
 
     public async ValueTask<IReadOnlyList<MemoryItem>> SearchAsync(MemoryQuery query, CancellationToken cancellationToken = default)
     {
+        var now = DateTimeOffset.UtcNow;
         var scopes = new[]
         {
             MemoryScope.Id(query.Source, query.Conversation, query.User, MemoryScopeType.User),
@@ -232,24 +133,42 @@ public sealed class SqliteMemoryStore : IMemoryStore
             MemoryScope.Id(query.Source, query.Conversation, query.User, MemoryScopeType.Guild),
             MemoryScope.Id(query.Source, query.Conversation, query.User, MemoryScopeType.Global),
         };
+        var limit = Math.Max(0, query.Limit);
 
         await using var connection = await _database.OpenAsync(cancellationToken).ConfigureAwait(false);
+
+        var tokens = string.Equals(SqliteSchema.FtsMode, "pretokenized", StringComparison.Ordinal)
+            ? MemoryScoring.TokenizeForIndex(query.Query)
+            : MemoryScoring.Tokenize(query.Query);
+        if (tokens.Count > 0)
+        {
+            try
+            {
+                var fts = await SearchFtsAsync(connection, query, scopes, tokens, now, limit, cancellationToken).ConfigureAwait(false);
+                if (fts.Count > 0)
+                    return fts;
+                // No relevant hit: fall back to recent entries (legacy behaviour) instead of
+                // returning an empty memory for a turn that used to see its recent memories.
+            }
+            catch (SqliteException)
+            {
+                // A runtime without FTS5 must not break retrieval; fall back to recent entries.
+            }
+        }
+
         await using var command = connection.CreateCommand();
         command.CommandText = $"""
             SELECT memory_id, scope_type, scope_id, subject_id, kind, text, data_json, confidence,
                    sensitivity, user_confirmed, source_message_ids_json, created_at, updated_at, expires_at, version
             FROM memory_items
-            WHERE scope_id IN ($s0, $s1, $s2, $s3)
+            WHERE {ScopePredicate(query, scopes)}
               AND (expires_at IS NULL OR expires_at > $now)
               {(query.IncludePrivate ? string.Empty : "AND sensitivity <> 'private'")}
             ORDER BY updated_at DESC LIMIT $limit;
             """;
-        command.Parameters.AddWithValue("$s0", scopes[0]);
-        command.Parameters.AddWithValue("$s1", scopes[1]);
-        command.Parameters.AddWithValue("$s2", scopes[2]);
-        command.Parameters.AddWithValue("$s3", scopes[3]);
-        command.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToString("O", System.Globalization.CultureInfo.InvariantCulture));
-        command.Parameters.AddWithValue("$limit", Math.Max(0, query.Limit));
+        AddScopeParameters(command, query, scopes);
+        command.Parameters.AddWithValue("$now", now.ToString("O", System.Globalization.CultureInfo.InvariantCulture));
+        command.Parameters.AddWithValue("$limit", limit);
 
         var result = new List<MemoryItem>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
@@ -257,6 +176,92 @@ public sealed class SqliteMemoryStore : IMemoryStore
             result.Add(Read(reader));
         return result;
     }
+
+    private static async ValueTask<IReadOnlyList<MemoryItem>> SearchFtsAsync(
+        SqliteConnection connection,
+        MemoryQuery query,
+        string[] scopes,
+        IReadOnlyList<string> tokens,
+        DateTimeOffset now,
+        int limit,
+        CancellationToken cancellationToken)
+    {
+        var match = string.Join(" OR ", tokens.Select(token => $"\"{token.Replace("\"", string.Empty, StringComparison.Ordinal)}\""));
+        await using var command = connection.CreateCommand();
+        command.CommandText = $"""
+            SELECT m.memory_id, m.scope_type, m.scope_id, m.subject_id, m.kind, m.text, m.data_json, m.confidence,
+                   m.sensitivity, m.user_confirmed, m.source_message_ids_json, m.created_at, m.updated_at, m.expires_at, m.version,
+                   bm25(memory_fts) AS rank
+            FROM memory_fts
+            JOIN memory_items m ON m.memory_id = memory_fts.memory_id
+            WHERE memory_fts MATCH $match
+              AND {ScopePredicate(query, scopes, prefix: "m.")}
+              AND (m.expires_at IS NULL OR m.expires_at > $now)
+              {(query.IncludePrivate ? string.Empty : "AND m.sensitivity <> 'private'")}
+            ORDER BY rank, m.updated_at DESC
+            LIMIT $limit;
+            """;
+        command.Parameters.AddWithValue("$match", match);
+        for (var index = 0; index < scopes.Length; index++)
+            command.Parameters.AddWithValue("$s" + index, scopes[index]);
+        if (query.Scope is { } scope)
+        {
+            command.Parameters.AddWithValue("$scope_type", scope.ToString().ToLowerInvariant());
+            command.Parameters.AddWithValue("$scope_key", scopes[ScopeIndex(scope)]);
+        }
+        command.Parameters.AddWithValue("$now", now.ToString("O", System.Globalization.CultureInfo.InvariantCulture));
+        command.Parameters.AddWithValue("$limit", Math.Max(1, limit));
+
+        var stabilityWindow = query.StabilityWindow > TimeSpan.Zero ? query.StabilityWindow : TimeSpan.FromDays(30);
+        var scored = new List<(MemoryItem Item, double Score)>();
+        await using (var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
+        {
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                var item = Read(reader);
+                var bm25 = reader.IsDBNull(15) ? 0d : reader.GetDouble(15);
+                var ageDays = Math.Max(0, (now - item.UpdatedAt).TotalDays);
+                // Mode comes from the query, which the host fills from MemoryRetrievalOptions.
+                var decay = MemoryDecay.Decay(ageDays, stabilityWindow.TotalDays, query.Mode);
+                scored.Add((item, (-bm25) * decay));
+            }
+        }
+
+        if (scored.Count == 0)
+            return [];
+
+        return scored
+            .OrderByDescending(pair => pair.Score)
+            .ThenByDescending(pair => pair.Item.UpdatedAt)
+            .Take(limit)
+            .Select(pair => pair.Item)
+            .ToArray();
+    }
+
+    private static string ScopePredicate(MemoryQuery query, string[] scopes, string prefix = "")
+        => query.Scope is null
+            ? $"{prefix}scope_id IN ($s0, $s1, $s2, $s3)"
+            : $"{prefix}scope_type = $scope_type AND {prefix}scope_id = $scope_key";
+
+    private static void AddScopeParameters(SqliteCommand command, MemoryQuery query, string[] scopes)
+    {
+        for (var index = 0; index < scopes.Length; index++)
+            command.Parameters.AddWithValue("$s" + index, scopes[index]);
+        if (query.Scope is { } scope)
+        {
+            command.Parameters.AddWithValue("$scope_type", scope.ToString().ToLowerInvariant());
+            command.Parameters.AddWithValue("$scope_key", scopes[ScopeIndex(scope)]);
+        }
+    }
+
+    private static int ScopeIndex(MemoryScopeType scope) => scope switch
+    {
+        MemoryScopeType.User => 0,
+        MemoryScopeType.Conversation => 1,
+        MemoryScopeType.Guild => 2,
+        MemoryScopeType.Global => 3,
+        _ => 0,
+    };
 
     public async ValueTask<bool> DeleteAsync(MemoryDeleteRequest request, CancellationToken cancellationToken = default)
     {
@@ -321,9 +326,9 @@ public sealed class SqliteMemoryStore : IMemoryStore
             command.CommandText = request.Overwrite
                 ? """
                   INSERT INTO memory_items
-                      (memory_id, scope_type, scope_id, subject_id, kind, text, data_json, confidence,
+                      (memory_id, scope_type, scope_id, subject_id, kind, text, text_index, data_json, confidence,
                        sensitivity, user_confirmed, source_message_ids_json, created_at, updated_at, expires_at, version)
-                  VALUES ($id, $scope_type, $scope, $subject, $kind, $text, $data, $confidence,
+                  VALUES ($id, $scope_type, $scope, $subject, $kind, $text, $index, $data, $confidence,
                           $sensitivity, $confirmed, $sources, $created, $updated, $expires, $version)
                   ON CONFLICT(memory_id) DO UPDATE SET
                       text=excluded.text, data_json=excluded.data_json, confidence=excluded.confidence,
@@ -332,9 +337,9 @@ public sealed class SqliteMemoryStore : IMemoryStore
                   """
                 : """
                   INSERT OR IGNORE INTO memory_items
-                      (memory_id, scope_type, scope_id, subject_id, kind, text, data_json, confidence,
+                      (memory_id, scope_type, scope_id, subject_id, kind, text, text_index, data_json, confidence,
                        sensitivity, user_confirmed, source_message_ids_json, created_at, updated_at, expires_at, version)
-                  VALUES ($id, $scope_type, $scope, $subject, $kind, $text, $data, $confidence,
+                  VALUES ($id, $scope_type, $scope, $subject, $kind, $text, $index, $data, $confidence,
                           $sensitivity, $confirmed, $sources, $created, $updated, $expires, $version);
                   """;
             AddParameters(command, item);
@@ -351,6 +356,7 @@ public sealed class SqliteMemoryStore : IMemoryStore
         command.Parameters.AddWithValue("$subject", (object?)item.SubjectId ?? DBNull.Value);
         command.Parameters.AddWithValue("$kind", item.Kind);
         command.Parameters.AddWithValue("$text", item.Text);
+        command.Parameters.AddWithValue("$index", MemoryScoring.BuildIndexText(item.Text));
         command.Parameters.AddWithValue("$data", (object?)item.DataJson ?? DBNull.Value);
         command.Parameters.AddWithValue("$confidence", item.Confidence);
         command.Parameters.AddWithValue("$sensitivity", item.Sensitivity);

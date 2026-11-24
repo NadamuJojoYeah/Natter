@@ -13,4 +13,13 @@ public sealed record ChatOrchestrationOptions
     public bool RequireMentionOrDirect { get; init; } = true;
 
     public bool IgnoreSelfMessages { get; init; } = true;
+
+    /// <summary>Bounded queue capacity for inbound events (S1-06).</summary>
+    public int QueueCapacity { get; init; } = 64;
+
+    /// <summary>Fixed worker count; different conversations run in parallel up to this limit.</summary>
+    public int WorkerCount { get; init; } = 2;
+
+    /// <summary>Maximum time StopAsync waits for in-flight events before cancelling them.</summary>
+    public TimeSpan DrainTimeout { get; init; } = TimeSpan.FromSeconds(5);
 }

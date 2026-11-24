@@ -10,6 +10,77 @@ internal static class ManagedAssemblyInspector
     private const ushort Pe32PlusMagic = 0x20B;
     private const int CliHeaderDirectoryIndex = 14;
 
+        /// <summary>
+    /// Magic-byte detection for native images, independent of the file extension (S2-C13). A native
+    /// library renamed to <c>libfoo.dll</c>/<c>data.bin</c> must still be rejected when
+    /// <c>AllowNativeLibraries</c> is false.
+    /// </summary>
+    public static bool LooksLikeNativeImage(Stream stream)
+    {
+        if (stream.Length < 4)
+            return false;
+
+        try
+        {
+            var header = new byte[4];
+            stream.Position = 0;
+            if (stream.Read(header, 0, 4) != 4)
+                return false;
+
+            // ELF: 0x7F 'E' 'L' 'F'
+            if (header[0] == 0x7F && header[1] == (byte)'E' && header[2] == (byte)'L' && header[3] == (byte)'F')
+                return true;
+
+            // Mach-O: 0xFEEDFACE / 0xFEEDFACF (both endianness) and FAT 0xCAFEBABE / 0xBEBAFECA.
+            if (IsMachOMagic(header))
+                return true;
+
+            // PE that is not managed: the CLI header check below catches it (MZ + PE without CLI).
+            stream.Position = 0;
+            return !IsManagedAssembly(stream) && IsPortableExecutable(stream);
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+        finally
+        {
+            stream.Position = 0;
+        }
+    }
+
+    private static bool IsMachOMagic(byte[] header)
+    {
+        uint bigEndian = (uint)(header[0] << 24 | header[1] << 16 | header[2] << 8 | header[3]);
+        uint littleEndian = (uint)(header[3] << 24 | header[2] << 16 | header[1] << 8 | header[0]);
+
+        return bigEndian is 0xFEEDFACE or 0xFEEDFACF or 0xCAFEBABE or 0xCEFAEDFE
+            || littleEndian is 0xFEEDFACE or 0xFEEDFACF;
+    }
+
+    private static bool IsPortableExecutable(Stream stream)
+    {
+        if (stream.Length < 0x40)
+            return false;
+
+        stream.Position = 0;
+        if (stream.ReadByte() != 'M' || stream.ReadByte() != 'Z')
+            return false;
+
+        stream.Position = PeHeaderOffset;
+        var buffer = new byte[4];
+        if (stream.Read(buffer, 0, 4) != 4)
+            return false;
+
+        var peOffset = buffer[0] | buffer[1] << 8 | buffer[2] << 16 | buffer[3] << 24;
+        if (peOffset <= 0 || peOffset + 4 > stream.Length)
+            return false;
+
+        stream.Position = peOffset;
+        return stream.Read(buffer, 0, 4) == 4
+               && buffer[0] == (byte)'P' && buffer[1] == (byte)'E' && buffer[2] == 0 && buffer[3] == 0;
+    }
+
     public static bool IsManagedAssembly(Stream stream)
     {
         try

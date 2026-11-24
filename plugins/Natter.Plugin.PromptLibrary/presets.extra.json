@@ -1,0 +1,13 @@
+{
+  "presets": [
+    {
+      "id": "tier1-strict",
+      "version": "2026-11-21",
+      "extends": "tier1-default",
+      "locale": "zh-CN",
+      "sections": [
+        { "fragmentId": "legacy-style", "enabled": false, "reason": "strict preset keeps the legacy style off" }
+      ]
+    }
+  ]
+}

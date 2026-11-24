@@ -76,7 +76,10 @@ ALERT_JQ='
   | def prevof($name): (($prevups // []) | map(select((.source // "") | startswith($name))) | first);
 
   [
-    if ($now.status // "") != "healthy" then
+    # `plugins-failed` is deliberately excluded: the host and upstreams are fine there, and the
+    # dedicated `plugin-failed` rule below already reports each unloaded plugin. Alerting on the
+    # aggregate status too would double-report and train operators to ignore this rule.
+    if (($now.status // "") != "healthy") and (($now.status // "") != "plugins-failed") then
       {id:"status-not-healthy", severity:"warning",
        message:("health.status=" + ($now.status // "unknown") + " (Tier 2 absence is expected for Tier 1-only deployments)")}
     else empty end,

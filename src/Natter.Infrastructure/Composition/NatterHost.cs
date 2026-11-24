@@ -47,63 +47,81 @@ public sealed class NatterHost : IAsyncDisposable
     public async ValueTask StartAsync(CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (_started) return;
+        if (_started)
+            return;
 
-        _started = true;
-        _rootProvider.GetService<Natter.Application.Chat.HostRuntimeClock>()?.MarkStarted();
-
-        // Force journal subscription before any event can be published.
-        _ = _rootProvider.GetService(typeof(IEventJournal));
-
-        foreach (var lifecycle in _rootProvider.GetServices<IPluginLifecycle>())
+        try
         {
-            try
-            {
-                await lifecycle.StartAsync(_rootProvider, cancellationToken).ConfigureAwait(false);
-                _startedLifecycles.Add(lifecycle);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Plugin lifecycle {Lifecycle} failed to start.", lifecycle.GetType().FullName);
-            }
-        }
+            _rootProvider.GetService<Natter.Application.Chat.HostRuntimeClock>()?.MarkStarted();
 
-        // Activate NPS plugins and connect their upstreams after host lifecycles have
-        // subscribed (ChatIngressLifecycle attaches to upstreams at registration).
-        if (_npsRuntime is not null)
+            // Force journal subscription before any event can be published.
+            _ = _rootProvider.GetService(typeof(IEventJournal));
+
+            foreach (var lifecycle in _rootProvider.GetServices<IPluginLifecycle>())
+            {
+                try
+                {
+                    await lifecycle.StartAsync(_rootProvider, cancellationToken).ConfigureAwait(false);
+                    _startedLifecycles.Add(lifecycle);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Plugin lifecycle {Lifecycle} failed to start.", lifecycle.GetType().FullName);
+                }
+            }
+
+            // Activate NPS plugins and connect their upstreams after host lifecycles have
+            // subscribed (ChatIngressLifecycle attaches to upstreams at registration).
+            if (_npsRuntime is not null)
+            {
+                try
+                {
+                    await _npsRuntime.StartAsync(cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "The NPS plugin runtime failed to start.");
+                }
+            }
+
+            if (_rootProvider.GetService(typeof(Natter.Application.Chat.IRuntimeProfileStore)) is Natter.Application.Chat.IRuntimeProfileStore profileStore
+                && _rootProvider.GetService(typeof(Natter.Application.Chat.IChatResponderRegistry)) is Natter.Application.Chat.IChatResponderRegistry responderRegistry)
+            {
+                var components = _rootProvider.GetService(typeof(Natter.Application.Chat.IContextComponentCatalog))
+                    as Natter.Application.Chat.IContextComponentCatalog;
+                // S2-B2: validation happens before the host is marked started; a failure rolls back
+                // every already-started lifecycle/upstream and stays retryable.
+                Natter.Application.Chat.RuntimeProfileValidator.Validate(profileStore, responderRegistry, components);
+            }
+
+            _started = true;
+            _logger.LogInformation(
+                "Natter host started with {PluginCount} plugin(s) and {LifecycleCount} lifecycle hook(s).",
+                _pluginCatalog.Plugins.Count,
+                _startedLifecycles.Count);
+        }
+        catch
         {
-            try
-            {
-                await _npsRuntime.StartAsync(cancellationToken).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "The NPS plugin runtime failed to start.");
-            }
+            await StopCoreAsync(CancellationToken.None).ConfigureAwait(false);
+            throw;
         }
-
-        if (_rootProvider.GetService(typeof(Natter.Application.Chat.IRuntimeProfileStore)) is Natter.Application.Chat.IRuntimeProfileStore profileStore
-            && _rootProvider.GetService(typeof(Natter.Application.Chat.IChatResponderRegistry)) is Natter.Application.Chat.IChatResponderRegistry responderRegistry)
-        {
-            var components = _rootProvider.GetService(typeof(Natter.Application.Chat.IContextComponentCatalog))
-                as Natter.Application.Chat.IContextComponentCatalog;
-            Natter.Application.Chat.RuntimeProfileValidator.Validate(profileStore, responderRegistry, components);
-        }
-
-        _logger.LogInformation(
-            "Natter host started with {PluginCount} plugin(s) and {LifecycleCount} lifecycle hook(s).",
-            _pluginCatalog.Plugins.Count,
-            _startedLifecycles.Count);
     }
 
     public async ValueTask StopAsync(CancellationToken cancellationToken = default)
     {
-        if (!_started) return;
+        if (!_started)
+            return;
 
+        await StopCoreAsync(cancellationToken).ConfigureAwait(false);
+        _started = false;
+    }
+
+    private async ValueTask StopCoreAsync(CancellationToken cancellationToken)
+    {
         if (_npsRuntime is not null)
         {
             try
@@ -129,7 +147,6 @@ public sealed class NatterHost : IAsyncDisposable
         }
 
         _startedLifecycles.Clear();
-        _started = false;
     }
 
     public async ValueTask DisposeAsync()

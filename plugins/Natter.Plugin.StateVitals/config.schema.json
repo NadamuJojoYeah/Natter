@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://natter.dev/plugins/state-vitals/config.schema.json",
+  "title": "Natter State & Vitals configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "enabled": {
+      "type": "boolean",
+      "default": false,
+      "description": "Opt-in switch. The plugin loads its definitions, opens its database and contributes a prompt fragment only when this is true."
+    },
+    "packs": {
+      "type": "string",
+      "default": "definitions",
+      "description": "Content pack directory. Every *.json inside is one pack (packId + five primitives). Relative paths resolve against the plugin directory and may not escape it."
+    },
+    "stateDirectory": {
+      "type": "string",
+      "description": "Override for the plugin state directory. Defaults to <NATTER_STATE_DIR>/plugins/natter.feature.character.state-vitals."
+    },
+    "stateId": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$",
+      "default": "character",
+      "description": "Identifier of the single global character state row (design §7: one character, shared by every conversation)."
+    },
+    "fragmentOrder": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1000000,
+      "default": 800000,
+      "description": "Prompt fragment order. Kept late so state changes only invalidate the tail of the cached prefix (design §5.1)."
+    },
+    "includeDescriptions": {
+      "type": "boolean",
+      "default": true,
+      "description": "Include the level's stored description next to the bucket tags. The text is written once per level entry, so the fragment stays stable while the level holds."
+    },
+    "descriptionTimeoutMilliseconds": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 2000,
+      "default": 300,
+      "description": "Budget for one description generation attempt. On timeout the template text is used and the turn is not blocked (design §6.2)."
+    },
+    "minAdvanceIntervalSeconds": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 3600,
+      "default": 0,
+      "description": "Minimum wall-clock gap between persisted advances. 0 advances on every prompt read (a single row UPDATE)."
+    },
+    "maxStep": {
+      "type": "number",
+      "minimum": 0.01,
+      "maximum": 1,
+      "default": 0.5,
+      "description": "Upper clamp for the k*dt step fraction (design §3.1 point 2: MAX_STEP)."
+    },
+    "maxDeltaHours": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 8760,
+      "default": 720,
+      "description": "Upper clamp for a single elapsed interval in hours, so off-line gaps cannot explode."
+    },
+    "maxStepPerTickFraction": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "default": 0.5,
+      "description": "Upper clamp for the total change of one tick, as a fraction of the vital range (design §3.3 point 3)."
+    },
+    "maxAdvanceAttempts": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 32,
+      "default": 8,
+      "description": "Optimistic-concurrency retries when a competing writer wins the version compare-and-set."
+    },
+    "maxFragmentCharacters": {
+      "type": "integer",
+      "minimum": 16,
+      "maximum": 8000,
+      "default": 1000,
+      "description": "Self-imposed cap for the contributed fragment; descriptions are dropped before the host quota is reached."
+    },
+    "maxPacks": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 64,
+      "default": 16,
+      "description": "Maximum number of content packs; exceeding it rejects at load time."
+    },
+    "maxDefinitionsPerKind": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 256,
+      "default": 32,
+      "description": "Maximum vitals / assertedStates / derivedStates / triggers per pack."
+    },
+    "maxEffectsPerPack": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1024,
+      "default": 128,
+      "description": "Maximum effects per pack, which bounds one tick of evaluation."
+    }
+  }
+}

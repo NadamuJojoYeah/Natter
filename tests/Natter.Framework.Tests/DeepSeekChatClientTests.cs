@@ -59,7 +59,7 @@ public sealed class DeepSeekChatClientTests
         Assert.Equal("disabled", root.GetProperty("thinking").GetProperty("type").GetString());
         Assert.False(root.TryGetProperty("reasoning_effort", out _));
         Assert.True(root.TryGetProperty("temperature", out _));
-        Assert.Equal(1024, root.GetProperty("max_tokens").GetInt32());
+        Assert.Equal(4096, root.GetProperty("max_tokens").GetInt32());
     }
 
     [Fact]

@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "enabled": {
+      "type": "boolean",
+      "default": true,
+      "description": "When false the provider returns the safe host fallback prompt; fragments stay on disk."
+    },
+    "preset": {
+      "type": "string",
+      "description": "Preset id used when the profile does not select one (profile.prompt.preset wins)."
+    },
+    "locale": {
+      "type": "string",
+      "description": "Locale used for preset selection when neither request nor profile provides one."
+    },
+    "maxCharacters": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1000000,
+      "default": 12000,
+      "description": "Total prompt budget passed to the host composer."
+    },
+    "maxFragmentCharacters": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1000000,
+      "default": 8000,
+      "description": "Per-fragment cap passed to the host composer."
+    },
+    "missingVariables": {
+      "type": "string",
+      "enum": ["warn", "error"],
+      "default": "warn",
+      "description": "Behavior when a whitelisted variable has no value."
+    },
+    "promptDirectory": {
+      "type": "string",
+      "default": "prompts",
+      "description": "Base directory (inside the plugin folder) for file fragments."
+    },
+    "presetFile": {
+      "type": "string",
+      "description": "Optional JSON file with additional fragments/presets arrays, resolved inside the plugin folder."
+    },
+    "disabledFragments": {
+      "type": "array",
+      "items": { "type": "string" },
+      "default": [],
+      "description": "Fragment ids disabled for this installation. Source files/inline text are not modified."
+    },
+    "fragments": {
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:#-]{0,127}$" },
+          "text": { "type": "string", "description": "Inline fragment text." },
+          "file": { "type": "string", "description": "Fragment file relative to promptDirectory (read-only, UTF-8, max 64 KiB)." },
+          "order": { "type": "integer", "default": 0 },
+          "enabledByDefault": { "type": "boolean", "default": true },
+          "maxCharacters": { "type": "integer", "minimum": 0, "maximum": 8000, "default": 8000 },
+          "version": { "type": "string" },
+          "tags": { "type": "array", "items": { "type": "string" }, "default": [] }
+        },
+        "oneOf": [
+          { "required": ["text"] },
+          { "required": ["file"] }
+        ]
+      }
+    },
+    "presets": {
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:#-]{0,127}$" },
+          "version": { "type": "string", "default": "1" },
+          "extends": { "type": "string", "description": "Base preset id; child sections override base sections by fragmentId." },
+          "locale": { "type": "string" },
+          "variables": { "type": "object", "additionalProperties": { "type": "string" }, "default": {} },
+          "sections": {
+            "type": "array",
+            "default": [],
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["fragmentId"],
+              "properties": {
+                "fragmentId": { "type": "string" },
+                "order": { "type": "integer" },
+                "enabled": { "type": "boolean", "description": "false disables the fragment without deleting it." },
+                "source": { "type": "string", "description": "Optional source assertion: inline/file/plugin/hostBuiltin." },
+                "overrideText": { "type": "string", "description": "Preset-level text override (ignored for host mandatory fragments)." },
+                "reason": { "type": "string", "description": "Short metadata for diagnostics; never the prompt body." }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

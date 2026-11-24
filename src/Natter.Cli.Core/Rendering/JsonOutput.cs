@@ -16,6 +16,9 @@ public static class JsonOutput
 
     public static string Serialize(object value) => JsonSerializer.Serialize(value, Options);
 
+    /// <summary>Serializes single-line with the shared compact policy.</summary>
+    public static string SerializeCompact(object value) => JsonSerializer.Serialize(value, CompactOptions);
+
     /// <summary>Serializes the concrete runtime event type, not the IDomainEvent interface.</summary>
     public static string SerializePayload(IDomainEvent domainEvent)
         => JsonSerializer.Serialize(domainEvent, domainEvent.GetType(), Options);
@@ -24,10 +27,15 @@ public static class JsonOutput
     public static string SerializePayloadCompact(IDomainEvent domainEvent)
         => JsonSerializer.Serialize(domainEvent, domainEvent.GetType(), CompactOptions);
 
-    private static readonly JsonSerializerOptions CompactOptions = new()
+    /// <summary>
+    /// Single-line machine-readable policy shared by every `--json` command (S2-E8): field naming,
+    /// enum casing and indentation must not differ between commands.
+    /// </summary>
+    public static JsonSerializerOptions CompactOptions { get; } = new()
     {
         WriteIndented = false,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
     };
 
     public static object Project(DomainEventEnvelope envelope) => new

@@ -69,7 +69,18 @@ public sealed class SparkPlugin : INatterPlugin
             apiKey,
             provider.GetRequiredService<SparkMetrics>()));
         services.AddSingleton<IAiContextAssembler>(provider => new RecentWindowContextAssembler(responderOptions));
-        services.AddSingleton<AiChatResponder>();
+        // P5.2c: Spark's tool-calling support is not verified, so the provider explicitly stays on
+        // the text protocol (TextOnly); the worker falls back to <tool_call> or answers directly.
+        services.AddSingleton<AiChatResponder>(provider => new AiChatResponder(
+            provider.GetRequiredService<IChatClient>(),
+            responderOptions,
+            provider.GetRequiredService<IAiConversationStore>(),
+            provider.GetRequiredService<AiConversationGate>(),
+            provider.GetRequiredService<Natter.Chat.ChatCommandFactory>(),
+            provider.GetRequiredService<IPluginLog>(),
+            provider.GetRequiredService<IAiContextAssembler>(),
+            provider.GetService<Natter.Application.Chat.IContextPipeline>(),
+            Natter.Application.Chat.ToolProtocolCapabilities.TextOnly));
         services.AddTransient<SparkStatusCommandHandler>();
 
         context.Contributions.AddChatResponder<AiChatResponder>("spark", priority: 20);
@@ -107,14 +118,20 @@ public sealed class SparkPlugin : INatterPlugin
             throw new InvalidOperationException("Spark streaming is not enabled in this Natter version.");
         if (options.Tools is { Count: > 0 })
             throw new InvalidOperationException("Spark tools are not enabled in this Natter version.");
-        if (options.MaxOutputTokens is < 1 or > 32768)
-            throw new InvalidOperationException("Spark config 'maxOutputTokens' is out of range.");
-        if (options.TimeoutSeconds is < 1 or > 600)
-            throw new InvalidOperationException("Spark config 'timeoutSeconds' must be between 1 and 600.");
-        if (options.MaxRetries is < 0 or > 5)
-            throw new InvalidOperationException("Spark config 'maxRetries' must be between 0 and 5.");
+        // Bounds come from SparkNumericBounds, which a test keeps in sync with config.schema.json.
+        RequireInBounds("maxOutputTokens", options.MaxOutputTokens);
+        RequireInBounds("timeoutSeconds", options.TimeoutSeconds);
+        RequireInBounds("maxRetries", options.MaxRetries);
         if (options.HistoryScope is not ("conversation" or "user"))
             throw new InvalidOperationException("Spark config 'historyScope' must be 'conversation' or 'user'.");
+    }
+
+    private static void RequireInBounds(string name, long value)
+    {
+        var (min, max) = SparkNumericBounds.All[name];
+        if (value < min || value > max)
+            throw new InvalidOperationException(
+                $"Spark config '{name}' must be between {min} and {max} (got {value}).");
     }
 }
 
@@ -130,6 +147,12 @@ public sealed class SparkStatusCommandHandler(SparkOptions options, SparkMetrics
     public async ValueTask<int> ExecuteAsync(CliInvocation invocation, CancellationToken cancellationToken = default)
     {
         var historyCount = await history.CountAsync(cancellationToken).ConfigureAwait(false);
+        var metricsSnapshot = metrics.Snapshot();
+        metricsSnapshot = metricsSnapshot with
+        {
+            LastError = Natter.Application.Redaction.SecretRedaction.Apply(
+                metricsSnapshot.LastError, Natter.Application.Redaction.SecretRedactionOptions.Admin),
+        };
         var host = Uri.TryCreate(options.BaseUrl, UriKind.Absolute, out var uri) ? uri.Host : "invalid";
         var snapshot = new SparkStatusSnapshot(
             "iflytek-spark",
@@ -139,7 +162,7 @@ public sealed class SparkStatusCommandHandler(SparkOptions options, SparkMetrics
             options.Streaming,
             options.HistoryMaxMessages,
             historyCount,
-            metrics.Snapshot());
+            metricsSnapshot);
 
         if (invocation.HasFlag("json"))
         {
@@ -158,7 +181,8 @@ public sealed class SparkStatusCommandHandler(SparkOptions options, SparkMetrics
         invocation.Console.Out.WriteLine($"p95LatencyMs: {snapshot.Metrics.P95LatencyMs?.ToString() ?? "-"}");
         invocation.Console.Out.WriteLine($"inputTokens: {snapshot.Metrics.InputTokens}");
         invocation.Console.Out.WriteLine($"outputTokens: {snapshot.Metrics.OutputTokens}");
-        invocation.Console.Out.WriteLine($"lastError: {snapshot.Metrics.LastError ?? "-"}");
+        invocation.Console.Out.WriteLine(
+            $"lastError: {Natter.Application.Redaction.SecretRedaction.Apply(snapshot.Metrics.LastError, Natter.Application.Redaction.SecretRedactionOptions.Admin)}");
         return CliExitCodes.Success;
     }
 }

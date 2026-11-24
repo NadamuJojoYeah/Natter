@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "id": "natter.transport.discord",
+  "id": "natter.transport.messaging.discord",
   "name": "Discord Transport",
   "version": "0.1.0",
   "kind": "transport",

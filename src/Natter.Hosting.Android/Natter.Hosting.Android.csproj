@@ -32,6 +32,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <EmbeddedResource Include="trusted-keys.txt" LogicalName="Natter.Hosting.Android.trusted-keys.txt" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="../Natter.Cli.Core/Natter.Cli.Core.csproj" />
     <ProjectReference Include="../Natter.Cli.Abstractions/Natter.Cli.Abstractions.csproj" />
     <ProjectReference Include="../Natter.Plugin.Store/Natter.Plugin.Store.csproj" />

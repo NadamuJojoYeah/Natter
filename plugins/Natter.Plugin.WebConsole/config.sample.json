@@ -3,6 +3,7 @@
   "port": 5090,
   "hostHealthUrl": "http://127.0.0.1:5099/health",
   "token": "${secret:WEBCONSOLE_TOKEN}",
+  "viewerToken": "",
   "readOnly": true,
   "allowConfigWrite": false,
   "allowCommandConsole": false,
@@ -10,5 +11,8 @@
   "commandTimeoutSeconds": 10,
   "sessionMinutes": 60,
   "maxLogLines": 500,
-  "trustedProxies": ["127.0.0.1"]
+  "requestTimeoutSeconds": 15,
+  "maxConcurrentRequests": 32,
+  "auditRetentionFiles": 3,
+  "trustedProxies": []
 }

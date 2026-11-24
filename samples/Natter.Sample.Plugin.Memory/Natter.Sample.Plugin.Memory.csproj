@@ -7,8 +7,6 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
     <ProjectReference Include="../../src/Natter.Abstractions/Natter.Abstractions.csproj" />
-    <ProjectReference Include="../../src/Natter.Application/Natter.Application.csproj" />
-    <ProjectReference Include="../../src/Natter.Chat/Natter.Chat.csproj" />
     <ProjectReference Include="../../src/Natter.Plugin.Abstractions/Natter.Plugin.Abstractions.csproj" />
   </ItemGroup>
   <ItemGroup>

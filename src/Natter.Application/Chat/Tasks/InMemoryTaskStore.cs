@@ -29,7 +29,8 @@ public sealed class InMemoryTaskStore : ITaskStore
     {
         lock (_gate)
             return ValueTask.FromResult<IReadOnlyList<AgentTask>>(_tasks.Values
-                .Where(task => task.SessionId == sessionId && task.Status is AgentTaskStatus.Pending or AgentTaskStatus.Running)
+                .Where(task => task.SessionId == sessionId
+                    && task.Status is AgentTaskStatus.Pending or AgentTaskStatus.Running or AgentTaskStatus.WaitingForInput)
                 .OrderBy(task => task.CreatedAt)
                 .ToArray());
     }
@@ -124,6 +125,52 @@ public sealed class InMemoryTaskStore : ITaskStore
         return ValueTask.CompletedTask;
     }
 
+    public ValueTask AppendEventAsync(
+        string taskId,
+        string kind,
+        string? payloadJson,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(taskId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(kind);
+        TaskTracePayload.EnsureSafe(payloadJson);
+
+        lock (_gate)
+        {
+            AddEventJson(taskId, kind, payloadJson);
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    public ValueTask<IReadOnlyList<AgentTask>> ListRecentAsync(int limit, CancellationToken cancellationToken = default)
+        => ListRecentAsync(limit, null, null, null, null, null, cancellationToken);
+
+    public ValueTask<IReadOnlyList<AgentTask>> ListRecentAsync(
+        int limit,
+        string? source = null,
+        string? status = null,
+        string? sessionId = null,
+        DateTimeOffset? since = null,
+        DateTimeOffset? until = null,
+        CancellationToken cancellationToken = default)
+    {
+        lock (_gate)
+        {
+            return ValueTask.FromResult<IReadOnlyList<AgentTask>>(
+                _tasks.Values
+                    .Where(task => string.IsNullOrEmpty(source) || task.Source.Key == source)
+                    .Where(task => string.IsNullOrEmpty(status)
+                        || string.Equals(task.Status.ToString(), status, StringComparison.OrdinalIgnoreCase))
+                    .Where(task => string.IsNullOrEmpty(sessionId) || task.SessionId == sessionId)
+                    .Where(task => since is null || task.UpdatedAt >= since)
+                    .Where(task => until is null || task.UpdatedAt <= until)
+                    .OrderByDescending(task => task.UpdatedAt)
+                    .ThenByDescending(task => task.TaskId, StringComparer.Ordinal)
+                    .Take(Math.Max(1, limit))
+                    .ToArray());
+        }
+    }
+
     public ValueTask<IReadOnlyList<TaskEvent>> GetEventsAsync(string taskId, CancellationToken cancellationToken = default)
     {
         lock (_gate)
@@ -132,12 +179,15 @@ public sealed class InMemoryTaskStore : ITaskStore
     }
 
     private void AddEvent(string taskId, string kind, object payload)
+        => AddEventJson(taskId, kind, JsonSerializer.Serialize(payload));
+
+    private void AddEventJson(string taskId, string kind, string? payloadJson)
     {
         if (!_events.TryGetValue(taskId, out var events))
         {
             events = [];
             _events[taskId] = events;
         }
-        events.Add(new TaskEvent(taskId, ++_sequence, kind, JsonSerializer.Serialize(payload), DateTimeOffset.UtcNow));
+        events.Add(new TaskEvent(taskId, ++_sequence, kind, payloadJson, DateTimeOffset.UtcNow));
     }
 }

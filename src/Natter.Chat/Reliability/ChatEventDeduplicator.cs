@@ -7,18 +7,26 @@ namespace Natter.Chat;
 /// </summary>
 public sealed class ChatEventDeduplicator
 {
-    private readonly Dictionary<string, DateTimeOffset> _seen = new(StringComparer.Ordinal);
+    private sealed record Entry(DateTimeOffset ExpiresAt, long Sequence);
+
+    private readonly Dictionary<string, Entry> _seen = new(StringComparer.Ordinal);
+    private readonly Queue<(string Key, DateTimeOffset ExpiresAt, long Sequence)> _expiry = new();
+    private readonly Queue<(string Key, long Sequence)> _insertion = new();
     private readonly Lock _gate = new();
     private readonly TimeSpan _window;
     private readonly int _capacity;
     private readonly Func<DateTimeOffset> _clock;
+    private long _sequence;
+    private long _lateEvents;
 
     public ChatEventDeduplicator(
         TimeSpan? window = null,
         int capacity = 10_000,
         Func<DateTimeOffset>? clock = null)
     {
-        _window = window ?? TimeSpan.FromMinutes(10);
+        // S2-A12: the default window must cover the longest platform replay window (DingTalk:
+        // 60 minutes). A shorter window let replays after 10 minutes through.
+        _window = window ?? TimeSpan.FromMinutes(60);
         if (_window <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(window), "The deduplication window must be positive.");
 
@@ -27,6 +35,12 @@ public sealed class ChatEventDeduplicator
     }
 
     public TimeSpan Window => _window;
+
+    /// <summary>
+    /// Accepted events whose age exceeded the window: dedupe could not have seen a replay of them
+    /// and such events are the candidates for window-gap pass-through (S2-A12).
+    /// </summary>
+    public long LateEventCount => Interlocked.Read(ref _lateEvents);
 
     public int Count
     {
@@ -55,13 +69,19 @@ public sealed class ChatEventDeduplicator
             if (keys.Any(_seen.ContainsKey))
                 return false;
 
+            if (now - chatEvent.OccurredAt > _window)
+                Interlocked.Increment(ref _lateEvents);
+
             var expiresAt = now + _window;
             foreach (var key in keys)
-                _seen[key] = expiresAt;
+            {
+                var sequence = ++_sequence;
+                _seen[key] = new Entry(expiresAt, sequence);
+                _expiry.Enqueue((key, expiresAt, sequence));
+                _insertion.Enqueue((key, sequence));
+            }
 
-            if (_seen.Count > _capacity)
-                TrimToCapacity();
-
+            TrimToCapacity();
             return true;
         }
     }
@@ -111,25 +131,30 @@ public sealed class ChatEventDeduplicator
 
     private void Prune(DateTimeOffset now)
     {
-        if (_seen.Count == 0)
-            return;
+        // S2-A14: incremental expiry via a FIFO of insertion-time deadlines. Each accepted event
+        // pays O(expired), not O(total); the lock is never held for a full-table scan.
+        while (_expiry.TryDequeue(out var entry))
+        {
+            if (entry.ExpiresAt > now)
+            {
+                _expiry.Enqueue(entry);
+                break;
+            }
 
-        var expired = _seen
-            .Where(pair => pair.Value <= now)
-            .Select(pair => pair.Key)
-            .ToList();
-
-        foreach (var key in expired)
-            _seen.Remove(key);
+            if (_seen.TryGetValue(entry.Key, out var current)
+                && current.Sequence == entry.Sequence
+                && current.ExpiresAt <= now)
+                _seen.Remove(entry.Key);
+        }
     }
 
     private void TrimToCapacity()
     {
-        var excess = _seen.Count - _capacity;
-        if (excess <= 0)
-            return;
-
-        foreach (var key in _seen.OrderBy(pair => pair.Value).Take(excess).Select(pair => pair.Key).ToList())
-            _seen.Remove(key);
+        // LRU-ish eviction by insertion order; TTL is never shortened to fit capacity.
+        while (_seen.Count > _capacity && _insertion.TryDequeue(out var oldest))
+        {
+            if (_seen.TryGetValue(oldest.Key, out var current) && current.Sequence == oldest.Sequence)
+                _seen.Remove(oldest.Key);
+        }
     }
 }

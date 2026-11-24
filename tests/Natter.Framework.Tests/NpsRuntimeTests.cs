@@ -62,7 +62,7 @@ public sealed class NpsRuntimeTests
         var plugin = new PromptContributionPlugin();
         var manifest = Manifest(
             "natter.test.prompt",
-            permissions: [],
+            permissions: [PluginPermissions.ChatRead],
             contributions: [new PluginContribution { Type = PluginContributionTypes.PromptProvider, Id = "static" }]);
 
         var builder = NatterApplicationBuilder.Create()
@@ -100,17 +100,17 @@ public sealed class NpsRuntimeTests
         await using var host = builder.Build();
         await host.StartAsync();
         var catalog = host.Services.GetRequiredService<IContextComponentCatalog>();
-        Assert.True(catalog.TryGetMemory("natter.sample.memory#file", out var store));
+        Assert.True(catalog.TryGetMemory("natter.sample.memory.demo#file", out var store));
         Assert.NotNull(store);
         var source = Source.Create("discord", "discord", "bot");
         var conversation = new Conversation("c", ConversationKind.Direct);
         var user = new User("u", "U");
-        var item = await store!.WriteAsync(new MemoryWriteRequest(
-            source, conversation, user, MemoryScopeType.User, "preference", "sample memory"));
-        Assert.Single(await store.SearchAsync(new MemoryQuery(source, conversation, user)));
+        var item = await store!.WriteAsync(new MemoryEntryWriteRequest(
+            source, conversation, user, MemoryType.Preference, "sample memory", Scope: MemoryScopeType.User));
+        Assert.Single(await store.SearchAsync(new MemoryEntryQuery(source, conversation, user)));
 
         await host.StopAsync();
-        Assert.False(catalog.TryGetMemory("natter.sample.memory#file", out _));
+        Assert.False(catalog.TryGetMemory("natter.sample.memory.demo#file", out _));
         _ = item;
     }
 

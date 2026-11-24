@@ -14,7 +14,7 @@
   <ItemGroup>
     <ProjectReference Include="../Natter.Abstractions/Natter.Abstractions.csproj" />
     <ProjectReference Include="../Natter.Chat/Natter.Chat.csproj" />
-    <ProjectReference Include="../Natter.Application/Natter.Application.csproj" />
+    <ProjectReference Include="../Natter.Contracts/Natter.Contracts.csproj" />
     <ProjectReference Include="../Natter.Cli.Abstractions/Natter.Cli.Abstractions.csproj" />
   </ItemGroup>
 

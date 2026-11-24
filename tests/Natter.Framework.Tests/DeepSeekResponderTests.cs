@@ -112,24 +112,44 @@ public sealed class AiChatResponderTests
         Assert.Single(chat.Calls);
     }
 
-    [Fact]
+    [Fact(Timeout = 20_000)]
     public async Task Same_conversation_is_serialized_by_the_gate()
     {
-        var (responder, chat, source, clock) = CreateResponder();
-        chat.AsyncResponseFactory = async _ =>
+        // S2-F3: "MaxActive == 1" alone passes when a request is dropped or deadlocked. Hold the
+        // first model call on a controllable gate and assert: the second request cannot enter while
+        // the gate is closed, both requests are processed exactly once, and the order matches the
+        // arrival order. No fixed Task.Delay participates in the assertion.
+        var (responder, chat, source, _) = CreateResponder();
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var order = new System.Collections.Concurrent.ConcurrentQueue<string>();
+
+        chat.AsyncResponseFactory = async messages =>
         {
-            await Task.Delay(50);
-            return new ChatResponse(new ChatMessage(ChatRole.Assistant, "answer"));
+            var userText = messages.LastOrDefault(message => message.Role == ChatRole.User)?.Text ?? string.Empty;
+            order.Enqueue(userText);
+            entered.TrySetResult();
+            await gate.Task.ConfigureAwait(false);
+            return new ChatResponse(new ChatMessage(ChatRole.Assistant, "answer-" + userText));
         };
 
         var conversation = ChatTestData.Conversation("dm", ConversationKind.Direct);
         var first = ChatTestData.Message(source, id: "m1", conversation: conversation, text: "one");
         var second = ChatTestData.Message(source, id: "m2", conversation: conversation, text: "two");
 
-        await Task.WhenAll(
-            responder.RespondAsync(ChatTestData.CreatedEvent(source, first, "evt:1")).AsTask(),
-            responder.RespondAsync(ChatTestData.CreatedEvent(source, second, "evt:2")).AsTask());
+        var firstTask = responder.RespondAsync(ChatTestData.CreatedEvent(source, first, "evt:1")).AsTask();
+        var secondTask = responder.RespondAsync(ChatTestData.CreatedEvent(source, second, "evt:2")).AsTask();
 
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        // While the gate is closed the second request must not have reached the model at all.
+        Assert.Single(chat.Calls);
+
+        gate.SetResult();
+        await Task.WhenAll(firstTask, secondTask).WaitAsync(TimeSpan.FromSeconds(10));
+
+        // Exactly once per request (no drops, no duplicates) and arrival order preserved.
+        Assert.Equal(2, chat.Calls.Count);
+        Assert.Equal(["one", "two"], order.ToArray());
         Assert.Equal(1, chat.MaxActive);
     }
 
@@ -160,7 +180,7 @@ public sealed class AiChatResponderTests
     }
 
     [Fact]
-    public async Task Timeout_produces_a_fallback_and_auth_error_does_not_reply()
+    public async Task Timeout_produces_a_fallback_and_auth_error_is_surfaced_with_a_code()
     {
         var (responder, _, source, _) = CreateResponder();
         var conversation = ChatTestData.Conversation("dm", ConversationKind.Direct);
@@ -182,11 +202,13 @@ public sealed class AiChatResponderTests
             ResponseFactory = _ => throw new DeepSeekException(DeepSeekErrorKind.Authentication, "denied"),
         };
         var authResponder = Build(authFake, maxHistoryMessages: 20);
-        var authCommand = await authResponder.RespondAsync(ChatTestData.CreatedEvent(
+        var authCommand = Assert.IsType<MessageSendCommand>(await authResponder.RespondAsync(ChatTestData.CreatedEvent(
             source,
             ChatTestData.Message(source, id: "m2", conversation: conversation, text: "two"),
-            "evt:auth"));
-        Assert.Null(authCommand);
+            "evt:auth")));
+        Assert.Contains("ai.authentication", authCommand.Payload.Content.Text, StringComparison.Ordinal);
+        Assert.Equal(1, authResponder.FailureCount);
+        Assert.Equal("ai.authentication", authResponder.LastFailureCode);
     }
 
     [Fact]
@@ -212,7 +234,137 @@ public sealed class AiChatResponderTests
         };
         var fallback = await Build(alwaysClipped, 20).RespondAsync(
             ChatTestData.CreatedEvent(source, ChatTestData.Message(source, id: "m-clip2"), "evt:clip2"));
-        Assert.Equal("AI is temporarily unavailable.", Assert.IsType<MessageSendCommand>(fallback).Payload.Content.Text);
+        Assert.StartsWith("The answer was too long", Assert.IsType<MessageSendCommand>(fallback).Payload.Content.Text);
+    }
+
+    [Theory]
+    [InlineData("<response>hello</response>", "hello")]
+    [InlineData("  <response>\n hello \n</response>  ", "hello")]
+    [InlineData("<RESPONSE>Hello</Response>", "Hello")]
+    [InlineData("<response><response>hello</response></response>", "hello")]
+    [InlineData("<response>我可以帮你什么？ </response>", "我可以帮你什么？")]
+    [InlineData("<response>hello", "hello")]
+    [InlineData("hello</response>", "hello")]
+    [InlineData("plain answer", "plain answer")]
+    [InlineData("before <response>inside</response> after", "before <response>inside</response> after")]
+    public async Task Provider_response_wrapper_is_stripped_from_the_reply_boundaries(
+        string providerText,
+        string expected)
+    {
+        var chat = new FakeChatClient
+        {
+            ResponseFactory = _ => new ChatResponse(new ChatMessage(ChatRole.Assistant, providerText)),
+        };
+        var responder = Build(chat, maxHistoryMessages: 20);
+        var source = ChatTestData.Source();
+
+        var command = Assert.IsType<MessageSendCommand>(await responder.RespondAsync(ChatTestData.CreatedEvent(
+            source,
+            ChatTestData.Message(
+                source,
+                id: "m-wrap",
+                conversation: ChatTestData.Conversation("dm", ConversationKind.Direct),
+                text: "hi"),
+            "evt:wrap")));
+
+        Assert.Equal(expected, command.Payload.Content.Text);
+    }
+
+    [Fact]
+    public async Task Markdown_and_code_blocks_keep_response_tags_in_the_body()
+    {
+        const string body = "Use it like this:\n\n```html\n<response>example</response>\n```\n\nDone.";
+        var chat = new FakeChatClient
+        {
+            ResponseFactory = _ => new ChatResponse(new ChatMessage(ChatRole.Assistant, body)),
+        };
+        var responder = Build(chat, maxHistoryMessages: 20);
+        var source = ChatTestData.Source();
+
+        var command = Assert.IsType<MessageSendCommand>(await responder.RespondAsync(ChatTestData.CreatedEvent(
+            source,
+            ChatTestData.Message(source, id: "m-code", text: "format it"),
+            "evt:code")));
+
+        Assert.Equal(body, command.Payload.Content.Text);
+    }
+
+    [Fact]
+    public async Task Code_fence_at_the_start_is_not_treated_as_a_wrapper()
+    {
+        const string body = "```html\n<response>x</response>\n```\nplain text";
+        var chat = new FakeChatClient
+        {
+            ResponseFactory = _ => new ChatResponse(new ChatMessage(ChatRole.Assistant, body)),
+        };
+        var responder = Build(chat, maxHistoryMessages: 20);
+        var source = ChatTestData.Source();
+
+        var command = Assert.IsType<MessageSendCommand>(await responder.RespondAsync(ChatTestData.CreatedEvent(
+            source,
+            ChatTestData.Message(source, id: "m-fence", text: "show sample"),
+            "evt:fence")));
+
+        Assert.Equal(body, command.Payload.Content.Text);
+    }
+
+    [Fact]
+    public async Task Tag_only_output_falls_back_to_the_empty_response_text()
+    {
+        var chat = new FakeChatClient
+        {
+            ResponseFactory = _ => new ChatResponse(new ChatMessage(ChatRole.Assistant, "<response>   </response>")),
+        };
+        var responder = Build(chat, maxHistoryMessages: 20);
+        var source = ChatTestData.Source();
+
+        var command = Assert.IsType<MessageSendCommand>(await responder.RespondAsync(ChatTestData.CreatedEvent(
+            source,
+            ChatTestData.Message(source, id: "m-empty", text: "hi"),
+            "evt:empty")));
+
+        Assert.Equal("I could not produce a response.", command.Payload.Content.Text);
+    }
+
+    [Fact]
+    public async Task Cleaned_reply_is_what_gets_stored_in_history()
+    {
+        var chat = new FakeChatClient
+        {
+            ResponseFactory = _ => new ChatResponse(new ChatMessage(ChatRole.Assistant, "<response>clean</response>")),
+        };
+        var responder = Build(chat, maxHistoryMessages: 20);
+        var source = ChatTestData.Source();
+        var conversation = ChatTestData.Conversation("dm", ConversationKind.Direct);
+
+        await responder.RespondAsync(ChatTestData.CreatedEvent(
+            source, ChatTestData.Message(source, id: "m-h1", conversation: conversation, text: "one"), "evt:h1"));
+        await responder.RespondAsync(ChatTestData.CreatedEvent(
+            source, ChatTestData.Message(source, id: "m-h2", conversation: conversation, text: "two"), "evt:h2"));
+
+        var secondCall = chat.Calls[^1];
+        Assert.Equal("clean", secondCall[2].Text);
+        Assert.Equal("two", secondCall[^1].Text);
+    }
+
+    [Fact]
+    public async Task Clipped_detection_still_works_when_the_output_is_wrapped()
+    {
+        var calls = 0;
+        var chat = new FakeChatClient
+        {
+            AsyncResponseFactory = _ => Task.FromResult(++calls == 1
+                ? new ChatResponse(new ChatMessage(ChatRole.Assistant, "<response><response clipped></response>"))
+                : new ChatResponse(new ChatMessage(ChatRole.Assistant, "<response>complete answer</response>"))),
+        };
+        var responder = Build(chat, maxHistoryMessages: 20);
+        var source = ChatTestData.Source();
+
+        var command = Assert.IsType<MessageSendCommand>(await responder.RespondAsync(ChatTestData.CreatedEvent(
+            source, ChatTestData.Message(source, id: "m-clip-wrap", text: "hi"), "evt:clip-wrap")));
+
+        Assert.Equal("complete answer", command.Payload.Content.Text);
+        Assert.Equal(2, calls);
     }
 
     private static (AiChatResponder Responder, FakeChatClient Chat, Source Source, TestClock Clock) CreateResponder(

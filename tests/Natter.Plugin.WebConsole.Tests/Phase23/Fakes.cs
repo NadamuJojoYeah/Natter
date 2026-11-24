@@ -80,7 +80,7 @@ internal sealed class FakeAdminConfigStore : IAdminConfigStore
             return ValueTask.FromResult(AdminConfigReadResult.Failed(code, message));
 
         if (normalized.StartsWith("plugin:", StringComparison.Ordinal)
-            && !string.Equals(normalized, "plugin:natter.plugin.webconsole", StringComparison.Ordinal))
+            && !string.Equals(normalized, "plugin:natter.tool.admin.webconsole", StringComparison.Ordinal))
         {
             return ValueTask.FromResult(AdminConfigReadResult.Failed(
                 AdminCodes.ConfigPluginUnknown,

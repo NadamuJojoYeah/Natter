@@ -21,6 +21,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- S2-F4: the console binds real loopback ports; serialized collections remove the port race. -->
+    <None Update="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="../../plugins/Natter.Plugin.WebConsole/Natter.Plugin.WebConsole.csproj" />
   </ItemGroup>
 

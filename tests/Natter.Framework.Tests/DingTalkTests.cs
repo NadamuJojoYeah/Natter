@@ -157,7 +157,7 @@ public sealed class DingTalkTests
         File.WriteAllText(
             Path.Combine(sparkDir, "config.schema.json"),
             ReadEmbedded(typeof(SparkPlugin).Assembly, "Natter.Feature.Ai.Spark.config.schema.json"));
-        File.WriteAllText(Path.Combine(configDir, "natter.transport.dingtalk.json"), """
+        File.WriteAllText(Path.Combine(configDir, "natter.transport.messaging.dingtalk.json"), """
             {
               "clientId": "dingtalk-client",
               "clientSecret": "${secret:DINGTALK_CLIENT_SECRET}",
@@ -203,14 +203,14 @@ public sealed class DingTalkTests
         var upstream = Assert.Single(host.Services.GetRequiredService<IChatUpstreamRegistry>().Upstreams);
         Assert.Equal("dingtalk:dingtalk:bot-dt", upstream.Source.Key);
 
-        var hostMemory = host.Services.GetRequiredService<Natter.Application.Chat.IMemoryStore>();
-        await hostMemory.WriteAsync(new Natter.Application.Chat.MemoryWriteRequest(
+        var hostMemory = host.Services.GetRequiredService<Natter.Application.Chat.IMemoryEntryStore>();
+        await hostMemory.WriteAsync(new Natter.Application.Chat.MemoryEntryWriteRequest(
             Source.Create("dingtalk", "dingtalk", "bot-dt"),
             new Conversation("cid-cross", ConversationKind.Group, GuildId: "cid-cross"),
             new User("user-1", "User"),
-            Natter.Application.Chat.MemoryScopeType.Conversation,
-            "preference",
-            "prefers oolong tea"));
+            Natter.Application.Chat.MemoryType.Preference,
+            "prefers oolong tea",
+            Natter.Application.Chat.MemoryScopeType.Conversation));
 
         dingTalk.Emit(Message("m-cross", "cid-cross", "hello", isAtList: false, atUsers: []));
         var reply = await WaitForAsync(() => dingTalk.Replies.Count > 0 ? dingTalk.Replies : null);

@@ -195,11 +195,7 @@ public sealed class DeepSeekChatClient : IChatClient
         var payload = new Dictionary<string, object?>(StringComparer.Ordinal)
         {
             ["model"] = model,
-            ["messages"] = messages.Select(message => new Dictionary<string, object?>
-            {
-                ["role"] = ToRole(message.Role),
-                ["content"] = message.Text ?? string.Empty,
-            }).ToArray(),
+            ["messages"] = messages.Select(MapMessage).ToArray(),
             ["stream"] = false,
             ["thinking"] = new Dictionary<string, object?>
             {
@@ -217,8 +213,21 @@ public sealed class DeepSeekChatClient : IChatClient
             payload["reasoning_effort"] = _options.ReasoningEffort;
         }
 
+        // P5.2c: native tool calling. Declarations come from Microsoft.Extensions.AI
+        // AIFunctionDeclaration (schema sourced from ToolMetadata), results travel back as
+        // role=tool/tool_call_id messages (see MapMessage).
         if (options?.Tools is { Count: > 0 })
-            throw new NotSupportedException("DeepSeek tools are not enabled in this Natter version.");
+        {
+            var tools = options.Tools
+                .Select(ToToolPayload)
+                .Where(tool => tool is not null)
+                .ToArray();
+            if (tools.Length > 0)
+            {
+                payload["tools"] = tools;
+                payload["tool_choice"] = ToToolChoice(options.ToolMode);
+            }
+        }
 
         return payload;
     }
@@ -249,7 +258,22 @@ public sealed class DeepSeekChatClient : IChatClient
             : "stop";
 
         var usage = ParseUsage(root);
-        var response = new ChatResponse(new ChatMessage(ChatRole.Assistant, content))
+        var toolCalls = ParseToolCalls(message);
+        ChatMessage assistantMessage;
+        if (toolCalls.Count == 0)
+        {
+            assistantMessage = new ChatMessage(ChatRole.Assistant, content);
+        }
+        else
+        {
+            var contents = new List<AIContent>();
+            if (!string.IsNullOrEmpty(content))
+                contents.Add(new TextContent(content));
+            contents.AddRange(toolCalls);
+            assistantMessage = new ChatMessage(ChatRole.Assistant, contents);
+        }
+
+        var response = new ChatResponse(assistantMessage)
         {
             ModelId = model,
             FinishReason = new ChatFinishReason(finishReason),
@@ -269,6 +293,149 @@ public sealed class DeepSeekChatClient : IChatClient
 
         return (response, usage);
     }
+
+    private static Dictionary<string, object?> MapMessage(ChatMessage message)
+    {
+        var role = ToRole(message.Role);
+        if (role == "assistant")
+        {
+            var toolCalls = (message.Contents ?? []).OfType<FunctionCallContent>().ToArray();
+            if (toolCalls.Length > 0)
+            {
+                return new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["role"] = "assistant",
+                    ["content"] = string.IsNullOrEmpty(message.Text) ? null : message.Text,
+                    ["tool_calls"] = toolCalls.Select(call => new Dictionary<string, object?>(StringComparer.Ordinal)
+                    {
+                        ["id"] = call.CallId,
+                        ["type"] = "function",
+                        ["function"] = new Dictionary<string, object?>(StringComparer.Ordinal)
+                        {
+                            ["name"] = call.Name,
+                            ["arguments"] = JsonSerializer.Serialize(call.Arguments ?? new Dictionary<string, object?>()),
+                        },
+                    }).ToArray(),
+                };
+            }
+        }
+        else if (role == "tool")
+        {
+            var result = (message.Contents ?? []).OfType<FunctionResultContent>().FirstOrDefault();
+            if (result is not null)
+            {
+                return new Dictionary<string, object?>(StringComparer.Ordinal)
+                {
+                    ["role"] = "tool",
+                    ["tool_call_id"] = result.CallId,
+                    ["content"] = result.Result?.ToString() ?? string.Empty,
+                };
+            }
+        }
+
+        return new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["role"] = role,
+            ["content"] = message.Text ?? string.Empty,
+        };
+    }
+
+    private static IReadOnlyList<FunctionCallContent> ParseToolCalls(JsonElement message)
+    {
+        if (message.ValueKind != JsonValueKind.Object
+            || !message.TryGetProperty("tool_calls", out var toolCalls)
+            || toolCalls.ValueKind != JsonValueKind.Array)
+        {
+            return [];
+        }
+
+        var calls = new List<FunctionCallContent>();
+        var index = 0;
+        foreach (var call in toolCalls.EnumerateArray())
+        {
+            index++;
+            if (call.ValueKind != JsonValueKind.Object
+                || !call.TryGetProperty("function", out var function)
+                || function.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            var name = function.TryGetProperty("name", out var nameElement)
+                       && nameElement.ValueKind == JsonValueKind.String
+                ? nameElement.GetString()
+                : null;
+            if (string.IsNullOrWhiteSpace(name))
+                continue;
+
+            var callId = call.TryGetProperty("id", out var idElement)
+                         && idElement.ValueKind == JsonValueKind.String
+                ? idElement.GetString() ?? string.Empty
+                : $"tool-call-{index}";
+
+            IDictionary<string, object?> arguments = new Dictionary<string, object?>(StringComparer.Ordinal);
+            if (function.TryGetProperty("arguments", out var argumentsElement))
+            {
+                if (argumentsElement.ValueKind == JsonValueKind.String)
+                {
+                    var raw = argumentsElement.GetString();
+                    if (!string.IsNullOrWhiteSpace(raw))
+                    {
+                        try
+                        {
+                            arguments = JsonSerializer.Deserialize<Dictionary<string, object?>>(raw)
+                                        ?? new Dictionary<string, object?>(StringComparer.Ordinal);
+                        }
+                        catch (JsonException)
+                        {
+                            // Keep the raw payload visible so schema validation fails explicitly.
+                            arguments = new Dictionary<string, object?>(StringComparer.Ordinal) { ["raw"] = raw };
+                        }
+                    }
+                }
+                else if (argumentsElement.ValueKind == JsonValueKind.Object)
+                {
+                    arguments = JsonSerializer.Deserialize<Dictionary<string, object?>>(argumentsElement.GetRawText())
+                                ?? new Dictionary<string, object?>(StringComparer.Ordinal);
+                }
+            }
+
+            calls.Add(new FunctionCallContent(callId, name, arguments));
+        }
+
+        return calls;
+    }
+
+    private static Dictionary<string, object?>? ToToolPayload(AITool tool)
+    {
+        // AIFunction derives from AIFunctionDeclaration, so one cast covers both.
+        var declaration = tool as AIFunctionDeclaration;
+        if (declaration is null)
+            return null;
+
+        return new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["type"] = "function",
+            ["function"] = new Dictionary<string, object?>(StringComparer.Ordinal)
+            {
+                ["name"] = declaration.Name,
+                ["description"] = declaration.Description,
+                ["parameters"] = declaration.JsonSchema,
+            },
+        };
+    }
+
+    private static object ToToolChoice(ChatToolMode? mode) => mode switch
+    {
+        RequiredChatToolMode { RequiredFunctionName: { Length: > 0 } name } => new Dictionary<string, object?>
+        {
+            ["type"] = "function",
+            ["function"] = new Dictionary<string, object?> { ["name"] = name },
+        },
+        RequiredChatToolMode => "required",
+        NoneChatToolMode => "none",
+        _ => "auto",
+    };
 
     private static DeepSeekUsage ParseUsage(JsonElement root)
     {

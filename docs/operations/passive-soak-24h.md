@@ -1,6 +1,7 @@
 # 24h 被动 soak：采样、审计与验收口径
 
-> **目的**：部署后无人值守跑满 24 小时，并留下可复核的证据
+> **目的**：部署后无人值守跑满 24 小时有效运行，并留下可复核的证据
+> **两种口径**：`wallclock`（连续墙钟，适合稳定供电）与 `cumulative`（累计有效运行，适合每晚断电的部署机）——见 [§3.1](#31-验收口径连续墙钟-vs-累计有效运行)
 > **工具**：`scripts/soak-sample.sh`（采样）、`scripts/soak-report.py`（审计）、`scripts/ops-health-alert.sh`（告警）
 > **背景**：P4.5 收口要求「24h 采样完整」，此前两轮都因机器休眠/实例重启没达成
 
@@ -26,25 +27,48 @@
 sudo systemctl list-timers natter-soak.timer
 sudo systemctl status natter-soak.timer
 
-# 输出：/var/log/natter/soak-YYYY-MM-DD.jsonl，每 5 分钟一行
+# 输出：/var/log/natter/soak-YYYY-MM-DD.jsonl，每 2 分钟一行
 sudo -u natter tail -f /var/log/natter/soak-$(date +%F).jsonl
 ```
 
 - 依赖 `jq`（合并采样时间戳）；
-- 服务重启/机器重启都不会丢采样：`OnBootSec=2min`、`OnUnitActiveSec=5min`；
+- 服务重启/机器重启都不会丢采样：`OnBootSec=2min`、`OnUnitActiveSec=2min`；
 - `Persistent=false`：停机期间不补采，缺口如实出现在审计里。
 
 ### 2.2 长驻进程（临时部署 / 无 systemd）
 
 ```bash
-# 300s 一次，跑满 24h，写到指定文件
-./scripts/soak-sample.sh -i 300 -d 86400 -o /var/log/natter/soak-$(date +%F).jsonl
+# 120s 一次，跑满 24h，写到指定文件
+./scripts/soak-sample.sh -i 120 -d 86400 -o /var/log/natter/soak-$(date +%F).jsonl
 
 # 或让脚本按天切文件
-./scripts/soak-sample.sh -i 300 -d 86400 --out-dir /var/log/natter
+./scripts/soak-sample.sh -i 120 -d 86400 --out-dir /var/log/natter
 ```
 
-### 2.3 验证采样器本身可用（60 秒）
+### 2.3 采样行里新增的两个 best-effort 字段
+
+`soak-sample.sh` 现在每行额外尝试采集两项，**采不到就省略该字段，从不影响采样本身与退出码**：
+
+| 字段 | 来源 | 用途 |
+| --- | --- | --- |
+| `bootId` | `/proc/sys/kernel/random/boot_id` | cumulative 模式用它区分「断电重启」与「服务重启」 |
+| `rssBytes` | `systemctl show $NATTER_UNIT -p MemoryCurrent --value`，回落 `/proc/<MainPID>/status` 的 `VmRSS*1024` | cumulative 模式的内存漂移判定 |
+
+```bash
+# 单位名可通过环境变量覆盖（默认 natter.service）
+NATTER_UNIT=natter.service ./scripts/soak-sample.sh --once --out-dir /var/log/natter
+
+# 一行样例（成功时）
+# {"sampledAt":"...","source":"loopback","status":"healthy",...,
+#  "bootId":"e54cc627-...","rssBytes":102830080}
+#
+# 不可达时仍然写一行，只带 bootId：
+# {"sampledAt":"...","source":"loopback","error":"unreachable","httpCode":"000","bootId":"e54cc627-..."}
+```
+
+> `rssBytes` 的语义是「采集时刻进程 RSS」。它是判趋势用的，不是精确计量；缺失只会让漂移分项变成 `insufficient-data`。
+
+### 2.4 验证采样器本身可用（60 秒）
 
 ```bash
 ./scripts/soak-sample.sh -i 15 -d 45 -o /tmp/soak-smoke.jsonl
@@ -56,33 +80,205 @@ python3 scripts/soak-report.py /tmp/soak-smoke.jsonl --interval 15 --max-gap 45
 ## 3. 审计（24h 后必须跑）
 
 ```bash
-python3 scripts/soak-report.py /var/log/natter/soak-*.jsonl --interval 300
+python3 scripts/soak-report.py /var/log/natter/soak-*.jsonl --interval 120
 ```
 
 输出包含：
 
 | 字段 | 含义 |
 | --- | --- |
-| `coveragePercent` | 实际样本 / 期望样本（按 interval 推算） |
-| `gaps` | 相邻样本间隔 > 1.5×interval 的窗口，标记是否超过容差 |
+| `coveragePercent` | **健康样本** / 期望样本。分母优先取头部声明的 `durationSeconds / intervalSeconds`（`coverageBasis=declared-header`），没有头部才回退观测跨度（`coverageBasis=observed-span`，报告里会标注） |
+| `healthySamples` / `errorSamples` / `errorPercent` | 可解析样本、不可达/解析失败样本、error 占比（超过 `--max-error-percent`（默认 5）即判失败） |
+| `unavailableWindows[]` | 连续 error 样本构成的**不可用窗口**（起止、样本数、秒数）。error 样本进入时间线并计为故障窗，不再被丢弃 |
+| `gaps` | 相邻样本间隔 > 1.5×interval 的窗口，标记是否超过 `--max-gap`；`bordersErrorSample` 标出与 error 样本相邻的缺口 |
 | `restarts` | `startedAt` 变化次数（实例重启） |
+| `statusCounts` / `disallowedStatusCounts` | 状态分布；不在 `--allow-status`（默认 `healthy`）里的状态会计入结论 |
 | `upstreams.*.reconnects` | 累计重连次数（能正确处理重启后计数归零） |
-| `upstreams.*.samplesWithDisconnectButNoReason` | **OBS-019 命中数**：有断连时间无断连原因 |
+| `upstreams.*.silentDisconnects` | **OBS-019 命中数**：有断连时间无断连原因（新旧载荷分列） |
 | `sendFailuresMax` | 发送失败峰值 |
 | `result` | PASS / FAIL + 原因列表 |
 
-### 验收口径（建议写进 P4.5 判定）
+## 3.1 验收口径：连续墙钟 vs 累计有效运行
+
+### 3.1.1 环境约束与决策
+
+部署机（本机）**每晚断电**，能维持的运行窗口只有白天清醒期。原口径要求「连续 24h 墙钟、覆盖率 ≥95%、零缺口」，在这个环境里**永远不可能通过**——不是服务不稳，是电源断了。
+
+因此把验收口径改为 **累计有效运行 24h**，可跨天、跨重启、跨断电累加。这是**有记录的口径调整**（task-24），并同时新增三项防放水的护栏（单段最短时长、缺口归因、RSS 漂移），不是把标准降低。
+
+### 3.1.2 新旧标准并列
+
+| 维度 | `wallclock`（旧口径，保留） | `cumulative`（新口径，现行验收） |
+| --- | --- | --- |
+| 时长 | 连续 24h 墙钟窗口 | **Σ 有效运行时长 ≥ 24h**，可跨天/重启/断电 |
+| 采样覆盖 | ≥ 95%，无单点缺口 > 900s | 不再要求覆盖率；每段内累积 `min(delta, 1.5×interval)` |
+| 缺口 | 任何缺口即 FAIL | **允许缺口，但必须归因**：`host-down` / `host-restart` / `suspend-or-stall`；`unknown` 才判负 |
+| 单段 | —（只有一个窗口） | **最长单段 ≥ 6h**（防止用碎片凑数） |
+| 内存 | 人工看 RSS 趋势 | **最差段 RSS 漂移 ≤ 20%**（`insufficient-data` 单列，不判负） |
+| 重启 | 0 次 | 允许；每次重启要有归因（`host-restart`/`host-down`），重启落在两次采样之间会提示核对 coredump |
+| 崩溃 | `startedAt` 变化即判负 | `startedAt` 变化视为重启；**core dump 不在样本数据里**，需 `coredumpctl list natter` 人工核对 |
+| 发送失败 | `sendFailures = 0` | 同左 |
+| 断连归因 | 新载荷无原因即 FAIL | 同左（沿用 OBS-019 逻辑；legacy 静默只统计） |
+| 适用环境 | 稳定供电、可连续跑 | **每晚断电 / 频繁重启 / 打断是常态** |
+
+### 3.1.3 为什么断电不影响要抓的风险
+
+断电打断的是**墙钟连续性**，而这些风险都发生在**清醒运行期间**、并且靠累计样本就能暴露：
+
+| 要抓的风险 | 断电是否掩盖它 | 依据 |
+| --- | --- | --- |
+| 内存泄漏 | 不会 | 漂移按**每段首末** `rssBytes` 算，取最差段；短窗口也能看到斜率 |
+| 重连风暴 | 不会 | `reconnectCount` 增量按事件统计，跨重启也不会漏 |
+| `sendFailures` | 不会 | 每行样本都带，累计统计 |
+| 进程崩溃 | 部分不会 | 崩溃导致 `startedAt` 变化 → 变成段断点并需归因；core dump 仍需人工核对 |
+| 重复投递 / 数据损坏 | 不会 | 需要 DB integrity + 消息计数，与采样窗口连续与否无关 |
+| 长时间低速泄漏（如每 8h +5%） | **会削弱** | 正是新增 RSS 漂移分项的原因：单段太短时容易看不见，所以要求单段 ≥ 6h |
+
+所以护栏是成对的：**累计时长**负责「够久」，**单段最短 + RSS 漂移**负责「够实」。
+
+### 3.1.4 标准命令
+
+```bash
+# 现行验收（多天多个文件一起算）
+python3 scripts/soak-report.py /var/log/natter/soak-*.jsonl \
+  --mode cumulative --target-hours 24 --min-segment-hours 6 \
+  --interval 120
+```
+
+可选参数（默认值即验收线）：
+
+| 参数 | 默认 | 含义 |
+| --- | --- | --- |
+| `--target-hours` | 24 | 有效运行目标 |
+| `--min-segment-hours` | 6 | 最长单段下限 |
+| `--max-unexplained-percent` | 2 | 未归因缺口时长占比上限 |
+| `--max-rss-drift-percent` | 20 | 最差段 RSS 增长上限 |
+
+### 3.1.5 示例输出（真实历史数据，缺 `bootId` 的老样本）
+
+```text
+$ python3 scripts/soak-report.py artifacts/ops/tier1-run1/var/log/natter/soak-wake-2026-11-17.jsonl \
+    --interval 300 --mode cumulative
+mode            : cumulative (effective runtime; gaps attributed, not fatal by themselves)
+effective       : 2.25h / target 24.0h   [SHORT]  (8100s)
+window          : 29 samples, 13.99h wall clock, interval 300s, tolerance 450s
+segments        : 3   longest 1.92h (required 6.0h)   restarts 2
+gaps            : 2   host-down=0 host-restart=0 suspend-or-stall=2 unknown=0
+   2026-11-17T14:58:29Z -> 2026-11-18T02:01:50Z  39800s  suspend-or-stall  (bootId missing; startedAt unchanged, ...)
+   2026-11-18T03:06:50Z -> 2026-11-18T03:52:58Z  2767s   suspend-or-stall  (bootId missing; startedAt unchanged, ...)
+unexplained     : 0.0% (allowed 2.0%), 0s of excess gap time
+worst RSS drift : insufficient-data (allowed 20%)
+error samples   : 0 (0.0%, allowed 5.0%) — never counted as uptime
+allowed status  : healthy   observed: {'healthy': 29}
+sendFailures    : max 0
+host crashes    : 0  (core dumps are outside the sample data; verify with `coredumpctl list natter`)
+  segment 0: 2026-11-17T14:13:29Z -> 2026-11-17T14:18:29Z  effective=0.08h  samples=2  rssDrift=n/a
+  segment 1: 2026-11-17T14:23:29Z -> 2026-11-17T14:38:29Z  effective=0.25h  samples=4  rssDrift=n/a
+  segment 2: 2026-11-17T14:43:29Z -> 2026-11-18T04:12:58Z  effective=1.92h  samples=23  rssDrift=n/a
+result          : FAIL
+  - effective runtime 2.25h < target 24.0h
+  - longest continuous segment 1.92h < required minimum 6.0h
+  note: RSS drift: some segments had <2 rssBytes samples and are excluded from the worst-case
+```
+
+读法：
+
+- 这份老数据没有 `bootId`/`rssBytes` → 缺口退回 `startedAt` 判定（`suspend-or-stall`，并标注 `bootId missing`），RSS 分项标 `insufficient-data`，**不抛异常**；
+- 时长自然不够（2.25h），所以 FAIL——新口径不会把老数据"洗白"；
+- `error samples` / `allowed status` 两行是 S1-10 修复后新增的判定输入，老数据里分别是 `0` 与 `healthy`；
+- `--json` 输出含 `mode / effectiveSeconds / effectiveHours / segments[] / gapAttribution / unexplainedPercent / worstRssDriftPercent / verdictReasons[]`，另含 `errorSamples / errorPercent / unavailableWindows / statusCounts`，可直接进验收报告。
+
+### 3.1.6 缺口归因规则（只看样本自身，不依赖 journal）
+
+| 两端的证据 | 归因 | 含义 |
+| --- | --- | --- |
+| `bootId` 不同 | `host-down` | 机器重启/断电 |
+| `bootId` 相同、`startedAt` 不同 | `host-restart` | 服务重启（部署、崩溃拉起） |
+| `bootId`、`startedAt` 都相同，`delta > 1.5×interval` | `suspend-or-stall` | 机器休眠或采样器卡住 |
+| 缺 `bootId`（老样本） | 退回 `startedAt` 判定，标 `bootIdMissing` | 无法区分断电与服务重启 |
+| 两端都缺 `bootId` 且无 `startedAt` | `unknown` | 计入未解释占比 |
+
+### 3.1.7 何时仍用 wallclock
+
+- 目标机有稳定供电（服务器/机房/带 UPS），能连续跑满 24h；
+- 想验证「一次不间断的长跑」而不是「累计够久」；
+- CI 与日常巡检（`deploy-verify.yml` 的自检）继续用默认 `--mode wallclock`，行为与退出码不变。
+
+```bash
+# 稳定供电环境的严格口径
+python3 scripts/soak-report.py /var/log/natter/soak-*.jsonl --interval 120   # 默认 wallclock
+```
+
+---
+
+### 3.2 验收口径 · `--mode wallclock`（连续墙钟；适用于稳定供电环境）
 
 | 项 | 通过标准 |
 | --- | --- |
-| 采样覆盖 | ≥ 95%，且无单点缺口 > 900s |
-| 状态 | 全程 `healthy`（Tier 1-only 部署允许 `degraded`，但必须在记录中说明原因） |
+| 采样覆盖 | ≥ 95%，**分母按头部声明**（`durationSeconds/intervalSeconds`）；且无单点缺口 > `--max-gap`（默认 360s） |
+| error 样本 | `errorPercent ≤ --max-error-percent`（默认 5%）；不可达/解析失败样本**不计入覆盖**，连续 error 段记为不可用窗口 |
+| 状态 | 必须都在 `--allow-status`（默认 `healthy`）；Tier 1-only 部署若确有 `degraded`，需显式传 `--allow-status healthy,degraded` 并在记录中写明原因 |
 | 实例重启 | 0 次（计划内重启需在窗口外，或重开计时） |
 | `sendFailures` | 全程 0 |
-| Discord 断连 | 允许自动重连，但每次都要有归因（`lastError` 或日志行）；`silentDisconnects` 单独统计 |
+| Discord 断连 | 允许自动重连，但每次都要有归因（`lastDisconnectError/Code` 或日志行）；`silentDisconnects` 单独统计 |
 | Tier 1 provider | `available=true` 全程 |
 
-> `--interval` 必须与实际采样间隔一致，否则覆盖率会被算错。默认 300s，与 `natter-soak.timer` 一致。
+> `--interval` 必须与实际采样间隔一致，否则覆盖率会被算错。默认 120s，与 `natter-soak.timer` 的 `OnUnitActiveSec=2min` 一致。
+
+---
+
+### 3.3 error 样本与 status 的判定（两种模式共有）
+
+> 这一节对应审查报告 **S1-10**：旧实现有两条"假 PASS"路径 —— `error` 样本被 `continue` 跳过、覆盖率分母用"观测跨度"。
+
+| 规则 | 修复前（假 PASS 来源） | 现在 |
+| --- | --- | --- |
+| `error` 样本 | 直接丢弃，不进时间线 | 进入时间线；连续 error 段生成 `unavailableWindows[]`，计入原因，且**永不计为 uptime** |
+| 覆盖率分母 | 观测跨度 `last-first`，主机死 23h 只剩 2 个样本也能算 100% | 头部声明的 `durationSeconds/intervalSeconds`；无头部才回退观测跨度并标 `coverageBasis=observed-span` |
+| `errorSamples` | 只打印，不参与判定 | 计入 `errorPercent`，超 `--max-error-percent` 直接判失败 |
+| `status != healthy` | 只统计，不影响结论 | 不在 `--allow-status` 内即计入原因；`degraded` 需显式声明才放行 |
+| cumulative 模式 | 同上（error 被丢弃） | 分段只用健康样本（error 不贡献有效时长）；error 段在 `gapAttribution` 里记为 `unreachable`，不是 `unknown` |
+
+参数：
+
+```bash
+--max-error-percent 5          # 允许的 error 样本占比
+--allow-status healthy         # 允许的 status 列表，逗号分隔
+```
+
+命令示例：
+
+```bash
+# 严格（默认）
+python3 scripts/soak-report.py /var/log/natter/soak-*.jsonl --interval 120
+
+# Tier 1-only 部署：明确允许 degraded，并写明原因
+python3 scripts/soak-report.py /var/log/natter/soak-*.jsonl --interval 120 \
+  --allow-status healthy,degraded
+
+# 累计口径同样适用
+python3 scripts/soak-report.py /var/log/natter/soak-*.jsonl --interval 120 --mode cumulative
+```
+
+自检（含 S1-10 三条固定夹具）：
+
+```bash
+python3 scripts/soak-report.py --self-test
+# ok s1-10 dead-host: coverage uses the declared header
+# ok s1-10 dead-host: error samples counted, not dropped
+# ok s1-10 dead-host: run fails instead of a fake PASS
+# ok s1-10 dead-host: outage window is reported as a gap
+# ok s1-10 status: non-allowed status fails the run / passes once allowed
+# ok s1-10 error share: above the limit is reported / below a raised limit becomes a note
+# ok s1-10 cumulative: error samples are not uptime / unreachable gaps attributed / share fails
+# self-test passed (35 assertions; wallclock + cumulative + S1-10 fixtures)
+```
+
+真实历史数据的前后对比（同一份 `soak-once`）：
+
+| | 修复前 | 修复后 |
+| --- | --- | --- |
+| `soak-once`（1 个样本，头部声明 24h） | `expected=1` → coverage **100%** → **PASS（假绿）** | `expected=289`（声明口径）→ coverage **0.3%** → **FAIL** |
 
 ---
 
@@ -113,6 +309,15 @@ dingtalk: lastError="The remote party closed the WebSocket connection without co
 result: FAIL（覆盖 17.3% + 两个超容差缺口 + 2 次重启）
 ```
 
+按累计口径复核同一份数据（`--mode cumulative`）：
+
+```text
+effective 2.25h / target 24h | segments 3, longest 1.92h | gaps 2 → suspend-or-stall ×2
+worst RSS drift: insufficient-data | verdict: FAIL (effective runtime + longest segment)
+```
+
+即：**在两种口径下这份数据都不通过**，且新口径能自动指出"有效 2.25h、最长段 1.92h、两个缺口都是休眠/卡顿（缺 bootId 无法进一步区分）"。老样本缺 `bootId`/`rssBytes`，工具按设计降级而不是报错。
+
 **结论：24h 被动 soak 至今没有完整达成。** 原因清楚且可修复：
 
 1. 机器休眠直接制造 11 小时缺口（不是服务问题）；
@@ -123,7 +328,9 @@ result: FAIL（覆盖 17.3% + 两个超容差缺口 + 2 次重启）
 
 ---
 
-## 5. 补齐 24h 的操作单（在目标机器上执行）
+## 5. 补齐 24h 的操作单（连续墙钟做法；稳定供电时使用）
+
+> 如果部署机每晚断电（本机就是），先看 [§3.1](#31-验收口径连续墙钟-vs-累计有效运行)：那里是**现行验收口径**（累计有效运行），不需要 mask 睡眠也不需要连续跑满。下面的操作单只适用于能连续供电的机器。
 
 ```bash
 # 0) 前置：服务以 systemd 运行，jq 已安装
@@ -140,7 +347,7 @@ systemctl list-timers natter-soak.timer --no-pager
 sudo systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target
 
 # 4) 24h 后审计
-python3 /opt/natter/scripts/soak-report.py /var/log/natter/soak-*.jsonl --interval 300 | tee /tmp/soak-report.txt
+python3 /opt/natter/scripts/soak-report.py /var/log/natter/soak-*.jsonl --interval 120 | tee /tmp/soak-report.txt
 ```
 
 > 若机器必须睡眠，先在窗口内把 sleep 目标 mask 掉，或直接接受缺口并在记录里声明（不要伪造覆盖率）。

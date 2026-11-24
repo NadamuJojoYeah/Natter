@@ -91,12 +91,13 @@ public sealed class PluginPackageValidator
         ValidateDependencies(manifest, installedPlugins ?? [], issues);
 
         string? signerKeyId = null;
+        var warnings = new List<PluginPackageIssue>();
         var hashResult = ValidateHashes(extractRoot, manifest, issues);
         if (hashResult is not null)
-            ValidateSignature(extractRoot, manifest, hashResult.CanonicalHashText, issues, out signerKeyId);
+            ValidateSignature(extractRoot, manifest, hashResult, issues, warnings, out signerKeyId);
 
         if (issues.Count > 0)
-            return new PluginPackageValidationResult(false, null, issues);
+            return new PluginPackageValidationResult(false, null, issues, warnings);
 
         var files = Directory.EnumerateFiles(extractRoot, "*", SearchOption.AllDirectories)
             .Select(file => Path.GetRelativePath(extractRoot, file).Replace('\\', '/'))
@@ -115,7 +116,8 @@ public sealed class PluginPackageValidator
                 signerKeyId,
                 files,
                 manifest.Version),
-            []);
+            [],
+            warnings);
     }
 
     private PluginPackageValidationResult Invalid(PluginPackageIssue issue)
@@ -194,12 +196,22 @@ public sealed class PluginPackageValidator
         }
     }
 
-    private static async Task ExtractAsync(
+    /// <summary>
+    /// Extracts while counting the bytes actually written (S2-C1). The central directory only
+    /// declares sizes; a crafted archive can lie about them, so the limits are enforced against the
+    /// real stream and extraction aborts immediately instead of filling the private directory.
+    /// </summary>
+    private async Task ExtractAsync(
         ZipArchive archive,
         string extractRoot,
         List<PluginPackageIssue> issues,
         CancellationToken cancellationToken)
     {
+        long writtenTotal = 0;
+        long compressedTotal = 0;
+        var filesWritten = 0;
+        var buffer = new byte[8192];
+
         foreach (var entry in archive.Entries)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -222,13 +234,60 @@ public sealed class PluginPackageValidator
                 continue;
             }
 
+            filesWritten++;
+            if (filesWritten > _options.MaxEntries)
+            {
+                issues.Add(new PluginPackageIssue(
+                    "too-many-entries",
+                    $"Package expands to more than {_options.MaxEntries} files."));
+                return;
+            }
+
             var directory = Path.GetDirectoryName(destination);
             if (!string.IsNullOrEmpty(directory))
                 Directory.CreateDirectory(directory);
 
+            long writtenForEntry = 0;
+
             await using var input = entry.Open();
             await using var output = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None);
-            await input.CopyToAsync(output, cancellationToken).ConfigureAwait(false);
+
+            int read;
+            while ((read = await input.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) > 0)
+            {
+                writtenForEntry += read;
+                writtenTotal += read;
+
+                // Compressed bytes are counted as data is produced, not as declared.
+                if (writtenForEntry > _options.MaxEntryUncompressedBytes)
+                {
+                    issues.Add(new PluginPackageIssue(
+                        "entry-too-large",
+                        $"Entry '{name}' expands beyond {_options.MaxEntryUncompressedBytes} bytes.",
+                        name));
+                    return;
+                }
+
+                if (writtenTotal > _options.MaxTotalUncompressedBytes)
+                {
+                    issues.Add(new PluginPackageIssue(
+                        "package-uncompressed-too-large",
+                        $"Package expands beyond {_options.MaxTotalUncompressedBytes} bytes while extracting."));
+                    return;
+                }
+
+                compressedTotal += Math.Max(1, entry.CompressedLength);
+                if (writtenTotal > 1024 * 1024
+                    && writtenTotal > compressedTotal * _options.MaxCompressionRatio)
+                {
+                    issues.Add(new PluginPackageIssue(
+                        "compression-ratio",
+                        $"Package expansion ratio exceeds {_options.MaxCompressionRatio} while extracting."));
+                    return;
+                }
+
+                await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
+            }
         }
     }
 
@@ -245,6 +304,14 @@ public sealed class PluginPackageValidator
         if (name.StartsWith('/') || name.StartsWith("./", StringComparison.Ordinal))
         {
             error = "Entry path must be relative.";
+            return false;
+        }
+
+        // S2-C7: control characters (notably newline) would make the hash manifest and the signed
+        // canonical text ambiguous; reject them at the archive boundary.
+        if (name.Any(char.IsControl))
+        {
+            error = "Entry path contains control characters.";
             return false;
         }
 
@@ -293,7 +360,18 @@ public sealed class PluginPackageValidator
             return;
         }
 
+        // S2-C11: the entry assembly must stay inside the package directory.
         var path = Path.GetFullPath(Path.Combine(extractRoot, assembly));
+        var rootPrefix = Path.TrimEndingDirectorySeparator(Path.GetFullPath(extractRoot)) + Path.DirectorySeparatorChar;
+        if (!path.StartsWith(rootPrefix, StringComparison.Ordinal))
+        {
+            issues.Add(new PluginPackageIssue(
+                "entry-outside-package",
+                $"Entry assembly '{assembly}' resolves outside the package directory.",
+                assembly));
+            return;
+        }
+
         if (!File.Exists(path))
         {
             issues.Add(new PluginPackageIssue("entry-missing", $"Entry assembly '{assembly}' is missing.", assembly));
@@ -305,16 +383,29 @@ public sealed class PluginPackageValidator
 
     private void ValidateManagedBinary(string path, string relativePath, List<PluginPackageIssue> issues)
     {
-        if (!_options.AllowNativeLibraries)
+        if (_options.AllowNativeLibraries)
+            return;
+
+        using var stream = File.OpenRead(path);
+
+        // Only executables/binaries are interesting here; text assets (json/md/css) must not be
+        // inspected as assemblies.
+        if (ManagedAssemblyInspector.LooksLikeNativeImage(stream))
         {
-            using var stream = File.OpenRead(path);
-            if (!ManagedAssemblyInspector.IsManagedAssembly(stream))
-            {
-                issues.Add(new PluginPackageIssue(
-                    "native-library",
-                    $"File '{relativePath}' is not a managed assembly.",
-                    relativePath));
-            }
+            issues.Add(new PluginPackageIssue(
+                "native-library",
+                $"File '{relativePath}' is a native image (ELF/Mach-O/PE without CLI header).",
+                relativePath));
+            return;
+        }
+
+        if (relativePath.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)
+            && !ManagedAssemblyInspector.IsManagedAssembly(stream))
+        {
+            issues.Add(new PluginPackageIssue(
+                "native-library",
+                $"File '{relativePath}' is not a managed assembly.",
+                relativePath));
         }
     }
 
@@ -444,7 +535,7 @@ public sealed class PluginPackageValidator
             .OrderBy(file => file, StringComparer.Ordinal)
             .ToArray();
 
-        var canonical = new StringBuilder();
+        var hashed = new List<(string Path, string Hash)>(files.Length);
         var seen = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var file in files)
@@ -459,13 +550,14 @@ public sealed class PluginPackageValidator
                 continue;
             }
 
-            if (!string.Equals(expected, actual, StringComparison.Ordinal))
+            // Constant-time comparison (S2-C6); the manifest is attacker-controlled input.
+            if (!PluginPackageSignatureVerifier.HashesMatch(expected, actual))
             {
                 issues.Add(new PluginPackageIssue("hash-mismatch", $"SHA-256 mismatch for '{file}'.", file));
                 continue;
             }
 
-            canonical.Append(actual).Append("  ").Append(file).Append('\n');
+            hashed.Add((file, actual));
         }
 
         foreach (var missing in declared.Keys.Where(file => !seen.Contains(file)))
@@ -479,18 +571,26 @@ public sealed class PluginPackageValidator
 
         if (!_options.AllowNativeLibraries)
         {
-            foreach (var dll in files.Where(file => file.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)))
-                ValidateManagedBinary(Path.Combine(extractRoot, dll), dll, issues);
+            // Extension-independent binary sniffing (S2-C13): ELF / Mach-O / PE without a CLI header
+            // are rejected wherever they hide and under whatever name.
+            foreach (var file in files)
+                ValidateManagedBinary(Path.Combine(extractRoot, file), file, issues);
         }
 
-        return new HashValidation(canonical.ToString());
+        return new HashValidation(
+            PluginPackageSignatureVerifier.BuildCanonicalText(hashed),
+            PluginPackageSignatureVerifier.BuildLegacyCanonicalText(hashed));
     }
+
+    /// <summary>Hard cap for <c>package.sig</c> (S2-C8): a signature is a few hundred bytes.</summary>
+    public const int MaxSignatureBytes = 64 * 1024;
 
     private void ValidateSignature(
         string extractRoot,
         PluginManifest manifest,
-        string canonicalHashText,
+        HashValidation hashValidation,
         List<PluginPackageIssue> issues,
+        List<PluginPackageIssue> warnings,
         out string? signerKeyId)
     {
         signerKeyId = null;
@@ -509,11 +609,67 @@ public sealed class PluginPackageValidator
             return;
         }
 
-        var signature = File.ReadAllBytes(signaturePath);
+        var signatureLength = new FileInfo(signaturePath).Length;
+        if (signatureLength > MaxSignatureBytes)
+        {
+            issues.Add(new PluginPackageIssue(
+                "signature-too-large",
+                $"Signature file is {signatureLength} bytes, limit is {MaxSignatureBytes}."));
+            return;
+        }
+
+        if (signatureLength == 0)
+        {
+            issues.Add(new PluginPackageIssue("signature-invalid", "Signature file is empty."));
+            return;
+        }
+
+        var signature = new byte[signatureLength];
+        using (var stream = File.OpenRead(signaturePath))
+        {
+            var offset = 0;
+            while (offset < signature.Length)
+            {
+                var read = stream.Read(signature, offset, signature.Length - offset);
+                if (read <= 0)
+                    break;
+                offset += read;
+            }
+
+            if (offset != signature.Length)
+            {
+                issues.Add(new PluginPackageIssue("signature-invalid", "Signature file could not be read completely."));
+                return;
+            }
+        }
+
         var info = new PluginPackageInfo(manifest, extractRoot, string.Empty, null, [], manifest.Version);
 
-        if (!_signatureVerifier.TryVerify(signature, canonicalHashText, info, _options.TrustedPublicKeys, out signerKeyId))
-            issues.Add(new PluginPackageIssue("signature-invalid", "Publisher signature verification failed."));
+        if (_signatureVerifier.TryVerify(signature, hashValidation.CanonicalText, info, _options.TrustedPublicKeys, out signerKeyId))
+            return;
+
+        // Backward compatibility (S2-C7). The legacy canonical text is only reachable for packages
+        // whose file set passed the new control-character check, so it is no longer ambiguous — but
+        // it is still reported instead of being accepted silently. Strict hosts can reject it.
+        if (!string.Equals(hashValidation.LegacyCanonicalText, hashValidation.CanonicalText, StringComparison.Ordinal)
+            && _signatureVerifier.TryVerify(signature, hashValidation.LegacyCanonicalText, info, _options.TrustedPublicKeys, out signerKeyId))
+        {
+            var issue = new PluginPackageIssue(
+                "signature-legacy-format",
+                "Package is signed over the legacy canonical text; re-sign it with canonical format v2.");
+
+            if (_options.RejectLegacySignatureFormat)
+            {
+                signerKeyId = null;
+                issues.Add(issue);
+                return;
+            }
+
+            warnings.Add(issue);
+            return;
+        }
+
+        issues.Add(new PluginPackageIssue("signature-invalid", "Publisher signature verification failed."));
     }
 
     private static bool ValidateSensitiveFileName(string relativePath, List<PluginPackageIssue> issues)
@@ -537,5 +693,5 @@ public sealed class PluginPackageValidator
     private static bool IsHex(string value)
         => value.All(character => char.IsAsciiHexDigit(character));
 
-    private sealed record HashValidation(string CanonicalHashText);
+    private sealed record HashValidation(string CanonicalText, string LegacyCanonicalText);
 }

@@ -2,6 +2,8 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 
+using Natter.Application.Redaction;
+
 namespace Natter.Plugin.WebConsole;
 
 /// <summary>Sanitized view of the plugin's own configuration (design §7/§8).</summary>
@@ -43,6 +45,35 @@ public static class WebConsoleConfig
 }
 
 /// <summary>
+/// Single redaction entry point (S2-D5). When the host bridges <c>IAdminRedactor</c> its rules win, so
+/// the console and the host cannot drift apart; otherwise the local rules below are used. Both
+/// cover the same shapes: PEM private-key blocks, <c>sk-*</c>/<c>ak-*</c>/<c>Bearer</c> values and
+/// <c>key=value</c>/<c>"key": "value"</c> assignment pairs, while <c>${secret:NAME}</c> references stay
+/// readable.
+/// </summary>
+public sealed class WebConsoleRedactionPolicy
+{
+    public static WebConsoleRedactionPolicy Local { get; } = new(null);
+
+    public WebConsoleRedactionPolicy(Natter.Application.Admin.IAdminRedactor? hostRedactor)
+        => HostRedactor = hostRedactor;
+
+    public Natter.Application.Admin.IAdminRedactor? HostRedactor { get; }
+
+    /// <summary>True when the host redactor is in use (surfaced in <c>web status</c>/health).</summary>
+    public bool UsesHostRedactor => HostRedactor is not null;
+
+    public string Redact(string? value)
+        => HostRedactor?.Redact(value) ?? WebConsoleRedaction.RedactSecrets(value);
+
+    public string SanitizeText(string? value, int maxLength = 300)
+    {
+        var redacted = Redact(value);
+        return redacted.Length <= maxLength ? redacted : redacted[..maxLength] + "…";
+    }
+}
+
+/// <summary>
 /// Local redaction (gap G9: the host has no public redactor contract yet).
 /// Rules are intentionally conservative and covered by unit tests.
 /// </summary>
@@ -71,6 +102,34 @@ public static class WebConsoleRedaction
         RegexOptions.Compiled | RegexOptions.CultureInvariant,
         TimeSpan.FromSeconds(1));
 
+    /// <summary>
+    /// OBS-WC-S1-04: complete PEM private-key blocks (multi-line). Masked before any value/assignment
+    /// rule because the body lines carry no key name the pair rule could match.
+    /// </summary>
+    private static readonly Regex PemBlockPattern = new(
+        "-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\\s\\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant,
+        TimeSpan.FromSeconds(1));
+
+    /// <summary>
+    /// OBS-WC-S1-04b: <c>${secret:NAME}</c> tokens must survive redaction. Without protecting them
+    /// first, the assignment rule matches the <c>secret:</c> inside the reference and rewrites
+    /// <c>${secret:WEBCONSOLE_TOKEN}</c> to <c>${secret:[redacted]}</c>, which hides the fact that a
+    /// secret reference is configured at all.
+    /// </summary>
+    private static readonly Regex SecretReferenceTokenPattern = new(
+        @"\$\{secret:[A-Za-z0-9_.\-]+\}",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant,
+        TimeSpan.FromSeconds(1));
+
+    private const char ReferencePlaceholder = '\u0001';
+
+    /// <summary>Truncated PEM (no END marker) still must not leak the key body.</summary>
+    private static readonly Regex PemDanglingPattern = new(
+        "-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\\s\\S]*$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant,
+        TimeSpan.FromSeconds(1));
+
     public static (JsonElement Value, IReadOnlyList<string> RedactedPointers) Sanitize(JsonElement raw)
     {
         var redacted = new List<string>();
@@ -89,18 +148,19 @@ public static class WebConsoleRedaction
         return (JsonSerializer.SerializeToElement(node), redacted);
     }
 
+    /// <summary>
+    /// C-03: shares the core rules with admin/Discord. Differences that stay intentional:
+    /// <list type="bullet">
+    /// <item>marker is <c>[redacted]</c> (console UI/JSON diagnostics);</item>
+    /// <item>no URL-credential or Bot-header rules (the console does not print adapters' auth);
+    /// and <c>${secret:NAME}</c> references are preserved verbatim (S1-04b).</item>
+    /// </list>
+    /// The shared core also gives this pass the 64 KiB scan cap and 1s regex timeout it lacked.
+    /// </summary>
     public static string RedactSecrets(string? value)
-    {
-        if (string.IsNullOrEmpty(value))
-            return value ?? string.Empty;
+        => SecretRedaction.Apply(value, WebConsoleRedactionOptions);
 
-        var redacted = SensitiveValuePattern.Replace(value, "[redacted]");
-        return SensitivePairPattern.Replace(
-            redacted,
-            match => SecretReferencePattern.IsMatch(match.Groups["value"].Value)
-                ? match.Value
-                : match.Groups["prefix"].Value + "[redacted]");
-    }
+    private static readonly SecretRedactionOptions WebConsoleRedactionOptions = SecretRedactionOptions.Admin;
 
     public static string SanitizeText(string? value, int maxLength = 300)
     {

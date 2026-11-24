@@ -3,7 +3,7 @@ namespace Natter.Application.Chat;
 
 public interface IProfileMemoryStoreResolver
 {
-    IMemoryStore Resolve(Source source, Conversation conversation, User user);
+    IMemoryEntryStore Resolve(Source source, Conversation conversation, User user);
 }
 
 /// <summary>Resolves the memory store selected by the active profile; never silently falls back for explicit Tier 1 refs.</summary>
@@ -11,9 +11,9 @@ public sealed class ProfileMemoryStoreResolver(
     IRuntimeProfileStore profiles,
     IProfileResolver resolver,
     IContextComponentCatalog components,
-    IMemoryStore hostDefault) : IProfileMemoryStoreResolver
+    IMemoryEntryStore hostDefault) : IProfileMemoryStoreResolver
 {
-    public IMemoryStore Resolve(Source source, Conversation conversation, User user)
+    public IMemoryEntryStore Resolve(Source source, Conversation conversation, User user)
     {
         var profile = resolver.Resolve(source, conversation, user);
         if (profile is null)

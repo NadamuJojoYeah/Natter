@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net.Http.Headers;
 using System.Net.WebSockets;
 using System.Reactive.Linq;
@@ -21,13 +22,19 @@ public sealed class DingTalkStreamTransport : IDingTalkTransport, IDisposable
     private readonly bool _ownsHttp;
     private readonly Subject<DingTalkTransportEvent> _events = new();
     private readonly IObservable<DingTalkTransportEvent> _synchronized;
+    private static readonly TimeSpan CloseHandshakeTimeout = TimeSpan.FromSeconds(5);
     private readonly SemaphoreSlim _sendGate = new(1, 1);
+    private readonly DingTalkStreamLiveness _liveness;
+    private readonly ConcurrentDictionary<string, DateTimeOffset> _recentCallbacks = new(StringComparer.Ordinal);
+    private readonly int _dedupCapacity;
+    private readonly TimeSpan _dedupTtl;
     private CancellationTokenSource? _cts;
     private Task? _runTask;
     private ClientWebSocket? _socket;
     private readonly Lock _gate = new();
     private bool _connected;
     private bool _disposed;
+    private int _halfOpen;
 
     public DingTalkStreamTransport(DingTalkOptions options, string clientSecret, HttpClient? httpClient = null)
     {
@@ -39,6 +46,9 @@ public sealed class DingTalkStreamTransport : IDingTalkTransport, IDisposable
             : clientSecret;
         _http = httpClient ?? new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
         _ownsHttp = httpClient is null;
+        _liveness = new DingTalkStreamLiveness(options.StreamIdleTimeoutMs, options.StreamPongTimeoutMs);
+        _dedupCapacity = Math.Max(16, options.StreamCallbackDedupCapacity);
+        _dedupTtl = TimeSpan.FromMilliseconds(Math.Max(1_000, options.StreamCallbackDedupTtlMs));
         _synchronized = Subject.Synchronize(_events);
     }
 
@@ -90,9 +100,19 @@ public sealed class DingTalkStreamTransport : IDingTalkTransport, IDisposable
         DingTalkReply reply,
         CancellationToken cancellationToken = default)
     {
-        // Stream mode still returns a sessionWebhook for replies. Keep the same send path as
-        // the HTTP callback transport; the bot can later add an active API sender.
-        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+        ArgumentNullException.ThrowIfNull(reply);
+
+        // S2-A5: the sessionWebhook comes from the callback payload, so it is untrusted input.
+        // Only https on DingTalk hosts may be posted to; anything else must not produce a request.
+        if (!DingTalkSessionWebhookPolicy.TryValidate(reply.SessionWebhook, out var webhook, out var rejection))
+        {
+            return DingTalkSendResult.Failure(
+                DingTalkSessionWebhookPolicy.RejectedCode,
+                $"DingTalk sessionWebhook rejected ({rejection}).");
+        }
+
+        // S2-A2: reuse the injected/shared HttpClient (connection pool, TLS session cache, proxy)
+        // instead of constructing one per reply.
         try
         {
             var payload = JsonSerializer.Serialize(new
@@ -100,14 +120,19 @@ public sealed class DingTalkStreamTransport : IDingTalkTransport, IDisposable
                 msgtype = "text",
                 text = new { content = reply.Content },
             });
-            using var request = new HttpRequestMessage(HttpMethod.Post, reply.SessionWebhook)
+            using var request = new HttpRequestMessage(HttpMethod.Post, webhook)
             {
                 Content = new StringContent(payload, Encoding.UTF8, "application/json"),
             };
-            using var response = await http.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            using var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
             var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
-                return DingTalkSendResult.Failure("unavailable", $"DingTalk webhook returned HTTP {(int)response.StatusCode}.");
+            {
+                var failureCode = response.StatusCode == System.Net.HttpStatusCode.TooManyRequests
+                    ? "rate_limited"
+                    : "unavailable";
+                return DingTalkSendResult.Failure(failureCode, $"DingTalk webhook returned HTTP {(int)response.StatusCode}.");
+            }
 
             using var document = JsonDocument.Parse(body);
             var code = document.RootElement.TryGetProperty("errcode", out var errcode) && errcode.TryGetInt32(out var parsed)
@@ -224,6 +249,13 @@ public sealed class DingTalkStreamTransport : IDingTalkTransport, IDisposable
             _socket = socket;
             _connected = true;
         }
+
+        Volatile.Write(ref _halfOpen, 0);
+        _liveness.Reset(DateTimeOffset.UtcNow);
+
+        // S2-A6: an internal reconnect must tell the upstream, otherwise /health keeps showing
+        // connected=false after the transport already recovered.
+        _events.OnNext(new DingTalkTransportEvent { Kind = DingTalkTransportEventKind.Connected });
     }
 
     private async Task ReceiveLoopAsync(CancellationToken cancellationToken)
@@ -236,12 +268,48 @@ public sealed class DingTalkStreamTransport : IDingTalkTransport, IDisposable
 
         var buffer = new byte[8192];
         var message = new MemoryStream();
+        var window = _liveness.ReceiveWindow;
 
         while (socket.State == WebSocketState.Open && !cancellationToken.IsCancellationRequested)
         {
-            var result = await socket.ReceiveAsync(buffer, cancellationToken).ConfigureAwait(false);
+            if (Volatile.Read(ref _halfOpen) != 0)
+                return;
+
+            WebSocketReceiveResult result;
+            // S2-A4: bound every receive so an idle/half-open socket is judged instead of
+            // blocking forever behind IsConnected=true.
+            using var receiveCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            receiveCts.CancelAfter(window);
+            try
+            {
+                result = await socket.ReceiveAsync(buffer, receiveCts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                var now = DateTimeOffset.UtcNow;
+                var verdict = _liveness.Evaluate(now);
+                if (verdict == DingTalkStreamLivenessState.Unknown)
+                {
+                    window = _liveness.ReceiveWindow;
+                    continue;
+                }
+
+                var code = verdict == DingTalkStreamLivenessState.PongMissing
+                    ? "stream_pong_timeout"
+                    : "stream_idle_timeout";
+                PublishError(
+                    code,
+                    $"No inbound Stream frame within {window.TotalMilliseconds:F0}ms (verdict={verdict}); "
+                    + "the websocket is treated as half-open and will be reconnected.");
+                return;
+            }
+
             if (result.MessageType == WebSocketMessageType.Close)
                 break;
+
+            _liveness.RecordInbound(DateTimeOffset.UtcNow);
+            window = _liveness.ReceiveWindow;
+
             if (result.MessageType != WebSocketMessageType.Text)
                 continue;
 
@@ -279,24 +347,104 @@ public sealed class DingTalkStreamTransport : IDingTalkTransport, IDisposable
             var parsed = DingTalkCallbackParser.Parse(frame.Data ?? string.Empty);
             if (parsed.Ok && parsed.Message is not null)
             {
+                var dedupKey = string.IsNullOrWhiteSpace(frame.MessageId)
+                    ? parsed.Message.MsgId
+                    : frame.MessageId;
+                var duplicate = IsRecentCallback(dedupKey);
+
+                // S2-A3: acknowledge *before* dispatching. The platform retries when the ack is
+                // late, and the downstream chain (orchestrator → AI → tool loop) routinely
+                // outlives the ack deadline. An ack failure still dispatches the message so a
+                // dead socket cannot swallow it; the socket is marked half-open for reconnection.
+                await TrySendAckAsync(socket, frame.MessageId, 200, "OK", cancellationToken).ConfigureAwait(false);
+
+                if (duplicate)
+                {
+                    PublishError(
+                        "stream_callback_duplicate",
+                        $"Callback '{dedupKey}' was re-delivered by the platform; acknowledged without dispatching.");
+                    return;
+                }
+
                 _events.OnNext(new DingTalkTransportEvent
                 {
                     Kind = DingTalkTransportEventKind.Message,
                     Message = parsed.Message,
                 });
-                await SendAckAsync(socket, frame.MessageId, 200, "OK", cancellationToken).ConfigureAwait(false);
+                RememberCallback(dedupKey);
             }
             else
             {
                 PublishError("stream_callback_parse_failed", parsed.Error ?? "invalid callback payload");
-                await SendAckAsync(socket, frame.MessageId, 400, "bad request", cancellationToken).ConfigureAwait(false);
+                await TrySendAckAsync(socket, frame.MessageId, 400, "bad request", cancellationToken)
+                    .ConfigureAwait(false);
             }
             return;
         }
 
         // EVENT/SYSTEM callbacks are acknowledged but not part of this transport.
         if (!string.IsNullOrWhiteSpace(frame.MessageId))
-            await SendAckAsync(socket, frame.MessageId, 200, "OK", cancellationToken).ConfigureAwait(false);
+            await TrySendAckAsync(socket, frame.MessageId, 200, "OK", cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Sends an ack but never lets a broken socket escape as an exception: a failed write means
+    /// the peer stopped reading us (half-open), so the receive loop is asked to exit and the run
+    /// loop reconnects.
+    /// </summary>
+    private async ValueTask<bool> TrySendAckAsync(
+        ClientWebSocket socket,
+        string? messageId,
+        int code,
+        string message,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await SendAckAsync(socket, messageId, code, message, cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            Volatile.Write(ref _halfOpen, 1);
+            PublishError("stream_ack_failed", ex.Message);
+            return false;
+        }
+    }
+
+    private bool IsRecentCallback(string? key)
+        => !string.IsNullOrWhiteSpace(key)
+           && _recentCallbacks.TryGetValue(key, out var seenAt)
+           && DateTimeOffset.UtcNow - seenAt < _dedupTtl;
+
+    private void RememberCallback(string? key)
+    {
+        if (string.IsNullOrWhiteSpace(key))
+            return;
+
+        var now = DateTimeOffset.UtcNow;
+        if (_recentCallbacks.Count >= _dedupCapacity)
+        {
+            foreach (var (existing, seenAt) in _recentCallbacks)
+            {
+                if (now - seenAt >= _dedupTtl)
+                    _recentCallbacks.TryRemove(existing, out _);
+            }
+
+            while (_recentCallbacks.Count >= _dedupCapacity)
+            {
+                var oldest = _recentCallbacks.OrderBy(pair => pair.Value).FirstOrDefault();
+                if (oldest.Key is null)
+                    break;
+                _recentCallbacks.TryRemove(oldest.Key, out _);
+            }
+        }
+
+        _recentCallbacks[key] = now;
     }
 
     private async Task SendAckAsync(
@@ -315,6 +463,7 @@ public sealed class DingTalkStreamTransport : IDingTalkTransport, IDisposable
         {
             await socket.SendAsync(payload, WebSocketMessageType.Text, endOfMessage: true, cancellationToken)
                 .ConfigureAwait(false);
+            _liveness.RecordSend(DateTimeOffset.UtcNow);
         }
         finally
         {
@@ -338,8 +487,24 @@ public sealed class DingTalkStreamTransport : IDingTalkTransport, IDisposable
         try
         {
             if (socket.State is WebSocketState.Open or WebSocketState.CloseReceived)
-                await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "reconnect", cancellationToken)
-                    .ConfigureAwait(false);
+            {
+                // Bounded close handshake: a half-open peer never answers the close frame, and an
+                // unbounded CloseAsync would stall DisconnectAsync/reconnect forever.
+                try
+                {
+                    await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "reconnect", cancellationToken)
+                        .WaitAsync(CloseHandshakeTimeout, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                catch (TimeoutException)
+                {
+                    socket.Abort();
+                }
+                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                {
+                    socket.Abort();
+                }
+            }
         }
         catch
         {

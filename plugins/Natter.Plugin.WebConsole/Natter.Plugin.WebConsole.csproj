@@ -5,6 +5,7 @@
     <RootNamespace>Natter.Plugin.WebConsole</RootNamespace>
     <AssemblyName>Natter.Plugin.WebConsole</AssemblyName>
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <NpsPlugin>true</NpsPlugin>
     <IsPackable>false</IsPackable>
     <Description>Natter WebConsole plugin: loopback read-only diagnostics, config preview and restricted command console.</Description>
   </PropertyGroup>
@@ -15,6 +16,7 @@
 
   <ItemGroup>
     <ProjectReference Include="../../src/Natter.Plugin.Abstractions/Natter.Plugin.Abstractions.csproj" />
+    <ProjectReference Include="../../src/Natter.Application/Natter.Application.csproj" />
     <ProjectReference Include="../../src/Natter.Cli.Abstractions/Natter.Cli.Abstractions.csproj" />
   </ItemGroup>
 
@@ -23,7 +25,69 @@
     <None Update="plugin.json" CopyToOutputDirectory="PreserveNewest" />
     <None Update="config.schema.json" CopyToOutputDirectory="PreserveNewest" />
     <None Update="config.sample.json" CopyToOutputDirectory="PreserveNewest" />
-    <None Update="wwwroot/**" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="wwwroot/**" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
+
+
+  <!--
+    UI build (task-62). The front-end lives in ui/ and its output *is* wwwroot, which is git-ignored:
+    a plugin package without it is broken, so `dotnet publish` must build it too.
+
+      dotnet build  -p:SkipUiBuild=true    pure back-end loop (warns: the package has no UI)
+  -->
+  <ItemGroup>
+    <UiSource Include="$(MSBuildThisFileDirectory)../../ui/src/**" />
+    <UiSource Include="$(MSBuildThisFileDirectory)../../ui/package.json" />
+    <UiSource Include="$(MSBuildThisFileDirectory)../../ui/package-lock.json" />
+    <UiSource Include="$(MSBuildThisFileDirectory)../../ui/vite.config.ts" />
+    <UiSource Include="$(MSBuildThisFileDirectory)../../ui/tsconfig.json" />
+  </ItemGroup>
+
+  <Target Name="BuildWebUi" BeforeTargets="PrepareForBuild;AssignTargetPaths"
+          Condition="'$(SkipUiBuild)' != 'true'"
+          Inputs="@(UiSource)"
+          Outputs="$(MSBuildThisFileDirectory)wwwroot/index.html">
+    <PropertyGroup>
+      <UiDirectory>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../../ui/'))</UiDirectory>
+    </PropertyGroup>
+
+    <Error Condition="!Exists('$(UiDirectory)package.json')"
+           Text="UI workspace not found at '$(UiDirectory)'; the plugin needs ui/ to build its wwwroot." />
+
+    <!-- One script owns install + build + the cross-process lock (two plugins share ui/node_modules). -->
+    <Exec Command="bash &quot;$(UiDirectory)scripts/build-target.sh&quot; webconsole" WorkingDirectory="$(UiDirectory)" />
+
+  </Target>
+
+  <!--
+    wwwroot is a BUILD PRODUCT, so it must not be declared as a None/CopyToOutputDirectory item:
+    MSBuild evaluates those during project evaluation, before BuildWebUi has produced anything, and a
+    clean checkout (CI, Docker, a fresh clone) then fails with
+      MSB3030: Could not copy ... wwwroot/index.html because it was not found.
+    Copy explicitly after the build/publish instead, the same pattern CopySamplePluginsToPublish uses.
+  -->
+  <Target Name="CopyWebUiToOutput" AfterTargets="Build" Condition="'$(SkipUiBuild)' != 'true'">
+    <ItemGroup>
+      <WebUiOutputFiles Include="$(MSBuildThisFileDirectory)wwwroot/**/*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(WebUiOutputFiles)"
+          DestinationFiles="@(WebUiOutputFiles->'$(OutDir)wwwroot/%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
+
+  <Target Name="CopyWebUiToPublish" AfterTargets="Publish" Condition="'$(SkipUiBuild)' != 'true'">
+    <ItemGroup>
+      <WebUiPublishFiles Include="$(MSBuildThisFileDirectory)wwwroot/**/*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(WebUiPublishFiles)"
+          DestinationFiles="@(WebUiPublishFiles->'$(PublishDir)wwwroot/%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
+
+  <Target Name="WarnMissingWebUi" BeforeTargets="PrepareForBuild" Condition="'$(SkipUiBuild)' == 'true'">
+    <Warning Text="SkipUiBuild=true: plugin $(AssemblyName) is packaged WITHOUT a UI (wwwroot not built). Deployment gates must reject such a package; never publish it." />
+  </Target>
+
+  <Import Project="$(MSBuildThisFileDirectory)../../build/Natter.Plugin.targets" />
 
 </Project>

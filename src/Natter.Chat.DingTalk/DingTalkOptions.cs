@@ -20,6 +20,21 @@ public sealed class DingTalkOptions
 
     public int ReconnectMaxDelayMs { get; set; } = 30000;
 
+    /// <summary>
+    /// S2-A4: no inbound frame for this long means the Stream socket is half-open; the transport
+    /// closes it and reconnects instead of reporting <c>IsConnected=true</c> forever.
+    /// </summary>
+    public int StreamIdleTimeoutMs { get; set; } = 90_000;
+
+    /// <summary>S2-A4: an ack that goes unanswered for this long is treated as a half-open peer.</summary>
+    public int StreamPongTimeoutMs { get; set; } = 30_000;
+
+    /// <summary>S2-A3: bounded dedup of callback frames the platform re-delivers.</summary>
+    public int StreamCallbackDedupCapacity { get; set; } = 2048;
+
+    /// <summary>S2-A3: how long a callback id is remembered for redelivery suppression.</summary>
+    public int StreamCallbackDedupTtlMs { get; set; } = 600_000;
+
     /// <summary>Legacy HTTP callback listener; Stream mode does not use this.</summary>
     public string ListenPrefix { get; set; } = "http://127.0.0.1:5088/dingtalk/";
 

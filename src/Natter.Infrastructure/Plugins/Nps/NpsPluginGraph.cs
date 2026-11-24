@@ -267,7 +267,10 @@ internal static class NpsPluginGraph
                     new Dictionary<string, string>(StringComparer.Ordinal) { ["cycle"] = cycleText });
             }
 
-            order = [];
+            // S2-C4: only the cycle members fail. The remaining nodes form an acyclic graph and are
+            // still ordered (and loaded) instead of the whole plugin set silently going dark.
+            var acyclic = activeIds.Where(id => !cycle.Contains(id, StringComparer.Ordinal)).ToHashSet(StringComparer.Ordinal);
+            order = TopologicalOrder(acyclic, edges, out _);
 
             // Nodes depending on a cycle member are blocked too.
             propagate = true;

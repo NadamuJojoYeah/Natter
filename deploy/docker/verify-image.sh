@@ -117,7 +117,7 @@ record "image exists: $IMAGE" pass
 
 # --- static image content ------------------------------------------------------------
 docker run --rm --entrypoint sh "$IMAGE" -c 'ls -1 /app/plugins' >"$EVIDENCE/app-plugins.txt" 2>&1 || true
-for required in discord deepseek; do
+for required in natter.transport.messaging.discord natter.feature.ai.deepseek; do
   if grep -qx "$required" "$EVIDENCE/app-plugins.txt"; then
     record "image stages plugin: $required" pass
   else
@@ -125,7 +125,7 @@ for required in discord deepseek; do
   fi
 done
 docker run --rm --entrypoint sh "$IMAGE" -c 'cat /app/plugins/staging-manifest.json' >"$EVIDENCE/staging-manifest.json" 2>&1 || true
-docker run --rm --entrypoint dotnet "$IMAGE" /app/natter.dll plugins inspect /app/plugins/discord \
+docker run --rm --entrypoint dotnet "$IMAGE" /app/natter.dll plugins inspect /app/plugins/natter.transport.messaging.discord \
   >"$EVIDENCE/inspect-discord.txt" 2>&1 || true
 grep -q 'valid          : True' "$EVIDENCE/inspect-discord.txt" \
   && record "discord manifest valid in image" pass || record "discord manifest valid in image" fail

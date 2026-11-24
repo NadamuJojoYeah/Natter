@@ -15,6 +15,7 @@ public sealed class ChatCommandDispatcher : IChatCommandDispatcher
     private readonly ChatIdempotencyCache _idempotency;
     private readonly ChatOutboundPolicy _policy;
     private readonly IClock _clock;
+    private readonly ChatChunkProgress _chunkProgress;
 
     public ChatCommandDispatcher(
         IChatUpstreamRegistry upstreams,
@@ -26,6 +27,7 @@ public sealed class ChatCommandDispatcher : IChatCommandDispatcher
         _idempotency = idempotency ?? throw new ArgumentNullException(nameof(idempotency));
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
         _policy = policy ?? ChatOutboundPolicy.Default;
+        _chunkProgress = new ChatChunkProgress(clock: () => _clock.UtcNow);
     }
 
     public async ValueTask<ChatAck> ExecuteAsync(ChatCommand command, CancellationToken cancellationToken = default)
@@ -51,8 +53,24 @@ public sealed class ChatCommandDispatcher : IChatCommandDispatcher
         }
 
         var key = command.IdempotencyKey;
-        if (!string.IsNullOrWhiteSpace(key) && _idempotency.TryGet(key, out var cached) && cached is not null)
-            return cached;
+        var reserved = false;
+        if (!string.IsNullOrWhiteSpace(key))
+        {
+            // S2-A1: reserve before executing so two concurrent calls with the same key cannot
+            // both reach the adapter. A failed execution rolls the reservation back for retry.
+            switch (_idempotency.TryReserve(key, out var cached))
+            {
+                case ChatIdempotencyCache.Reservation.Cached:
+                    return cached!;
+                case ChatIdempotencyCache.Reservation.InFlight:
+                    return ChatAck.Failure(command, ChatError.Create(
+                        ChatErrorCodes.Conflict,
+                        $"A command with idempotency key '{key}' is already in flight."));
+                default:
+                    reserved = true;
+                    break;
+            }
+        }
 
         ChatAck ack;
         try
@@ -61,6 +79,8 @@ public sealed class ChatCommandDispatcher : IChatCommandDispatcher
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            if (reserved)
+                _idempotency.Rollback(key);
             throw;
         }
         catch (Exception exception)
@@ -70,8 +90,13 @@ public sealed class ChatCommandDispatcher : IChatCommandDispatcher
                 $"The upstream failed while executing '{command.Type}': {exception.Message}"));
         }
 
-        if (ack.Ok && !string.IsNullOrWhiteSpace(key))
-            _idempotency.Store(key, ack);
+        if (reserved)
+        {
+            if (ack.Ok)
+                _idempotency.Commit(key, ack);
+            else
+                _idempotency.Rollback(key);
+        }
 
         return ack;
     }
@@ -136,10 +161,15 @@ public sealed class ChatCommandDispatcher : IChatCommandDispatcher
         }
 
         var chunks = ChatTextChunker.Chunk(degraded.Payload.Content, capabilities.MaxMessageLength);
-        var messageIds = new List<string>(chunks.Count);
+        // S2-A15: resume from the first undelivered chunk on retry; the platform already accepted
+        // the earlier chunks, so replaying them would duplicate the message.
+        var progressKey = degraded.IdempotencyKey;
+        var progress = _chunkProgress.Get(progressKey);
+        var startIndex = progress is { } saved && saved.NextIndex < chunks.Count ? saved.NextIndex : 0;
+        var messageIds = progress is { } existing ? existing.MessageIds.ToList() : new List<string>(chunks.Count);
         DateTimeOffset? deliveredAt = null;
 
-        for (var index = 0; index < chunks.Count; index++)
+        for (var index = startIndex; index < chunks.Count; index++)
         {
             var chunkContent = chunks[index];
             var chunkCommand = degraded with
@@ -163,11 +193,19 @@ public sealed class ChatCommandDispatcher : IChatCommandDispatcher
             }
 
             if (chunkAck.Result?.MessageIds is { Count: > 0 } ids)
+            {
                 messageIds.AddRange(ids);
+                _chunkProgress.Record(progressKey, index + 1, ids);
+            }
+            else
+            {
+                _chunkProgress.Record(progressKey, index + 1, []);
+            }
 
             deliveredAt ??= chunkAck.Result?.DeliveredAt;
         }
 
+        _chunkProgress.Complete(progressKey);
         return ChatAck.Success(command, messageIds, deliveredAt ?? _clock.UtcNow);
     }
 

@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "id": "natter.feature.ai.embedding-openai",
+  "name": "Natter OpenAI-compatible Embedding",
+  "version": "0.1.0",
+  "kind": "feature",
+  "hostApi": ">=0.1.0 <1.0.0",
+  "entry": {
+    "assembly": "lib/Natter.Plugin.AiEmbedding.OpenAi.dll",
+    "type": "Natter.Plugin.AiEmbedding.OpenAi.OpenAiEmbeddingPlugin"
+  },
+  "description": "OpenAI-compatible /v1/embeddings provider for the Natter RAG port; DashScope compatible mode is configurable but not validated in this repository.",
+  "author": "Natter",
+  "license": "MIT",
+  "permissions": [
+    "network",
+    "secrets:OPENAI_COMPAT_API_KEY"
+  ],
+  "secrets": [
+    { "name": "OPENAI_COMPAT_API_KEY", "required": true }
+  ],
+  "configSchema": "config.schema.json",
+  "contributions": [
+    { "type": "embedding.provider", "id": "openai-compatible" }
+  ],
+  "platforms": ["linux", "windows", "macos", "android"]
+}

@@ -6,10 +6,10 @@
 # What the image contains:
 #   /app            published CLI host (dotnet natter.dll) + samples plugins (greetings, metrics)
 #   /app/plugins    Tier 1 NPS plugins staged by scripts/stage-tier1-plugins.sh
-#                     discord   natter.transport.discord
+#                     discord   natter.transport.messaging.discord
 #                     deepseek  natter.feature.ai.deepseek
 #                   Tier 2 (--build-arg TIER2=true):
-#                     dingtalk  natter.transport.dingtalk
+#                     dingtalk  natter.transport.messaging.dingtalk
 #                     spark     natter.feature.ai.spark
 #
 # The image never contains config.json or secrets: configuration is mounted at /config (read-only)
@@ -56,11 +56,11 @@ RUN chmod +x scripts/stage-tier1-plugins.sh \
  && grep -q '"mismatches": 0' /out/plugins/staging-manifest.json
 
 # 3. Fail-fast manifest check inside the build (no secrets, no network, no upstream started).
-RUN dotnet /out/natter.dll plugins inspect /out/plugins/discord \
- && dotnet /out/natter.dll plugins inspect /out/plugins/deepseek \
+RUN dotnet /out/natter.dll plugins inspect /out/plugins/natter.transport.messaging.discord \
+ && dotnet /out/natter.dll plugins inspect /out/plugins/natter.feature.ai.deepseek \
  && if [ "$TIER2" = "true" ]; then \
-      dotnet /out/natter.dll plugins inspect /out/plugins/dingtalk \
-      && dotnet /out/natter.dll plugins inspect /out/plugins/spark; \
+      dotnet /out/natter.dll plugins inspect /out/plugins/natter.transport.messaging.dingtalk \
+      && dotnet /out/natter.dll plugins inspect /out/plugins/natter.feature.ai.spark; \
     fi
 
 

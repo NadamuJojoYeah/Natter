@@ -36,7 +36,7 @@ public sealed class NpsManifestTests
         var json = """
             {
               "schemaVersion": 1,
-              "id": "natter.transport.discord",
+              "id": "natter.transport.messaging.discord",
               "name": "Discord Transport",
               "version": "0.1.0",
               "kind": "transport",
@@ -52,7 +52,7 @@ public sealed class NpsManifestTests
         var result = PluginManifestReader.Parse(json);
 
         Assert.True(result.IsValid, string.Join("; ", result.Errors.Select(error => error.Message)));
-        Assert.Equal("natter.transport.discord", result.Manifest!.Id);
+        Assert.Equal("natter.transport.messaging.discord", result.Manifest!.Id);
         Assert.Equal(PluginKind.Transport, result.Manifest.Kind);
         Assert.Equal("discord", result.Manifest.FindContribution(PluginContributionTypes.ChatUpstream, "discord")!.Id);
     }
@@ -170,4 +170,73 @@ public sealed class NpsManifestTests
         Assert.Equal("${secret:MY_TOKEN}", reference.ToString());
         Assert.False(SecretReference.TryParse("plain", out _));
     }
+
+    // ---------------------------------------------------------------- dataDirs
+    [Fact]
+    public void DataDirs_are_accepted_and_relative_paths_are_kept()
+    {
+        // Regression: `dataDirs` was added to a real manifest before the reader knew it, and the strict
+        // unknown-property whitelist then marked the plugin `manifest-invalid` — which took WebConsole
+        // and ConversationConsole offline on 2026-11-23.
+        using var plugin = ManifestDir("""
+        {
+          "schemaVersion": 1, "id": "natter.test.datadirs", "name": "D", "version": "0.1.0",
+          "kind": "tool", "hostApi": ">=0.1.0 <1.0.0",
+          "entry": { "assembly": "lib/D.dll", "type": "D.Plugin" },
+          "dataDirs": [ { "path": "audit", "purpose": "audit trail" } ]
+        }
+        """);
+
+        var result = PluginManifestReader.Read(plugin.Path);
+
+        Assert.True(result.IsValid, string.Join("; ", result.Errors.Select(e => e.Code + "@" + e.Path)));
+        var declared = Assert.Single(result.Manifest!.DataDirs!);
+        Assert.Equal("audit", declared.Path);
+    }
+
+    [Theory]
+    [InlineData("/etc")]
+    [InlineData("../escape")]
+    [InlineData("nested/../../escape")]
+    public void DataDirs_reject_absolute_and_traversal_paths(string path)
+    {
+        // dataDirs become writable by the service user at deploy time; a manifest must not be able to
+        // aim that grant outside its own package.
+        using var plugin = ManifestDir($$"""
+        {
+          "schemaVersion": 1, "id": "natter.test.datadirs", "name": "D", "version": "0.1.0",
+          "kind": "tool", "hostApi": ">=0.1.0 <1.0.0",
+          "entry": { "assembly": "lib/D.dll", "type": "D.Plugin" },
+          "dataDirs": [ { "path": "{{path}}" } ]
+        }
+        """);
+
+        var result = PluginManifestReader.Read(plugin.Path);
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, e => e.Path.StartsWith("/dataDirs/", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// Writes a manifest into a throwaway plugin directory. <see cref="PluginManifestReader.Read"/>
+    /// takes a directory, not a JSON string, so the file has to exist on disk.
+    /// </summary>
+    private static TempDir ManifestDir(string manifestJson, [System.Runtime.CompilerServices.CallerLineNumber] int line = 0)
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"natter-manifest-{line}-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "plugin.json"), manifestJson);
+        return new TempDir(dir);
+    }
+
+    private sealed class TempDir(string path) : IDisposable
+    {
+        public string Path { get; } = path;
+
+        public void Dispose()
+        {
+            try { Directory.Delete(Path, recursive: true); } catch { /* best effort */ }
+        }
+    }
+
 }

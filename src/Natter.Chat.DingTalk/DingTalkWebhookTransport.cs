@@ -88,8 +88,15 @@ public sealed class DingTalkWebhookTransport : IDingTalkTransport, IDisposable
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(reply);
-        if (string.IsNullOrWhiteSpace(reply.SessionWebhook))
-            return DingTalkSendResult.Failure("unauthorized", "DingTalk sessionWebhook is missing or expired.");
+
+        // S2-A5: sessionWebhooks come from callback payloads; only https on DingTalk hosts may be
+        // posted to (same policy as the Stream transport).
+        if (!DingTalkSessionWebhookPolicy.TryValidate(reply.SessionWebhook, out var webhook, out var rejection))
+        {
+            return DingTalkSendResult.Failure(
+                DingTalkSessionWebhookPolicy.RejectedCode,
+                $"DingTalk sessionWebhook rejected ({rejection}).");
+        }
 
         if (_sessionExpiry.TryGetValue(reply.ConversationId, out var expiry) && expiry <= DateTimeOffset.UtcNow)
             return DingTalkSendResult.Failure("not_found", "DingTalk sessionWebhook has expired.");
@@ -102,7 +109,7 @@ public sealed class DingTalkWebhookTransport : IDingTalkTransport, IDisposable
                 text = new { content = reply.Content },
             });
 
-            using var request = new HttpRequestMessage(HttpMethod.Post, reply.SessionWebhook)
+            using var request = new HttpRequestMessage(HttpMethod.Post, webhook)
             {
                 Content = new StringContent(payload, Encoding.UTF8, "application/json"),
             };

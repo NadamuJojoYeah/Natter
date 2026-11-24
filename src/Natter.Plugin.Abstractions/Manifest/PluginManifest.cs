@@ -10,6 +10,7 @@ public enum PluginKind
     Feature,
     Tool,
     Memory,
+    Sample,
 }
 
 /// <summary>NPS v1 manifest. The manifest is the single source of plugin identity and metadata.</summary>
@@ -60,6 +61,15 @@ public sealed class PluginManifest
 
     /// <summary>Legacy display labels; not permissions.</summary>
     public List<string>? Capabilities { get; init; }
+
+    /// <summary>
+    /// Subdirectories of the plugin package that the plugin writes at runtime (audit logs, caches,
+    /// plugin-local databases). Declared here because the deployment must hand exactly these
+    /// directories to the service user: code and <c>lib/</c> stay root-owned and read-only, while a
+    /// plugin that cannot write its own data degrades to Failed. Keeping the declaration next to the
+    /// plugin means adding a writing plugin no longer requires editing the deploy script.
+    /// </summary>
+    public List<PluginDataDirectory>? DataDirs { get; init; }
 
     [JsonExtensionData]
     public Dictionary<string, JsonElement>? AdditionalProperties { get; set; }
@@ -128,4 +138,14 @@ public sealed class PluginContribution
 
     [JsonExtensionData]
     public Dictionary<string, JsonElement>? AdditionalProperties { get; set; }
+}
+
+/// <summary>A plugin-owned writable directory declared in the manifest.</summary>
+public sealed class PluginDataDirectory
+{
+    /// <summary>Path relative to the plugin directory. Absolute paths and <c>..</c> are rejected.</summary>
+    public string Path { get; init; } = string.Empty;
+
+    /// <summary>Why the plugin writes here; surfaced in deployment output for review.</summary>
+    public string? Purpose { get; init; }
 }

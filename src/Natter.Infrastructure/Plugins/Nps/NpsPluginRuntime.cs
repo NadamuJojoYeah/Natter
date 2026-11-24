@@ -24,6 +24,8 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
     private readonly NpsPluginOptions _options;
     private readonly PluginCatalog _catalog;
     private readonly IPortAdapterRegistry _adapterRegistry;
+    private readonly EmbeddingProviderCatalog _embeddingCatalog = new();
+    private readonly RerankProviderCatalog _rerankCatalog = new();
     private readonly List<NpsPluginCandidate> _candidates = [];
     private readonly List<PluginDescriptor> _legacyDescriptors = [];
     private readonly Dictionary<string, PluginState> _legacyStates = new(StringComparer.Ordinal);
@@ -195,9 +197,20 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
         foreach (var candidate in _candidates)
         {
             await candidate.Lifetime.DisposeAsync().ConfigureAwait(false);
-            candidate.DisposeLoadContext();
+            if (candidate.Provider is { } provider)
+            {
+                await provider.DisposeAsync().ConfigureAwait(false);
+                candidate.Provider = null;
+                candidate.Services.Provider = null;
+            }
+
+            _portRouter?.UnregisterPlugin(candidate.Id);
+            candidate.Unload();
+            WithdrawCliCommands(candidate);
         }
 
+        _embeddingCatalog.Clear();
+        _rerankCatalog.Clear();
         _portRouter = null;
         _hostProvider = null;
     }
@@ -575,6 +588,13 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
         {
             throw;
         }
+        catch (NpsContributionBindingException ex)
+        {
+            await FailDuringActivationAsync(
+                candidate,
+                new PluginErrorDescriptor("activate", ex.Code, ex.Message),
+                cancellationToken).ConfigureAwait(false);
+        }
         catch (Exception ex)
         {
             await FailDuringActivationAsync(
@@ -635,13 +655,30 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
         services.AddSingleton(_hostProvider.GetRequiredService<Natter.Application.Chat.IContextPipeline>());
         services.AddSingleton(_hostProvider.GetRequiredService<ILoggerFactory>());
 
+        // Host fragment aggregation is a read-only host service: plugins that contribute
+        // prompt.fragment resolve it through their own DI (no service location in the composer).
+        if (_hostProvider.GetService<Natter.Application.Chat.IPromptFragmentSource>() is { } fragmentSource)
+            services.AddSingleton(fragmentSource);
+
         if (candidate.Permissions?.Granted.Contains(PluginPermissions.ChatRead) == true)
             services.AddSingleton(_hostProvider.GetRequiredService<IChatEventSource>());
+
+        // Read-only conversation projection for diagnostic consoles (docs/CONVERSATION_CONSOLE.md
+        // §2.3): gated by the same chat.read word. Without the grant the service is simply absent
+        // from the plugin provider, so the plugin keeps its "console unavailable" fallback instead
+        // of reading around the governance layer.
+        if (candidate.Permissions?.Granted.Contains(PluginPermissions.ChatRead) == true
+            && _hostProvider.GetService<Natter.Application.Chat.IConversationQuery>() is { } conversationQuery)
+        {
+            services.AddSingleton(conversationQuery);
+        }
 
         if (candidate.Permissions?.Granted.Contains(PluginPermissions.Storage) == true)
         {
             services.AddSingleton(_hostProvider.GetRequiredService<Natter.Application.Chat.IConversationStore>());
-            services.AddSingleton(_hostProvider.GetRequiredService<Natter.Application.Chat.IMemoryStore>());
+            // P6.7: plugins receive the layered store; the v1 IMemoryStore is no longer registered
+            // in the host container, so resolving it here would fail plugin activation.
+            services.AddSingleton(_hostProvider.GetRequiredService<Natter.Application.Chat.IMemoryEntryStore>());
             services.AddSingleton(_hostProvider.GetRequiredService<Natter.Application.Chat.ISummaryStore>());
         }
 
@@ -682,6 +719,16 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
 
             if (_hostProvider.GetService<IAdminLogReader>() is { } logReader)
                 services.AddSingleton(logReader);
+
+            // S2-D5: one shared redaction rule set. Without this bridge every admin plugin has to
+            // re-implement the host's redaction rules (and they drift).
+            if (_hostProvider.GetService<IAdminRedactor>() is { } redactor)
+                services.AddSingleton(redactor);
+
+            // task-65: structured task inspection so the console renders a timeline from persisted
+            // task events instead of parsing the /status text.
+            if (_hostProvider.GetService<Natter.Application.Chat.IAgentTaskInspection>() is { } taskInspection)
+                services.AddSingleton(taskInspection);
         }
 
         if (granted.Contains(PluginPermissions.AdminConfigWrite)
@@ -727,6 +774,24 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
                     break;
                 }
 
+                case PluginContributionTypes.PromptFragment:
+                {
+                    var catalog = _hostProvider!.GetRequiredService<Natter.Application.Chat.IContextComponentCatalog>();
+                    var reference = $"{candidate.Id}#{registration.Id}";
+                    var implementation = provider.GetRequiredService(registration.ImplementationType!);
+                    if (implementation is not Natter.Application.Chat.IPromptFragmentProvider fragmentProvider)
+                    {
+                        throw new NpsContributionBindingException(
+                            "fragment-provider-invalid",
+                            $"Contribution '{PluginContributionTypes.PromptFragment}/{registration.Id}' "
+                            + "must implement IPromptFragmentProvider.");
+                    }
+
+                    catalog.RegisterFragmentProvider(reference, fragmentProvider);
+                    active.ContextComponents.Add(reference);
+                    break;
+                }
+
                 case PluginContributionTypes.PromptProvider:
                 case PluginContributionTypes.ContextAssembler:
                 case PluginContributionTypes.MemoryStore:
@@ -743,10 +808,44 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
                             catalog.RegisterAssembler(reference, (Natter.Application.Chat.IContextAssembler)implementation);
                             break;
                         case PluginContributionTypes.MemoryStore:
-                            catalog.RegisterMemory(reference, (Natter.Application.Chat.IMemoryStore)implementation);
+                            catalog.RegisterMemory(reference, (Natter.Application.Chat.IMemoryEntryStore)implementation);
                             break;
                     }
                     active.ContextComponents.Add(reference);
+                    break;
+                }
+
+                case PluginContributionTypes.EmbeddingProvider:
+                {
+                    var reference = $"{candidate.Id}#{registration.Id}";
+                    var implementation = provider.GetRequiredService(registration.ImplementationType!);
+                    if (implementation is not IEmbeddingProvider embedding)
+                    {
+                        throw new NpsContributionBindingException(
+                            "embedding-provider-invalid",
+                            $"Contribution '{PluginContributionTypes.EmbeddingProvider}/{registration.Id}' "
+                            + "must implement IEmbeddingProvider.");
+                    }
+
+                    _embeddingCatalog.Register(reference, embedding);
+                    active.EmbeddingProviders.Add(reference);
+                    break;
+                }
+
+                case PluginContributionTypes.RerankProvider:
+                {
+                    var reference = $"{candidate.Id}#{registration.Id}";
+                    var implementation = provider.GetRequiredService(registration.ImplementationType!);
+                    if (implementation is not IRerankProvider rerank)
+                    {
+                        throw new NpsContributionBindingException(
+                            "rerank-provider-invalid",
+                            $"Contribution '{PluginContributionTypes.RerankProvider}/{registration.Id}' "
+                            + "must implement IRerankProvider.");
+                    }
+
+                    _rerankCatalog.Register(reference, rerank);
+                    active.RerankProviders.Add(reference);
                     break;
                 }
 
@@ -802,10 +901,21 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
                 foreach (var reference in active.ContextComponents)
                     catalog.Unregister(reference);
 
+            foreach (var reference in active.EmbeddingProviders)
+                _embeddingCatalog.Unregister(reference);
+            foreach (var reference in active.RerankProviders)
+                _rerankCatalog.Unregister(reference);
+
             active.Upstreams.Clear();
             active.Responders.Clear();
             active.Subscriptions.Clear();
             active.ContextComponents.Clear();
+            active.EmbeddingProviders.Clear();
+            active.RerankProviders.Clear();
+
+            // S2-C12: port adapters registered by this plugin (and their cached singletons) must be
+            // withdrawn, otherwise the host keeps routing to a half-activated plugin.
+            _portRouter?.UnregisterPlugin(candidate.Id);
         }
 
         try
@@ -827,8 +937,34 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
             candidate.Services.Provider = null;
         }
 
-        candidate.DisposeLoadContext();
+        // Release the router caches too: they hold plugin types and singleton instances, which would
+        // keep the collectible ALC alive (S2-C3).
+        _portRouter?.UnregisterPlugin(candidate.Id);
+
+        candidate.Unload();
+        WithdrawCliCommands(candidate);
         _startedOrder.Remove(candidate);
+    }
+
+    /// <summary>
+    /// Removes the CLI commands a plugin contributed (task-43). Called from every teardown path so a
+    /// stopped/unloaded plugin can no longer be resolved by `natter help` or invoked.
+    ///
+    /// Only withdrawal is pushed from the runtime: publishing still happens when the registry first
+    /// enumerates contributors, which preserves the lazy construction fixed in task-6. Resolving the
+    /// sink here creates the registry at most at teardown time, when the plugin set is already final.
+    /// </summary>
+    private void WithdrawCliCommands(NpsPluginCandidate candidate)
+    {
+        try
+        {
+            if (_hostProvider?.GetService(typeof(IPluginCliCommandSink)) is IPluginCliCommandSink sink)
+                sink.ReplaceOwnerCommands(NpsCliCommandOwners.For(candidate.Id), Array.Empty<CliCommandDescriptor>());
+        }
+        catch
+        {
+            // Teardown stays best-effort: a failing sink must not keep the host alive.
+        }
     }
 
     private async ValueTask StopCandidateAsync(NpsPluginCandidate candidate, CancellationToken cancellationToken)
@@ -861,10 +997,17 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
                 foreach (var reference in active.ContextComponents)
                     catalog.Unregister(reference);
 
+            foreach (var reference in active.EmbeddingProviders)
+                _embeddingCatalog.Unregister(reference);
+            foreach (var reference in active.RerankProviders)
+                _rerankCatalog.Unregister(reference);
+
             active.Upstreams.Clear();
             active.Responders.Clear();
             active.Subscriptions.Clear();
             active.ContextComponents.Clear();
+            active.EmbeddingProviders.Clear();
+            active.RerankProviders.Clear();
         }
 
         await candidate.Lifetime.StopAsync().ConfigureAwait(false);
@@ -887,7 +1030,10 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
             candidate.Services.Provider = null;
         }
 
-        candidate.DisposeLoadContext();
+        _portRouter?.UnregisterPlugin(candidate.Id);
+
+        candidate.Unload();
+        WithdrawCliCommands(candidate);
         candidate.SetState(PluginState.Stopped);
         candidate.SetContributionStatus("inactive");
         _catalog.UpdateDescriptor(candidate.Id, _ => candidate.Descriptor);
@@ -960,6 +1106,8 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
 
         services.AddSingleton(this);
         services.AddSingleton<IPluginRuntimeDiagnostics>(this);
+        services.AddSingleton<IEmbeddingProviderCatalog>(_embeddingCatalog);
+        services.AddSingleton<IRerankProviderCatalog>(_rerankCatalog);
         services.AddSingleton<ICliCommandContributor, NpsCliCommandContributor>();
         services.AddSingleton(router);
 
@@ -1021,11 +1169,19 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
             candidate.Log?.Error(exception, "Plugin {PluginId} failed: {ErrorMessage}", candidate.Id, message);
     }
 
+    /// <summary>Contribution registration/binding failure with a stable diagnostic code.</summary>
+    private sealed class NpsContributionBindingException(string code, string message) : Exception(message)
+    {
+        public string Code { get; } = code;
+    }
+
     private sealed record ActiveContributions(
         List<IChatUpstream> Upstreams,
         List<(string Owner, string Id)> Responders,
         List<IDisposable> Subscriptions,
-        List<string> ContextComponents);
+        List<string> ContextComponents,
+        List<string> EmbeddingProviders,
+        List<string> RerankProviders);
 
     private readonly Dictionary<string, ActiveContributions> _activeContributions = new(StringComparer.Ordinal);
 
@@ -1035,7 +1191,7 @@ internal sealed partial class NpsPluginRuntime : INpsPluginRuntimeAccessor, IPlu
         {
             if (!_activeContributions.TryGetValue(candidate.Id, out var active))
             {
-                active = new ActiveContributions([], [], [], []);
+                active = new ActiveContributions([], [], [], [], [], []);
                 _activeContributions[candidate.Id] = active;
             }
 

@@ -18,7 +18,13 @@ internal sealed class NpsPluginCandidate
 
     public PluginTrustLevel Trust { get; init; }
 
-    public PluginManifestReadResult? ReadResult { get; init; }
+    /// <summary>Descriptor label for the trust decision (signed / local(unverified) / …).</summary>
+    public string? TrustLabel { get; set; }
+
+    /// <summary>True only when the package's signature/hash manifest was verified at startup.</summary>
+    public bool SignatureVerified { get; set; }
+
+    public PluginManifestReadResult? ReadResult { get; set; }
 
     public PluginLoadContext? LoadContext { get; set; }
 
@@ -134,7 +140,7 @@ internal sealed class NpsPluginCandidate
             IsDynamic: IsEmbedded,
             Kind: Manifest.Kind.ToString().ToLowerInvariant(),
             HostApi: Manifest.HostApi,
-            Trust: Trust.ToString().ToLowerInvariant(),
+            Trust: TrustLabel ?? Trust.ToString().ToLowerInvariant(),
             Dependencies: (Manifest.DependsOn ?? [])
                 .Select(dependency => dependency.Id)
                 .Concat((Manifest.OptionalDependsOn ?? []).Select(dependency => dependency.Id))
@@ -224,5 +230,32 @@ internal sealed class NpsPluginCandidate
         {
             LoadContext = null;
         }
+    }
+
+    /// <summary>
+    /// Full unload (S2-C3): unloading the ALC alone keeps the collectible assembly alive because the
+    /// candidate still references its types, instance, provider and contribution registry. Every
+    /// strong reference is dropped here so the load context can actually be collected; callers that
+    /// need proof can hold a <see cref="WeakReference"/> to the previous load context.
+    /// </summary>
+    public void Unload()
+    {
+        DisposeLoadContext();
+
+        Plugin = null;
+        EntryType = null;
+        Context = null;
+        Config = null;
+        ConfigLoad = null;
+        Secrets = null;
+        Dependencies = null;
+        Permissions = null;
+        Contributions = null;
+        Log = null!;
+        Provider = null;
+        Services.Unload();
+        ReadResult = null;
+        IsLegacyEntry = false;
+        PluginDisposed = false;
     }
 }

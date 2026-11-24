@@ -1,6 +1,8 @@
 using System.Reactive.Subjects;
+using Microsoft.Extensions.Logging;
 using Natter.Abstractions.Ports;
 using Natter.Chat;
+using Natter.Chat.Safety;
 
 namespace Natter.Chat.Satori;
 
@@ -36,10 +38,12 @@ public sealed class SatoriChatUpstream : IChatUpstream, IDisposable
 {
     private readonly ISatoriTransport _transport;
     private readonly IClock _clock;
+    private readonly ILogger<SatoriChatUpstream>? _logger;
     private readonly SatoriEventMapper _mapper;
     private readonly SatoriCommandMapper _commandMapper = new();
     private readonly SatoriSnTracker _snTracker = new();
     private readonly SatoriCapabilityOptions? _capabilityOptions;
+    private readonly ChatOutboundPolicy _outboundPolicy;
     private readonly ChatIdempotencyCache _idempotency;
     private readonly Subject<ChatEvent> _subject = new();
     private readonly ISubject<ChatEvent> _events;
@@ -48,22 +52,28 @@ public sealed class SatoriChatUpstream : IChatUpstream, IDisposable
     private Capabilities _capabilities;
     private bool _connected;
     private bool _disposed;
+    private int _chunkingWarningLogged;
 
     public SatoriChatUpstream(
         Source source,
         ISatoriTransport transport,
         IClock clock,
         SatoriMappingOptions? mappingOptions = null,
-        SatoriCapabilityOptions? capabilityOptions = null)
+        SatoriCapabilityOptions? capabilityOptions = null,
+        ChatOutboundPolicy? outboundPolicy = null,
+        ILogger<SatoriChatUpstream>? logger = null)
     {
         Source = source ?? throw new ArgumentNullException(nameof(source));
         _transport = transport ?? throw new ArgumentNullException(nameof(transport));
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
         _capabilityOptions = capabilityOptions;
+        _outboundPolicy = outboundPolicy ?? ChatOutboundPolicy.Default;
+        _logger = logger;
         _mapper = new SatoriEventMapper(clock, mappingOptions);
         _capabilities = SatoriCapabilityMapper.Map(null, capabilityOptions);
         _events = Subject.Synchronize(_subject);
         _idempotency = new ChatIdempotencyCache(clock: () => _clock.UtcNow);
+        WarnIfChunkingDisabled();
     }
 
     public Source Source { get; }
@@ -166,13 +176,106 @@ public sealed class SatoriChatUpstream : IChatUpstream, IDisposable
         if (!string.IsNullOrWhiteSpace(key) && _idempotency.TryGet(key, out var cached) && cached is not null)
             return cached;
 
-        if (!_commandMapper.TryMap(command, out var request) || request is null)
+        // Sends go through the same chunking contract as Discord and DingTalk: a reply longer than
+        // the declared MaxMessageLength is split instead of being rejected as a whole. Everything
+        // else (update/delete) replaces or removes exactly one message and is not split, matching
+        // the Discord adapter's convention.
+        var ack = command is MessageSendCommand send
+            ? await SendChunkedAsync(send, cancellationToken).ConfigureAwait(false)
+            : await SendMappedAsync(command, cancellationToken).ConfigureAwait(false);
+
+        if (ack.Ok && !string.IsNullOrWhiteSpace(key))
+            _idempotency.Store(key, ack);
+
+        return ack;
+    }
+
+    /// <summary>
+    /// Maps and sends a command in one request. Adapter-side defence in depth: the mapper validates
+    /// the mention policy against the mapped elements (not only <c>Content.Mentions</c>), so a caller
+    /// that bypasses the dispatcher cannot emit a high-risk mention. Text that merely looks like an
+    /// element is escaped into a text node and does not become a mention.
+    /// </summary>
+    private async ValueTask<ChatAck> SendMappedAsync(ChatCommand command, CancellationToken cancellationToken)
+    {
+        if (!_commandMapper.TryMap(command, _outboundPolicy, out var request, out var mapError)
+            || request is null)
         {
+            if (mapError is not null)
+                return ChatAck.Failure(command, mapError);
+
             return ChatAck.Failure(command, ChatError.Create(
                 ChatErrorCodes.Unsupported,
                 $"The Satori adapter cannot map command type '{command.Type}'."));
         }
 
+        return await SendRequestAsync(command, request, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Splits a send into platform-sized chunks (task-74). Satori advertised
+    /// <see cref="Capabilities.MaxMessageLength"/> but used to post the mapped request un-chunked, so
+    /// an over-long reply was rejected as a whole. The split is the shared
+    /// <see cref="ChatTextChunker"/> used by Discord and DingTalk: rune-safe, and a fenced code block
+    /// that spans a boundary is closed and reopened on the next chunk when the content is markdown.
+    /// Each chunk is mapped on its own, so the mention policy is validated for every piece of the
+    /// reply; only the first chunk keeps the reply reference, and attachments/mentions stay on it.
+    /// Failure semantics match the other adapters: the first failing chunk ends the send with that
+    /// chunk's error, already-delivered chunks are not rolled back, and the ack is not cached.
+    /// </summary>
+    private async ValueTask<ChatAck> SendChunkedAsync(
+        MessageSendCommand send,
+        CancellationToken cancellationToken)
+    {
+        var content = send.Payload.Content;
+        try
+        {
+            content.EnsureValid();
+        }
+        catch (NlmpValidationException exception)
+        {
+            return ChatAck.Failure(send, ChatError.Create(ChatErrorCodes.InvalidRequest, exception.Message));
+        }
+
+        var chunks = ChatTextChunker.Chunk(content, _capabilities.MaxMessageLength);
+        var messageIds = new List<string>();
+
+        for (var index = 0; index < chunks.Count; index++)
+        {
+            var chunkCommand = send with
+            {
+                Payload = send.Payload with
+                {
+                    Content = chunks[index],
+                    ReplyTo = index == 0 ? send.Payload.ReplyTo : null,
+                },
+            };
+
+            if (!_commandMapper.TryMap(chunkCommand, _outboundPolicy, out var request, out var mapError)
+                || request is null)
+            {
+                return ChatAck.Failure(send, mapError ?? ChatError.Create(
+                    ChatErrorCodes.Unsupported,
+                    $"The Satori adapter cannot map command type '{chunkCommand.Type}'."));
+            }
+
+            var chunkAck = await SendRequestAsync(chunkCommand, request, cancellationToken).ConfigureAwait(false);
+            if (!chunkAck.Ok)
+                return ChatAck.Failure(send, chunkAck.Error!);
+
+            if (chunkAck.Result?.MessageIds is { Count: > 0 } ids)
+                messageIds.AddRange(ids);
+        }
+
+        return ChatAck.Success(send, messageIds.Count == 0 ? null : messageIds, _clock.UtcNow);
+    }
+
+    /// <summary>One transport call with the adapter's exception → NLMP error mapping.</summary>
+    private async ValueTask<ChatAck> SendRequestAsync(
+        ChatCommand command,
+        SatoriApiRequest request,
+        CancellationToken cancellationToken)
+    {
         SatoriSendResult result;
         try
         {
@@ -189,18 +292,16 @@ public sealed class SatoriChatUpstream : IChatUpstream, IDisposable
                 $"Satori transport failed: {exception.Message}"));
         }
 
-        var ack = result.Ok
+        return result.Ok
             ? ChatAck.Success(command, result.MessageIds, _clock.UtcNow)
-            : ChatAck.Failure(command, ChatError.Create(
-                result.ErrorCode ?? ChatErrorCodes.Internal,
-                result.ErrorMessage ?? "Satori API call failed.",
-                result.RetryAfterMs));
-
-        if (ack.Ok && !string.IsNullOrWhiteSpace(key))
-            _idempotency.Store(key, ack);
-
-        return ack;
+            : ChatAck.Failure(command, ToError(result));
     }
+
+    private static ChatError ToError(SatoriSendResult result)
+        => ChatError.Create(
+            result.ErrorCode ?? ChatErrorCodes.Internal,
+            result.ErrorMessage ?? "Satori API call failed.",
+            result.RetryAfterMs);
 
     public void Dispose()
     {
@@ -208,6 +309,7 @@ public sealed class SatoriChatUpstream : IChatUpstream, IDisposable
             return;
 
         _disposed = true;
+        _connected = false;
 
         lock (_gate)
         {
@@ -215,7 +317,33 @@ public sealed class SatoriChatUpstream : IChatUpstream, IDisposable
             _subscription = null;
         }
 
-        _connected = false;
+        // Dispose owns the transport lifecycle: disconnect first (best effort) and release it.
+        try
+        {
+            _transport.DisconnectAsync(CancellationToken.None).GetAwaiter().GetResult();
+        }
+        catch
+        {
+            // Shutdown is best effort; a failed disconnect must not block disposal.
+        }
+
+        try
+        {
+            switch (_transport)
+            {
+                case IDisposable disposable:
+                    disposable.Dispose();
+                    break;
+                case IAsyncDisposable asyncDisposable:
+                    asyncDisposable.DisposeAsync().AsTask().GetAwaiter().GetResult();
+                    break;
+            }
+        }
+        catch
+        {
+            // Shutdown is best effort.
+        }
+
         _subject.Dispose();
     }
 
@@ -224,21 +352,67 @@ public sealed class SatoriChatUpstream : IChatUpstream, IDisposable
         try
         {
             if (satoriEvent.Login?.Features is { Count: > 0 } features)
+            {
                 _capabilities = SatoriCapabilityMapper.Map(features, _capabilityOptions);
+                WarnIfChunkingDisabled();
+            }
 
-            // Advance sn for every frame, including ones NLMP ignores: a reconnect must not
-            // process an ignored frame again.
-            if (satoriEvent.Sn is { } sn && !_snTracker.TryAdvance(sn))
+            // Replayed/older frames are skipped before mapping. The sequence is committed only
+            // after a successful mapping: a mapping failure must not silently advance past the
+            // event (otherwise a reconnect can never replay it).
+            if (satoriEvent.Sn is { } incomingSn && !_snTracker.ShouldProcess(incomingSn))
                 return;
 
             var chatEvent = _mapper.Map(satoriEvent);
-            if (chatEvent is not null)
-                _events.OnNext(chatEvent);
+            if (chatEvent is null)
+            {
+                LastError = $"Satori event mapping failed (type={satoriEvent.Type}, sn={satoriEvent.Sn}); sn not advanced.";
+                _logger?.LogWarning(
+                    "Satori event mapping failed type={Type} sn={Sn}; sn not advanced",
+                    satoriEvent.Type,
+                    satoriEvent.Sn);
+                return;
+            }
+
+            if (satoriEvent.Sn is { } committedSn)
+                _snTracker.Commit(committedSn);
+
+            _events.OnNext(chatEvent);
         }
         catch (Exception exception)
         {
-            // Mapping must never terminate the transport's event stream.
+            // Mapping must never terminate the transport's event stream. The sequence is not
+            // committed when processing throws, so a reconnect can replay the frame.
             LastError = exception.Message;
+            _logger?.LogWarning(
+                "Satori event processing failed type={Type} sn={Sn}; sn not advanced",
+                satoriEvent.Type,
+                satoriEvent.Sn);
+        }
+    }
+
+    /// <summary>
+    /// Chunking only happens when an upper bound is known. <c>null</c> is a legitimate deployment
+    /// choice (unknown platform limit), but it must never be silent: a fix that quietly does nothing
+    /// is worse than no fix, because nobody goes looking for it.
+    /// </summary>
+    private void WarnIfChunkingDisabled()
+    {
+        if (_capabilities.MaxMessageLength is not null)
+        {
+            // Re-arm so a later switch back to "unknown" is reported again.
+            Volatile.Write(ref _chunkingWarningLogged, 0);
+            return;
+        }
+
+        if (Interlocked.Exchange(ref _chunkingWarningLogged, 1) == 0)
+        {
+            _logger?.LogWarning(
+                "Satori chunking is disabled because MaxMessageLength is not declared; replies longer "
+                + "than the platform limit will be rejected as a whole. Set "
+                + "SatoriCapabilityOptions.MaxMessageLength for this deployment's platform "
+                + "(default {DefaultMaxMessageLength}).",
+                SatoriCapabilityOptions.DefaultMaxMessageLength);
         }
     }
 

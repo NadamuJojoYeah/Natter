@@ -33,7 +33,7 @@ internal sealed class FileAdminConfigStore(string root) : IAdminConfigStore
     public bool AllowPluginDocuments { get; init; } = true;
 
     /// <summary>Plugin ids the (reference) host knows; unknown plugin documents map to 404.</summary>
-    public IReadOnlySet<string> KnownPlugins { get; init; } = new HashSet<string>(["natter.plugin.webconsole"], StringComparer.Ordinal);
+    public IReadOnlySet<string> KnownPlugins { get; init; } = new HashSet<string>(["natter.tool.admin.webconsole"], StringComparer.Ordinal);
 
     public bool FailEverySave { get; init; }
 
@@ -45,7 +45,7 @@ internal sealed class FileAdminConfigStore(string root) : IAdminConfigStore
     {
         var ids = new List<string> { "profiles" };
         if (AllowPluginDocuments)
-            ids.Add("plugin:natter.plugin.webconsole");
+            ids.Add("plugin:natter.tool.admin.webconsole");
 
         var documents = ids
             .Select(id => Describe(id))
@@ -211,8 +211,13 @@ internal sealed class FileAdminConfigStore(string root) : IAdminConfigStore
         }
     }
 
-    public static string ETagOf(string content)
-        => "sha256:" + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(content))).ToLowerInvariant();
+    /// <summary>
+    /// S2-F1: the ETag algorithm is NOT re-implemented here. It delegates to the product
+    /// <see cref="AdminETag"/> so a contract change (prefix, casing, encoding) cannot leave the
+    /// acceptance harness green while the host behaves differently. See also
+    /// <c>HarnessEtags_match_the_product_implementation</c> in <c>ConfigPhase2AcceptanceTests</c>.
+    /// </summary>
+    public static string ETagOf(string content) => AdminETag.Compute(content);
 
     private AdminConfigDocumentInfo Describe(string id)
     {
@@ -419,7 +424,7 @@ internal sealed class AcceptanceHarness : IDisposable
         var commandRunner = withRunner ? runner ?? new ScriptedCommandRunner() : null;
 
         var identity = new WebConsoleIdentity(
-            "natter.plugin.webconsole",
+            "natter.tool.admin.webconsole",
             "Natter WebConsole",
             "0.1.0",
             "tool",
@@ -443,7 +448,7 @@ internal sealed class AcceptanceHarness : IDisposable
         var tokens = new WebConsoleTokenAuthenticator(Token);
         var assets = WebConsoleStaticAssets.Load(wwwroot);
         var audit = new WebConsoleAuditStore(Path.Combine(directory, "audit"), clock);
-        var surface = new WebConsoleAdminSurface(store, commandRunner, new AcceptanceLogReader(), new AcceptanceRedactor());
+        var surface = new WebConsoleAdminSurface(store, commandRunner, new AcceptanceLogReader(), new AcceptanceRedactor(), null);
         var admin = new WebConsoleAdminGateway(surface, options, clock);
         var status = new WebConsoleServerStatusHolder();
         status.Set(WebConsoleServerStatus.Listening($"http://127.0.0.1:{options.Port}"));

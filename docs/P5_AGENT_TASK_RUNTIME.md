@@ -4,7 +4,7 @@
 > **日期**：2026-11-17
 > **前置**：P4 功能 Go；P4.5 Conditional Pass（运维项并行收口）
 > **目标**：在现有 chat harness 上增加可持久化、可取消、可恢复的 AgentTask 与 Tool 执行面；普通聊天仍走低延迟 ChatResponder。
-> **关联**：[Harness 架构](HARNESS_ARCHITECTURE.md)、[P4 Tier 1 产品化](P4_TIER1_PRODUCTIZATION.md)、[Context & Memory](P3_CONTEXT_MEMORY.md)、[运维手册](OPERATIONS_RUNBOOK.md)
+> **关联**：[Harness 架构](HARNESS_ARCHITECTURE.md)、[P4 Tier 1 产品化](archive/P4-TIER1-PRODUCTIZATION.md)、[Context & Memory](archive/P3-CONTEXT-MEMORY.md)、[运维手册](OPERATIONS_RUNBOOK.md)
 > **验收计划**：[P5 验收测试计划](testing/2026-11-18-p5-acceptance.md)
 
 ---

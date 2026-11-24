@@ -1,0 +1,92 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Natter.Plugin.ConversationConsole</RootNamespace>
+    <AssemblyName>Natter.Plugin.ConversationConsole</AssemblyName>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <NpsPlugin>true</NpsPlugin>
+    <IsPackable>false</IsPackable>
+    <Description>Natter Conversation Console plugin: read-only conversation replay (list, filter, search, message paging) over the host IConversationQuery port.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/Natter.Plugin.Abstractions/Natter.Plugin.Abstractions.csproj" />
+    <ProjectReference Include="../../src/Natter.Application/Natter.Application.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="plugin.json" LogicalName="Natter.Plugin.ConversationConsole.plugin.json" />
+    <None Update="plugin.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="config.schema.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="config.sample.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="wwwroot/**" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+
+  <!--
+    UI build (task-62). The front-end lives in ui/ and its output *is* wwwroot, which is git-ignored:
+    a plugin package without it is broken, so `dotnet publish` must build it too.
+
+      dotnet build  -p:SkipUiBuild=true    pure back-end loop (warns: the package has no UI)
+  -->
+  <ItemGroup>
+    <UiSource Include="$(MSBuildThisFileDirectory)../../ui/src/**" />
+    <UiSource Include="$(MSBuildThisFileDirectory)../../ui/package.json" />
+    <UiSource Include="$(MSBuildThisFileDirectory)../../ui/package-lock.json" />
+    <UiSource Include="$(MSBuildThisFileDirectory)../../ui/vite.config.ts" />
+    <UiSource Include="$(MSBuildThisFileDirectory)../../ui/tsconfig.json" />
+  </ItemGroup>
+
+  <Target Name="BuildConversationWebUi" BeforeTargets="PrepareForBuild;AssignTargetPaths"
+          Condition="'$(SkipUiBuild)' != 'true'"
+          Inputs="@(UiSource)"
+          Outputs="$(MSBuildThisFileDirectory)wwwroot/index.html">
+    <PropertyGroup>
+      <UiDirectory>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../../ui/'))</UiDirectory>
+    </PropertyGroup>
+
+    <Error Condition="!Exists('$(UiDirectory)package.json')"
+           Text="UI workspace not found at '$(UiDirectory)'; the plugin needs ui/ to build its wwwroot." />
+
+    <!-- One script owns install + build + the cross-process lock (two plugins share ui/node_modules). -->
+    <Exec Command="bash &quot;$(UiDirectory)scripts/build-target.sh&quot; conversation" WorkingDirectory="$(UiDirectory)" />
+
+  </Target>
+
+  <!--
+    wwwroot is a BUILD PRODUCT, so it must not be declared as a None/CopyToOutputDirectory item:
+    MSBuild evaluates those during project evaluation, before the UI build has produced anything, and
+    a clean checkout (CI, Docker, a fresh clone) then fails with
+      MSB3030: Could not copy ... wwwroot/index.html because it was not found.
+    Copy explicitly after build/publish instead, the same pattern CopySamplePluginsToPublish uses.
+  -->
+  <Target Name="CopyConversationWebUiToOutput" AfterTargets="Build" Condition="'$(SkipUiBuild)' != 'true'">
+    <ItemGroup>
+      <ConversationWebUiOutputFiles Include="$(MSBuildThisFileDirectory)wwwroot/**/*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(ConversationWebUiOutputFiles)"
+          DestinationFiles="@(ConversationWebUiOutputFiles->'$(OutDir)wwwroot/%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
+
+  <Target Name="CopyConversationWebUiToPublish" AfterTargets="Publish" Condition="'$(SkipUiBuild)' != 'true'">
+    <ItemGroup>
+      <ConversationWebUiPublishFiles Include="$(MSBuildThisFileDirectory)wwwroot/**/*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(ConversationWebUiPublishFiles)"
+          DestinationFiles="@(ConversationWebUiPublishFiles->'$(PublishDir)wwwroot/%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
+
+  <Target Name="WarnMissingConversationWebUi" BeforeTargets="PrepareForBuild" Condition="'$(SkipUiBuild)' == 'true'">
+    <Warning Text="SkipUiBuild=true: plugin $(AssemblyName) is packaged WITHOUT a UI (wwwroot not built). Deployment gates must reject such a package; never publish it." />
+  </Target>
+
+  <Import Project="$(MSBuildThisFileDirectory)../../build/Natter.Plugin.targets" />
+
+</Project>

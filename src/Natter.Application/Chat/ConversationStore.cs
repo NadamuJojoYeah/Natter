@@ -2,18 +2,7 @@ using Natter.Chat;
 
 namespace Natter.Application.Chat;
 
-public readonly record struct ConversationKey(
-    string SourceKey,
-    string ConversationId,
-    string? GuildId,
-    string? ActorId);
 
-public sealed record StoredMessage(
-    string Role,
-    string Text,
-    string? SourceEventId,
-    DateTimeOffset CreatedAt,
-    long MessageId = 0);
 
 public sealed record ConversationState(string SessionId, ConversationKey Key, int Version);
 

@@ -168,7 +168,7 @@ public sealed class SatoriStatusCommand : ICliCommandHandler
         output.WriteLine($"delete         : {snapshot.Capabilities.Delete.ToString().ToLowerInvariant()}");
         output.WriteLine($"attachments    : {snapshot.Capabilities.Attachments.ToString().ToLowerInvariant()}");
         output.WriteLine($"buttons/slash  : {snapshot.Capabilities.Buttons.ToString().ToLowerInvariant()} / {snapshot.Capabilities.SlashCommands.ToString().ToLowerInvariant()}");
-        output.WriteLine($"max length     : {(snapshot.Capabilities.MaxMessageLength?.ToString() ?? "unknown (adapter chunks)")}");
+        output.WriteLine($"max length     : {(snapshot.Capabilities.MaxMessageLength?.ToString() ?? "unknown (chunking disabled)")}");
         output.WriteLine();
 
         ConsoleTable.Write(

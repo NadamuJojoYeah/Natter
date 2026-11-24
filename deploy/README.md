@@ -1,5 +1,10 @@
 # Natter deployment (Tier 1)
 
+> **命令校验状态（2026-11-23，基线 `99b99cc`）**：本文命令分三类——
+> - ✓ 本轮实跑通过：`natter version`/`doctor`/`ports`/`upstreams`/`plugins list`/`plugins contributions`/`plugins graph`/`plugins permissions`/`plugins inspect`/`health --offline`/`memory list`/`satori status`/`events list`/`exec`；staging 脚本 `--feature --skip-build`。
+> - 未验证（需 root/真 systemd/Docker/真机/长驻宿主/上游凭据）：`serve` 长驻、`deploy/systemd/*`、`deploy/docker/*`。
+> - 见 [../docs/REVIEW_2026-11-23_ARCHITECTURE.md §19](../docs/REVIEW_2026-11-23_ARCHITECTURE.md#19-第三部分执行结果命令实跑校验)。
+
 > 完整运维流程见 [运维手册](../docs/OPERATIONS_RUNBOOK.md)。
 > 本轮收口记录与已知风险见 [P4.5 运维收口](../docs/operations/2026-11-21-p4-5-ops-closeout-run.md)。
 
@@ -27,18 +32,85 @@ dotnet publish src/Natter.Cli/Natter.Cli.csproj -c Release -o /opt/natter
 ./scripts/stage-tier1-plugins.sh -o /opt/natter/plugins -c Release --tier2  # 另加 DingTalk + Spark
 
 # 不启 host 的离线校验（不需要 secret，不会抢 bot 会话）
-/opt/natter/natter plugins inspect /opt/natter/plugins/discord
+/opt/natter/natter plugins inspect /opt/natter/plugins/natter.transport.messaging.discord
 ```
 
 staging 布局（NPS 加载器要求）：
 
 ```text
-/opt/natter/plugins/discord/{plugin.json,config.schema.json,lib/*}
-/opt/natter/plugins/deepseek/{...}
+/opt/natter/plugins/natter.transport.messaging.discord/{plugin.json,config.schema.json,lib/*}
+/opt/natter/plugins/natter.feature.ai.deepseek/{...}
 /opt/natter/plugins/staging-manifest.json      # 审计用清单，记录 id/文件数/时间
 ```
 
 脚本保证：缺 `lib/<assembly>.deps.json` 直接失败、不写 `config.json`、重跑时保留已有 `config.json`。
+
+### 1.1 发布前必须复核 staging 产物是新构建
+
+> 来源：`docs/testing/2026-11-22-review-acceptance.md` 的 OBS-REVIEW-STAGING（High）。
+
+**问题**：源码修复不会自动进入已存在的 staging 目录。复用旧的 staging（例如上次 e2e 留下的
+`artifacts/webconsole-e2e/plugins`）会让修复在实机上完全不生效，而单测全绿。
+
+验收时实测：用旧 staging 起服务，`viewer` 仍能通过 `/validate` 读到明文 `sk-`/`Bearer`/PEM，
+与修复前的行为一致；换成新构建产物后全部合规。
+
+**发布检查项**（每次发布都要做，不能只看测试绿）：
+
+```bash
+# 1) staging 必须来自本次构建，而不是复用旧目录
+./scripts/stage-tier1-plugins.sh -o /opt/natter/plugins -c Release
+# 需要 WebConsole / 会话控制台 / Prompt Library / StateVitals 时加 --feature
+./scripts/stage-tier1-plugins.sh -o /opt/natter/plugins -c Release --feature
+
+# 2) 用修复标记验证产物确实是新的（S1-04 的 diffOmitted）
+strings /opt/natter/plugins/natter.tool.admin.webconsole/lib/Natter.Plugin.WebConsole.dll \
+  | grep -q DiffOmitted || { echo "FAIL: staging 是旧产物"; exit 1; }
+
+# 3) 核对 staging 清单的时间与哈希
+jq '{generatedAt, hostParity}' /opt/natter/plugins/staging-manifest.json
+```
+
+更通用的判据：`staging-manifest.json` 的 `generatedAt` 必须晚于本次 `dotnet publish`，
+且 `hostParity.mismatches` 为 0。
+
+任何"代码已修复但实机行为没变"的现象，先查 staging 是否是旧的，再查代码。
+
+### 1.2 feature 插件必须显式 `--feature`
+
+`stage-tier1-plugins.sh` 默认只 stage **Tier 1 传输/提供者**（discord + deepseek），
+`--tier2` 再加钉钉 + 星火。**feature 插件（WebConsole、会话控制台、Prompt Library、StateVitals）
+不在默认集合里**，必须显式加 `--feature`。
+
+漏掉它的后果不是启动失败，而是"插件目录里根本没有该插件"——`/api/*` 404、`natter web status`
+未知命令，而宿主本身完全健康，很容易被误判成代码问题。
+
+```bash
+# 完整发布（Tier1 + Tier2 + 全部 feature 插件）
+./scripts/stage-tier1-plugins.sh -o /opt/natter/plugins -c Release --tier2 --feature
+```
+
+feature 插件的静态资源按插件显式声明（见脚本里的 `PLUGIN_TABLE_FEATURE` 第 5 列）：
+`wwwroot/`、`prompts/`、`definitions/`、`config.sample.json` 等。
+**不要靠目录内容自动推断**——插件源码目录里还有 `Kernel/`、`Rendering/` 这类 C# 目录，不能进发布包。
+
+所有 NPS 插件工程都必须设置 `<NpsPlugin>true</NpsPlugin>` 并导入 `build/Natter.Plugin.targets`，
+这样构建产物才是 `bin/<cfg>/<tfm>/lib/` 布局。缺这两项的插件无法被 staging 脚本处理
+（脚本会以 `missing build output: .../lib/<assembly>.dll` 明确报错，而不是静默跳过）。
+
+### 1.3 部署后确认 feature 插件确实被装载
+
+```bash
+/opt/natter/natter plugins list | grep -E "webconsole|conversation-console|prompt.library|state-vitals"
+```
+
+预期：
+
+- `webconsole` / `conversation-console` 在配好 secret 后为 `Activated`；
+- `prompt.library` 需要 `config.json`，未配置时报 `not-configured`（这是正常提示，不是缺陷）；
+- `state-vitals` 默认不启用。
+
+若某插件完全不出现在列表里 → 是 staging 漏了，不是代码问题。
 
 ---
 

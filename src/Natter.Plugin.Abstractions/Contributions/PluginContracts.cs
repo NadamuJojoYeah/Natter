@@ -99,6 +99,16 @@ public interface IPluginDependencies
 /// <summary>Typed contribution registration API. Bare host DI access is intentionally absent.</summary>
 public interface IContributionRegistry
 {
+    /// <summary>
+    /// Contributes an outbound message transport (<c>chat.upstream</c>).
+    /// <para>
+    /// <b>Implementation obligations</b> (docs/CONTRIBUTION_OBLIGATIONS.md §3.1): internal idempotency;
+    /// and <b>conditional chunking</b> — declaring a <c>MaxMessageLength</c> means splitting outbound
+    /// content at that bound, while declaring null means explicitly waiving chunking, which must be
+    /// observable (warn/health). The host does not chunk on the adapter's behalf, because only the
+    /// adapter knows the deployment's real limit.
+    /// </para>
+    /// </summary>
     void AddChatUpstream<TUpstream>(string id)
         where TUpstream : class, IChatUpstream;
 
@@ -119,11 +129,46 @@ public interface IContributionRegistry
     void AddPromptProvider<TProvider>(string id)
         where TProvider : class, IPromptProvider;
 
+    /// <summary>
+    /// Contributes additional prompt fragments. The host aggregates/cleans them, namespaces plugin
+    /// ids under the owning plugin, and rejects HostBuiltin impersonation.
+    /// </summary>
+    void AddPromptFragmentProvider<TProvider>(string id)
+        where TProvider : class, IPromptFragmentProvider
+        => throw new NotSupportedException(
+            "This contribution registry does not support 'prompt.fragment'.");
+
     void AddContextAssembler<TAssembler>(string id)
         where TAssembler : class, IContextAssembler;
 
+    /// <summary>
+    /// Contributes the host memory store (<c>memory.store</c>).
+    /// <para>
+    /// <b>Host API break (P6.7):</b> the contract changed from <c>IMemoryStore</c> to
+    /// <c>IMemoryEntryStore</c>. A plugin built against the old interface no longer activates; it
+    /// must implement the five-kind entry contract. See <c>docs/PLUGIN_SPEC.md</c>.
+    /// </para>
+    /// </summary>
     void AddMemoryStore<TStore>(string id)
-        where TStore : class, IMemoryStore;
+        where TStore : class, IMemoryEntryStore;
+
+    /// <summary>
+    /// Contributes a text-embedding provider. The host namespaces the contribution as
+    /// <c>owner#id</c>; providers must declare <c>network</c> and a <c>secrets:</c> permission.
+    /// </summary>
+    void AddEmbeddingProvider<TProvider>(string id)
+        where TProvider : class, IEmbeddingProvider
+        => throw new NotSupportedException(
+            "This contribution registry does not support 'embedding.provider'.");
+
+    /// <summary>
+    /// Contributes a rerank provider. The host namespaces the contribution as <c>owner#id</c>;
+    /// providers must declare <c>network</c> and a <c>secrets:</c> permission.
+    /// </summary>
+    void AddRerankProvider<TProvider>(string id)
+        where TProvider : class, IRerankProvider
+        => throw new NotSupportedException(
+            "This contribution registry does not support 'rerank.provider'.");
 }
 
 /// <summary>Token-like secret reference used in config values; never contains the secret.</summary>

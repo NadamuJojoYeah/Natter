@@ -13,6 +13,16 @@ internal sealed class NpsPluginServices : IPluginServices
     public IServiceCollection Collection { get; } = new ServiceCollection();
 
     public IServiceProvider? Provider { get; internal set; }
+
+    /// <summary>
+    /// Drops the plugin-scoped service descriptors (they reference plugin types) and the built
+    /// provider, so the collectible load context is not rooted after unload (S2-C3).
+    /// </summary>
+    public void Unload()
+    {
+        Provider = null;
+        Collection.Clear();
+    }
 }
 
 /// <summary>Plugin-scoped logger with a small in-memory buffer for diagnostics.</summary>

@@ -73,7 +73,7 @@ NPS v1 明确不解决：
 
 ```text
 plugins/
-└── natter.transport.discord/
+└── natter.transport.messaging.discord/
     ├── plugin.json                 # NPS v1 manifest
     ├── config.schema.json          # JSON Schema（可选但推荐）
     ├── config.json                 # 用户配置（宿主/用户维护，可不存在）
@@ -135,7 +135,7 @@ plugins/
 
 - MUST 匹配 `^[a-z0-9]+(?:[._-][a-z0-9]+)+$`；
 - MUST 全局唯一；
-- 建议使用 `natter.transport.discord`、`natter.feature.ai.openai` 这种命名；
+- 建议使用 `natter.transport.messaging.discord`、`natter.feature.ai.openai` 这种命名；
 - 禁止使用空格、路径分隔符、大小写混用作为身份。
 
 ### 4.2 Discord transport manifest 示例
@@ -143,7 +143,7 @@ plugins/
 ```json
 {
   "schemaVersion": 1,
-  "id": "natter.transport.discord",
+  "id": "natter.transport.messaging.discord",
   "name": "Discord Transport",
   "version": "0.1.0",
   "kind": "transport",
@@ -223,7 +223,7 @@ plugins/
 "loadAfter": ["natter.feature.memory"],
 "loadBefore": [],
 "conflicts": [
-  { "id": "natter.transport.discord.legacy", "version": "<0.2.0" }
+  { "id": "natter.transport.messaging.discord.legacy", "version": "<0.2.0" }
 ]
 ```
 
@@ -259,6 +259,51 @@ plugins/
 - 插件不得依赖宿主内部命名空间、内部类型或未声明的服务。
 - v1 不提供 DSH 式 version exemption；后续可加显式豁免。
 
+#### 4.5.1 程序集迁移：B-02a（2026-11-24）
+
+本批把两类**插件可见契约**从 `Natter.Application` 移到 `Natter.Abstractions`。契约的**命名空间与类型名不变**，但定义程序集变了：
+
+| 类型 | 旧程序集 | 新程序集 |
+| --- | --- | --- |
+| `Natter.Application.Redaction.SecretRedaction`、`SecretRedactionOptions`、`RedactedText` | `Natter.Application` | `Natter.Abstractions` |
+| `Natter.Application.Chat.EmbeddingRequest`、`EmbeddingResult`、`IEmbeddingProvider`、`RerankCandidate`、`RerankResult`、`IRerankProvider`、`EmbeddingProviderException`、`RerankProviderException`、`EmbeddingErrorKind`、`IEmbeddingProviderCatalog`、`IRerankProviderCatalog` | `Natter.Application` | `Natter.Abstractions` |
+
+对第三方插件的具体影响：
+
+- **必须针对新宿主重新编译。** 这是二进制 ABI 变更：旧插件里的成员引用指向 `Natter.Application` 的旧定义，新宿主不再在该程序集提供这些类型，未重编译的插件会在加载/激活时失败。
+- **源代码 `using` 不需要改**（命名空间未变）。若插件只用到上表类型，应把 `Natter.Application` 的 ProjectReference 换成 `Natter.Abstractions`；若还用到 Prompt/Memory 契约，则仍需 `Natter.Application`（B-02b 才会继续下沉）。
+- `hostApi` 版本**不收紧**：这些类型的公开形状没有变化，只是所在程序集变化；兼容性由“重新编译”保证，而不是新增 API 范围约束。
+- `Natter.Chat.Discord` 不再引用 `Natter.Application`；`Natter.Chat.DingTalk` 引用 `Natter.Abstractions`，并对 `UpstreamStatusPayload.Detail` 做共享脱敏（`[redacted]`）。
+- `Natter.Plugin.AiEmbedding.OpenAi` 不再直接引用 `Natter.Application`。
+
+B-02b（新建 `Natter.Contracts` / `Natter.Prompting`，搬 Prompt/Memory 契约）见 4.5.2。
+
+#### 4.5.2 程序集迁移：B-02b（2026-11-24）
+
+B-02b 让 `Natter.Plugin.Abstractions` **不再引用 `Natter.Application`**，并新增两个程序集：
+
+| 程序集 | 作用 | 依赖 |
+| --- | --- | --- |
+| `Natter.Contracts` | 插件可见的 Prompt / Memory / Context / Profile 契约 | `Natter.Abstractions`、`Natter.Chat` |
+| `Natter.Prompting` | `PromptComposer` / `PromptSafety` 实现，供宿主与 Prompt Library 共用 | `Natter.Contracts`、`Natter.Abstractions`、`Natter.Chat` |
+
+搬迁的类型（命名空间均不变）：
+
+- **Prompt/Context**：`PromptRequest`、`PromptBundle`、`PromptSection`、`IPromptProvider`、`ContextBudget`、`ContextRequest`、`ContextBundle`、`ContextDiagnostics`、`IContextAssembler`、`PromptPlan`、`PromptFragment`、`PromptFragmentContext`、`IPromptFragmentProvider`、`PromptFragmentSourceOptions/Result`、`IPromptFragmentSource`、`PromptFragmentContexts`、`PromptCompilerDefaults/Codes/Exception`、`ConversationScope`。
+- **Memory/Profile**：`IMemoryEntryStore` 及其 v2 record/enum、`MemoryScope`、`MemoryType`、`MemoryEntryExport`、`IMemoryStore`（v1，保留兼容）、`RuntimeProfile` 及 `Profile*` 模型、`StoredMessage`、`ConversationKey`、`IChatResponder`。
+- `PromptComposer` / `PromptSafety` 的实现位于 `Natter.Prompting`；Application 与 `Natter.Plugin.PromptLibrary` 均引用该程序集。
+- `Sample.Memory` 改为自带 `SampleMemoryEntryStore`（约 200 行），不再引用 `Application` / `Chat`；`PromptLibrary` 不再引用 Application，也不再 `new` Application 里的宿主实现（改为引用 `Natter.Prompting`）。
+
+对第三方插件的具体影响（五步迁移）：
+
+1. **必须重新编译。** 契约类型的定义程序集从 `Natter.Application` 变为 `Natter.Contracts`，旧二进制里的类型引用无法解析。
+2. 把只用到契约的 `Natter.Application` ProjectReference 改为 `Natter.Contracts`；如果用到 `PromptComposer`，再加 `Natter.Prompting`。
+3. `using` 不变（命名空间仍是 `Natter.Application.Chat` / `Natter.Application.Redaction`）。
+4. **不要把 `Natter.Contracts` / `Natter.Prompting` 的 DLL 放进插件目录作为私有依赖**：宿主把它们列为共享契约程序集（`PluginContractAssemblies`），保证类型标识一致；插件目录里同名的本地副本会被忽略或造成诊断混淆。
+5. `hostApi` **不收紧数值**：本次没有改变公开 API 形状，也没有新增 API 版本常量；兼容性由“重新编译 + 共享契约程序集”保证。若未来需要让旧二进制显式失败，再提升 `hostApi` minor 并写进 manifest 迁移说明。
+
+已知取舍：`Natter.Contracts` 里仍有少量**无 I/O 的 pure helper**（`MemoryDecay` 数学、`MemoryEntryMapping`、`ProfileContext` AsyncLocal、`PromptPluginFragmentRules` 正则），它们被 record 的便捷方法直接引用，拆出去会造成契约→实现的循环；当前它们不含持久化、catalog 或宿主服务，后续若要彻底纯化需把这些方法改为 Application/Prompting 的扩展方法。
+
 ### 4.6 权限
 
 权限是 manifest 的声明，不是“代码能力”的证明。
@@ -271,7 +316,7 @@ v1 权限词汇：
 | `filesystem.read` | 读取插件目录外的文件 |
 | `filesystem.write` | 写入插件目录外的文件 |
 | `secrets:<NAME>` | 读取指定秘密 |
-| `chat.read` | 读取 NLMP 入站消息/事件 |
+| `chat.read` | 读取 NLMP 入站消息/事件，以及 prompt/context 贡献所需的会话、记忆与摘要事实 |
 | `chat.send` | 发送消息 |
 | `chat.edit` | 编辑消息 |
 | `chat.delete` | 删除消息 |
@@ -288,6 +333,21 @@ v1 权限词汇：
 - `IPluginContext.Secrets` 只有在拥有 `secrets:<NAME>` 时才能读取该秘密。
 - 权限拒绝产生结构化错误，不导致宿主崩溃；依赖该能力的插件进入 `Blocked` 或降级。
 - 权限模型是**治理与可观测性**，不是安全沙箱；见 §15。
+
+**贡献类型的最低权限**（S2-C2，2026-11-22）：
+
+| Contribution | 最低权限 | 原因 |
+| --- | --- | --- |
+| `context.assembler` | `chat.read` | 组装上下文会读取会话/记忆/摘要事实 |
+| `prompt.provider` | `chat.read` | 生成 prompt 需要会话与 profile 上下文 |
+| `prompt.fragment` | `chat.read` | 片段提供者收到 profile/source/user/conversation 上下文 |
+| `embedding.provider` | `network` + 至少一个 `secrets:*` | 调用外部 embedding API 并携带 key |
+| `rerank.provider` | `network` + 至少一个 `secrets:*` | 调用外部 rerank API 并携带 key |
+
+未声明对应权限时，`IContributionRegistry.AddContextAssembler` /
+`AddPromptProvider` / `AddPromptFragmentProvider` 抛出权限错误，宿主把插件置为
+`Failed`（`phase=permission`、`code=permission-denied`），并给出缺少的权限与 contribution。
+零权限插件不能通过这几类贡献读取宿主会话数据。
 
 ### 4.7 秘密
 
@@ -530,6 +590,12 @@ public interface IContributionRegistry
         ServiceLifetime lifetime = ServiceLifetime.Singleton)
         where TService : class
         where TImplementation : class, TService;
+
+    void AddEmbeddingProvider<TProvider>(string id)
+        where TProvider : class, IEmbeddingProvider;
+
+    void AddRerankProvider<TProvider>(string id)
+        where TProvider : class, IRerankProvider;
 }
 ```
 
@@ -562,6 +628,8 @@ public interface IChatEventSubscriber
 | `chat.event-subscriber` | `IChatEventSubscriber` | 旁路消费 NLMP 事件 | 审计、统计 |
 | `cli.command` | `ICliCommandHandler` + descriptor | 贡献 CLI 命令 | `discord status` |
 | `port.adapter` | 端口接口 | 通用六边形适配器（兼容） | 自定义仓储/时钟 |
+| `embedding.provider` | `IEmbeddingProvider` | 文本 → 向量（P6.2） | OpenAI 兼容、DashScope |
+| `rerank.provider` | `IRerankProvider` | 查询 + 候选 → 重排（P6.2） | 搜索/召回插件 |
 
 约束：
 
@@ -569,6 +637,57 @@ public interface IChatEventSubscriber
 - `chat.responder` 按 `priority` 升序调用；同优先级按插件 id 排序；第一个返回非 null 命令的 responder 生效。v1 也可配置为全部执行，但必须显式配置，避免重复回复。
 - `chat.upstream` 的 `ConnectAsync` / `DisconnectAsync` 由宿主统一驱动，不由插件自己随意启动；见 §7。
 - `chat.event-subscriber` 只读，不得直接发送命令；需要回复时使用 `chat.responder`。
+
+### 6.0 实现方义务（义务清单，2026-11-24）
+
+上表只规定「贡献什么类型」；**类型义务**（实现方必须保证什么、可以依赖宿主什么、违反的后果、以及当前靠什么强制）见
+[CONTRIBUTION_OBLIGATIONS.md](CONTRIBUTION_OBLIGATIONS.md)。那里有一张 11 行 × 5 列的表，第 5 列「当前靠什么强制」是重点——
+它区分「有声明义务」和「有保障」，两者不是一回事。
+
+两条已经机制化的义务（写插件前请先看）：
+
+1. **`chat.upstream` 的分片义务是条件的**：声明了 `Capabilities.MaxMessageLength` 就 MUST 按该上限分片；
+   声明 `null` 等于**显式放弃**该义务，且放弃必须可观测（告警或 health 字段）。**没有第三种状态**——
+   「既不分片也不声明放弃」就是 Satori 曾经的样子，测试会红。
+2. **权限策略必须显式声明**：`NpsPermissionPolicy.RequiredPermissions` 对未登记的类型**抛异常**而不是默认零权限。
+   新增贡献类型时必须同时给出权限策略，否则激活期报错。
+
+> 已知未闭合项：`port.adapter` 目前**不要求任何权限**（显式空清单，非遗漏）。收紧它会让现有 bundled 示例插件
+> （`samples/Natter.Sample.Plugin.Greetings`）停止激活，因此需要一个独立的 `port.override` 权限并随信任级默认授予，
+> 见义务文档 §5.4。
+
+### 6.1 Embedding / Rerank 端口（P6.2，2026-11-22）
+
+`embedding.provider` / `rerank.provider` 与 `chat.responder` 一样由插件实现、宿主持有目录，注册引用为
+`owner#id`；Stop / Rollback / Dispose 会撤销目录项。`IContributionRegistry` 的默认实现抛
+`NotSupportedException`，NPS registry 覆写并执行权限门控。
+
+```csharp
+public interface IEmbeddingProvider
+{
+    string Id { get; }
+    int MaxBatchSize { get; }
+    int MaxInputTokens { get; }
+    ValueTask<EmbeddingResult> EmbedAsync(EmbeddingRequest request, CancellationToken ct = default);
+}
+
+public interface IRerankProvider
+{
+    string Id { get; }
+    int MaxCandidates { get; }
+    ValueTask<RerankResult> RerankAsync(string query, IReadOnlyList<RerankCandidate> candidates, CancellationToken ct = default);
+}
+```
+
+- **能力元数据是契约**：宿主 `EmbeddingService` 按 `MaxBatchSize` 切批，按 `MaxInputTokens` 做保守截断
+  （CJK 1.5 字符/token、其他 4 字符/token，保留 10% 余量），并记录被截断的输入下标；不得让调用方自行猜测。
+- 结果顺序与输入一致；任一批失败整体抛错，不返回半成功结果，也不在失败前写缓存。
+- `IEmbeddingCache` 键为 `(model, dimensions, SHA-256(text))`；本轮提供 `InMemoryEmbeddingCache`，
+  SQLite 实现留给 RAG 插件自己的库。
+- `RerankService` 在超过 `MaxCandidates` 时以 `rerank.too_many_candidates` 拒绝，不静默截断候选。
+- 参考实现 `plugins/Natter.Plugin.AiEmbedding.OpenAi/` 走 OpenAI 兼容 `POST {endpoint}/embeddings`；
+  测试使用 fake HTTP handler，不联网。DashScope compatible mode 的模型名/维度/批量/单条 token 上限
+  必须在配置中显式填写；仓库未对真实 DashScope 做联网验证，不能把默认值当作官方承诺。
 
 ---
 
@@ -670,7 +789,80 @@ v1 不引入远程配置中心；后续可通过宿主配置 provider 扩展。
 | `local` | 本地开发插件 | 开发模式可自动授予，生产需确认 |
 | `untrusted` | 来源不明 | 默认不加载，或仅授予最小权限 |
 
-v1 可以只实现 `bundled` 和 `local`；签名/市场属于后续。
+v1 已实现 `bundled` / `signed` / `local` / `untrusted` 四档（信任判定见 §9.4）。
+
+### 9.4 信任与完整性的传播（S1-12，2026-11-22）
+
+插件 store 在安装时校验哈希清单（`package.sha256`）与签名（`package.sig`），把结果写进
+`installed.json` 的 `trust`（`signed` / `unsigned`）与 `signerKeyId`。**激活阶段必须消费这份结果**，
+否则"只信任签名包"的配置形同虚设。
+
+#### 9.4.1 激活期的三道检查
+
+1. **完整性复核**：每次启动对已安装目录重新计算 `package.sha256` 中每个文件的 SHA-256
+   （跳过 `package.sha256` / `package.sig` 自身），并检测未声明的新文件与缺失文件。
+   - 全部匹配 → `verified`
+   - 有不符 → `tampered`（**拒绝加载**，码 `plugin.integrity-mismatch`）
+   - 无哈希清单 / 无法读取 → `unverified`（显式记录，不当作可信）
+2. **签名事实**：只有"安装记录为 `signed` + `signerKeyId` 非空 + 启动完整性 `verified`"才算
+   `signed`；签名本身在安装时验证（启动期没有公钥就无法复验），因此动态宿主无法复验时必须记
+   `unverified` 而不是假定可信。
+3. **策略判定**（`PluginTrustPolicy`）：
+
+| 候选状态 | `RequireSignedPlugins` | `FilePluginTrustLevel` | 结果 |
+| --- | --- | --- | --- |
+| `tampered` | 任意 | 任意 | **拒绝** `plugin.integrity-mismatch` |
+| `signed`（已验证） | 任意 | 任意 | 加载为 `signed`（不降级） |
+| `unverified` | `true` | 任意 | **拒绝** `plugin.unsigned-rejected` |
+| `unverified` | `false` | `signed` | **拒绝** `plugin.signature-required` |
+| `unverified` | `false` | `local`（默认） | 加载为 `local`，并打 `plugin.integrity-unverified` 警告 |
+| `unverified` | `false` | `untrusted` | 加载为 `untrusted`（不授予权限） |
+
+- `RequireSignedPlugins` 默认 **false**，保持既有部署行为；开启后任何无已验证签名的包都不加载。
+- 纯目录（`--plugin-dir`、样例插件、staging 目录）没有 `package.sha256`，只能得到 `unverified`：
+  默认按 `FilePluginTrustLevel` 加载并记录警告；`--plugin-dir` 场景因此**不会**因本机制启动失败。
+- 宿主把判定标签写进 `PluginDescriptor.Trust`（`signed` / `local(unverified)` / `untrusted`），
+  `plugins list` / `plugins doctor` 可见；拒绝时 `ErrorDetail.Phase = trust`，`Code` 见上表，
+  消息只含插件 id、目录与首个不符文件名，不含文件内容。
+- 配置入口：`NatterApplicationBuilder.ConfigurePluginTrust(o => o.RequireSignedPlugins = true)` 与
+  `AddPluginDirectory(new PluginTrustRegistration(dir, signature, signerKeyId, pluginId, detail))`。
+  CLI 开关留给 CLI 层按需接入（本版本未提供命令行参数）。
+
+#### 9.4.2 签名格式、校验上限与兼容策略
+
+安装期校验（`PluginPackageValidator`）的确定性规则：
+
+| 项 | 规则 |
+| --- | --- |
+| 解压上限 | 条目数/单条目/总量/压缩比在**实际写入**时逐字节计数，超限立即中止提取（声明长度只用于快速预检） |
+| `package.sig` | 硬上限 **64 KiB**，超限 `signature-too-large`；按长度读取，不做无界 `ReadAllBytes` |
+| 哈希比较 | `CryptographicOperations.FixedTimeEquals`，大小写归一 |
+| 原生镜像 | 按 magic 识别 ELF / Mach-O / PE-without-CLI，**不看扩展名**；`AllowNativeLibraries=false` 时一律 `native-library` |
+| entry 路径 | 必须位于包内（`GetFullPath` + 前缀校验）；拒绝控制字符（含换行）、`..`、绝对路径、符号链接 |
+
+**Canonical 文本 v2**（新签名使用）：
+
+```text
+nps-hash-v2
+<文件数>
+<路径字节长度>:<URL 转义路径>
+<sha256>
+…
+```
+
+长度前缀 + 转义消除了"`hash + 两空格 + 路径 + 换行`"拼接的边界歧义；配合入口拒绝控制字符，路径不可能再影响签名覆盖范围。
+
+**兼容策略——默认兼容，可升级为严格**：
+
+- 用旧（v1）canonical 文本签名的包**默认仍然通过校验**，但会产出 `signature-legacy-format` **warning**（进入 `PluginStore.Warnings`），提示发布方用 v2 重签；
+- 需要强约束的部署设 `PluginStoreOptions.RejectLegacySignatureFormat = true`，同一包直接失败并返回 `signature-legacy-format`；
+- 这样既不因格式升级让既有已签名包停摆，也不把旧格式静默当成新格式。
+
+#### 9.4.3 已知边界
+
+- 启动期能复验**内容完整性**，不能复验签名（无公钥）；签名只在安装时生效。
+- `.staging` 目录中的尚未完成的安装不在候选列表中。
+- 宿主仍然是进程内加载：完整性检查防的是"落地后被替换/篡改"，不是恶意代码隔离（见 §9.3）。
 
 ### 9.2 权限执行点
 
@@ -682,7 +874,8 @@ v1 可以只实现 `bundled` 和 `local`；签名/市场属于后续。
 - `network` 相关 HTTP/WebSocket 工厂；
 - `ai.complete` 调用；
 - `cli.command` 注册；
-- `filesystem.*` 访问。
+- `filesystem.*` 访问；
+- `context.assembler` / `prompt.provider` / `prompt.fragment` 注册（要求 `chat.read`）。
 
 ### 9.3 进程内限制
 
@@ -692,6 +885,28 @@ v1 可以只实现 `bundled` 和 `local`；签名/市场属于后续。
 - 恶意插件仍可通过反射/进程权限绕过；
 - 真正不可信第三方插件需要独立进程、容器或 OS 级沙箱；
 - 不要把 `permissions` 宣传为安全边界。
+
+---
+
+### 9.5 Android 信任根（S2-C14，2026-11-22）
+
+Android 动态插件宿主的 publisher trust anchors（`PluginStoreOptions.TrustedPublicKeys`）现在
+**编译进 APK**：`src/Natter.Hosting.Android/trusted-keys.txt` 作为 embedded resource
+（`Natter.Hosting.Android.trusted-keys.txt`）读取，运行时不再读取
+`FilesDir/plugin-trusted-keys.txt`。这样能写应用私有目录的进程不能替换信任锚；要更换锚点必须
+重新构建并签名 APK。
+
+- Release/dynamic 构建：发布方在构建前把 Base64 SubjectPublicKeyInfo 写入该文件；仓库内文件只有
+  注释，因此默认 APK 不信任任何动态插件（与"未配置信任锚"语义一致）。
+- Debug 构建仍可用 `AllowUnsigned=true` 做 sideload 开发；生产不得开启。
+- **已知限制（不假装解决）**：这是应用签名/APK 完整性边界的延伸，不是硬件根信任。已 root/解锁的
+  设备仍可 patch APK、hook 进程或替换整个应用数据目录；v1 未集成 Play Integrity / Key Attestation，
+  也没有独立的系统级 trust store。高保障部署应使用 embedded 插件模式、Play App Signing，并在设备
+  侧校验 APK 签名/完整性；不要把动态插件信任当作安全隔离边界（见 §9.3）。
+- 仍然保留的缓解：安装期签名校验、启动期 `package.sha256` 完整性复核、`RequireSignedPlugins`
+  默认关闭但可在 Release 打开、篡改候选在 trust policy 中无条件拒绝。Android 动态宿主会把
+  `InstalledPluginCandidate.Integrity` 映射为 `PluginSignatureState`，`Tampered` 在 trust policy
+  中无条件拒绝（`plugin.integrity-mismatch`），与桌面加载路径一致。
 
 ---
 
@@ -722,7 +937,7 @@ natter plugins config validate <plugin-id>
 {
   "phase": "dependency",
   "code": "missing-dependency",
-  "pluginId": "natter.transport.discord",
+  "pluginId": "natter.transport.messaging.discord",
   "message": "Required plugin 'natter.feature.memory' >=0.1.0 <1.0.0 was not found.",
   "detail": {
     "dependency": "natter.feature.memory",
@@ -741,7 +956,7 @@ natter plugins config validate <plugin-id>
 
 > 完整的 Discord transport 设计见 [Discord Transport Plugin Design](DISCORD_PLUGIN_DESIGN.md)。
 >
-> **实现状态**：`natter.transport.discord` 示例插件与 `Natter.Chat.Discord` 已交付消息上游、typing、编辑/删除、slash interaction、allowlist/mention 过滤、分片与 `discord status`；附件上传、按钮/Modal、stream edit 尚未交付。
+> **实现状态**：`natter.transport.messaging.discord` 示例插件与 `Natter.Chat.Discord` 已交付消息上游、typing、编辑/删除、slash interaction、allowlist/mention 过滤、分片与 `discord status`；附件上传、按钮/Modal、stream edit 尚未交付。
 
 ### 11.1 定位
 
@@ -976,7 +1191,7 @@ v1 不做：
 
 > 详细设计见 [Discord Transport Plugin Design](DISCORD_PLUGIN_DESIGN.md)。
 
-- ✅ `natter.transport.discord` 示例插件；
+- ✅ `natter.transport.messaging.discord` 示例插件；
 - ✅ Discord Gateway/REST 抽象 + Discord.Net transport；
 - ✅ NLMP 消息/编辑/删除/interaction 映射；
 - ✅ 能力、allowlist、分片、限流、安全；
@@ -1053,7 +1268,8 @@ v1 不做：
 | 共享 AI 边界 | `src/Natter.Feature.Ai`：`AiChatResponder`、`IAiContextAssembler`、`IAiConversationStore` |
 | Host 会话 | `IConversationStore` + SQLite；插件凭 `storage` 权限注入 |
 | Profile 路由 | `RuntimeProfile` / `ProfileAwareChatResponder`；provider 由 `pluginId#responderId` 决定 |
-| P3 contribution | `prompt.provider` / `context.assembler` / `memory.store` 类型、NPS 注册/激活/回滚与 host catalog 已实现；`Natter.Sample.Plugin.Memory` 为示例 |
+| P3 contribution | `prompt.provider` / `context.assembler` / `memory.store` 类型、NPS 注册/激活/回滚与 host catalog 已实现；`prompt.provider` / `prompt.fragment` / `context.assembler` 要求 `chat.read`；`Natter.Sample.Plugin.Memory` 为 `memory.store` 示例 |
+| P6.2 embedding/rerank | `embedding.provider` / `rerank.provider` 贡献、`owner#id` 目录、Stop/Rollback/Dispose 撤销、`network`+`secrets:*` 门控、分批/截断/缓存/全或无失败工具；参考实现 `plugins/Natter.Plugin.AiEmbedding.OpenAi` |
 | 第二上游/消费者 | `src/Natter.Chat.DingTalk`、`samples/Natter.Sample.Plugin.DingTalk`、`src/Natter.Feature.Ai.Spark` |
 
 ### 18.3 一致性测试映射（对应 §14）
@@ -1123,8 +1339,8 @@ natter plugins list --detail
 natter plugins graph --json
 natter plugins contributions --json
 natter plugins permissions --json
-natter plugins doctor natter.sample.greetings
-natter plugins config validate natter.sample.greetings
+natter plugins doctor natter.sample.port.greetings
+natter plugins config validate natter.sample.port.greetings
 ```
 
 ## 19. 参考资料
@@ -1134,3 +1350,48 @@ natter plugins config validate natter.sample.greetings
 - [架构设计](ARCHITECTURE.md)
 - DSH：Cordis loader、插件配置 schema、peer dependency、HMR、plugin manager、version exemption
 - RimWorld：`About.xml`、`packageId`、`modDependencies`、`loadAfter` / `loadBefore`、`supportedVersions`、Harmony/Defs/Patches
+
+---
+
+## 16. P6.7 破坏性变更：`memory.store` 从 `IMemoryStore` 改为 `IMemoryEntryStore`
+
+> **影响面**：所有实现 `memory.store` 的第三方插件。
+> **性质**：host API 破坏性变更。**二进制与源码均不兼容**，插件必须重新编译。
+
+### 16.1 为什么改
+
+v1 的 `IMemoryStore` 是单层扁平模型（`kind` 自由字符串 + `expires_at` 硬过期）。
+v2 是五类分层（`Policy` / `Preference` / `Fact` / `Episodic` / `Trace`），核心是**每条记忆有自己的稳定度 S 与遗忘曲线**，以及**归档而不是删除**。
+两者不是加字段能兼容的关系：`expires_at`（到点消失）与 `archived`（仍可检索）是互斥语义。
+
+### 16.2 旧契约 → 新契约
+
+| v1 | v2 |
+| --- | --- |
+| `AddMemoryStore<TStore>(id)` where `TStore : IMemoryStore` | where `TStore : IMemoryEntryStore` |
+| `WriteAsync(MemoryWriteRequest)`（`kind: string`） | `WriteAsync(MemoryEntryWriteRequest)`（`MemoryType` 五枚举） |
+| `SearchAsync(MemoryQuery)` | `SearchAsync(MemoryEntryQuery)`（多 `Types` 过滤、`IncludeArchived`） |
+| `DeleteAsync(MemoryDeleteRequest)`（硬删） | `ArchiveAsync(source, conversation, user, id)`（归档，可恢复） |
+| `ExportAsync/ImportAsync`（v1 信封） | 同签名（v2 信封，`MemoryExportVersions`） |
+| — | `GetAsync` / `ReinforceRecallAsync`（新增） |
+
+`MemoryItem` → `MemoryEntry`：`Text` → `Content`，`MemoryId` → `Id`，新增
+`Type` / `ContentHash` / `StabilityDays` / `ReinforceCount` / `Archived` / `SupersedesId` / `LastRecalledAt`。
+
+### 16.3 第三方迁移清单
+
+```text
+1. 实现 IMemoryEntryStore（7 个成员，见上表）
+2. kind 字符串改成 MemoryType：policy / preference / fact / episodic / trace
+3. 删除改为归档：DeleteAsync → ArchiveAsync；不要再实现物理删除
+4. 导出格式升级到 MemoryExportVersions.Current（=2）；读旧导出用 MemoryExportBridge.Upgrade
+5. 重新编译并对 `hostApi` 范围做版本约束（旧 host 仍只认 v1）
+```
+
+参考实现：`samples/Natter.Sample.Plugin.Memory/MemoryStorePlugin.cs`（JSON 文件 + v1 文件自动升级）。
+
+### 16.4 v1 保留期
+
+`IMemoryStore` / `MemoryItem` / `MemoryQuery` / `MemoryWriteRequest` / `MemoryDeleteRequest` / `MemoryExport*` **仍在**，标记
+`[Obsolete("v1 memory store retired at P6.7; use IMemoryEntryStore")]`，并保留一个 release 供回滚。
+宿主仍注册 v1 store（`ChatCompositionModule`），但**recall 路径已全部切到 v2**；不要在 v1 上做新的开发。

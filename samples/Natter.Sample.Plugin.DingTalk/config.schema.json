@@ -12,14 +12,38 @@
     },
     "botId": { "type": "string", "minLength": 1 },
     "robotCode": { "type": "string" },
-    "streamGatewayUrl": { "type": "string", "pattern": "^https?://" },
-    "streamTopic": { "type": "string" },
-    "reconnectBaseDelayMs": { "type": "integer", "minimum": 0, "maximum": 60000 },
-    "reconnectMaxDelayMs": { "type": "integer", "minimum": 0, "maximum": 300000 },
-    "maxClockSkewMinutes": { "type": "integer", "minimum": 1, "maximum": 1440 },
-    "requireMention": { "type": "boolean" },
-    "conversations": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
-    "users": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
-    "maxMessageLength": { "type": "integer", "minimum": 1, "maximum": 20000 }
+    "streamGatewayUrl": { "default": "https://api.dingtalk.com/v1.0/gateway/connections/open", "type": "string", "pattern": "^https?://" },
+    "streamTopic": { "default": "/v1.0/im/bot/messages/get", "type": "string" },
+    "reconnectBaseDelayMs": { "default": 500, "type": "integer", "minimum": 0, "maximum": 60000 },
+    "reconnectMaxDelayMs": { "default": 30000, "type": "integer", "minimum": 0, "maximum": 300000 },
+    "maxClockSkewMinutes": { "default": 60, "type": "integer", "minimum": 1, "maximum": 1440 },
+    "requireMention": { "default": true, "type": "boolean" },
+    "conversations": { "default": [], "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+    "users": { "default": [], "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+    "maxMessageLength": { "default": 2000, "type": "integer", "minimum": 1, "maximum": 20000 },
+    "streamIdleTimeoutMs": { "default": 90000,
+      "type": "integer",
+      "minimum": 10000,
+      "maximum": 600000,
+      "description": "Default 90000. No inbound frame for this long means the stream is half-open and gets reconnected."
+    },
+    "streamPongTimeoutMs": { "default": 30000,
+      "type": "integer",
+      "minimum": 5000,
+      "maximum": 300000,
+      "description": "Default 30000. Allowed gap after an ack before the stream is considered silent."
+    },
+    "streamCallbackDedupCapacity": { "default": 2048,
+      "type": "integer",
+      "minimum": 16,
+      "maximum": 100000,
+      "description": "Default 2048. Bounded set of recently acknowledged callback ids."
+    },
+    "streamCallbackDedupTtlMs": { "default": 600000,
+      "type": "integer",
+      "minimum": 60000,
+      "maximum": 3600000,
+      "description": "Default 600000. How long a callback id stays deduplicated (platform replay window is 60 min)."
+    }
   }
 }

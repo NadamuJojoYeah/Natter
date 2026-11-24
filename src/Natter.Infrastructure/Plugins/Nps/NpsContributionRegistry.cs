@@ -68,7 +68,7 @@ internal sealed class NpsContributionRegistry : IContributionRegistry
         where TUpstream : class, IChatUpstream
     {
         Require(PluginContributionTypes.ChatUpstream, id);
-        RequirePermissions(PluginContributionTypes.ChatUpstream);
+        RequirePermissions(PluginContributionTypes.ChatUpstream, id);
         _services.Collection.TryAddSingleton<TUpstream>();
         Stage(PluginContributionTypes.ChatUpstream, id, 0, typeof(IChatUpstream), typeof(TUpstream), ServiceLifetime.Singleton, null);
     }
@@ -77,7 +77,7 @@ internal sealed class NpsContributionRegistry : IContributionRegistry
         where TResponder : class, IChatResponder
     {
         var declaration = Require(PluginContributionTypes.ChatResponder, id);
-        RequirePermissions(PluginContributionTypes.ChatResponder);
+        RequirePermissions(PluginContributionTypes.ChatResponder, id);
 
         if (declaration.Priority != priority)
         {
@@ -96,7 +96,7 @@ internal sealed class NpsContributionRegistry : IContributionRegistry
         where TSubscriber : class, IChatEventSubscriber
     {
         Require(PluginContributionTypes.ChatEventSubscriber, id);
-        RequirePermissions(PluginContributionTypes.ChatEventSubscriber);
+        RequirePermissions(PluginContributionTypes.ChatEventSubscriber, id);
         _services.Collection.TryAddSingleton<TSubscriber>();
         Stage(PluginContributionTypes.ChatEventSubscriber, id, 0, typeof(IChatEventSubscriber), typeof(TSubscriber), ServiceLifetime.Singleton, null);
     }
@@ -107,7 +107,7 @@ internal sealed class NpsContributionRegistry : IContributionRegistry
 
         var id = NormalizeCliCommandId(descriptor.Name);
         Require(PluginContributionTypes.CliCommand, id);
-        RequirePermissions(PluginContributionTypes.CliCommand);
+        RequirePermissions(PluginContributionTypes.CliCommand, id);
 
         var staged = new CliCommandDescriptor
         {
@@ -128,25 +128,56 @@ internal sealed class NpsContributionRegistry : IContributionRegistry
         where TProvider : class, IPromptProvider
     {
         Require(PluginContributionTypes.PromptProvider, id);
+        RequirePermissions(PluginContributionTypes.PromptProvider, id);
         _services.Collection.TryAddSingleton<TProvider>();
         Stage(PluginContributionTypes.PromptProvider, id, 0, typeof(IPromptProvider), typeof(TProvider), ServiceLifetime.Singleton, null);
+    }
+
+    public void AddPromptFragmentProvider<TProvider>(string id)
+        where TProvider : class, IPromptFragmentProvider
+    {
+        Require(PluginContributionTypes.PromptFragment, id);
+        RequirePermissions(PluginContributionTypes.PromptFragment, id);
+        _services.Collection.TryAddSingleton<TProvider>();
+        Stage(PluginContributionTypes.PromptFragment, id, 0, typeof(IPromptFragmentProvider), typeof(TProvider), ServiceLifetime.Singleton, null);
     }
 
     public void AddContextAssembler<TAssembler>(string id)
         where TAssembler : class, IContextAssembler
     {
         Require(PluginContributionTypes.ContextAssembler, id);
+        RequirePermissions(PluginContributionTypes.ContextAssembler, id);
         _services.Collection.TryAddSingleton<TAssembler>();
         Stage(PluginContributionTypes.ContextAssembler, id, 0, typeof(IContextAssembler), typeof(TAssembler), ServiceLifetime.Singleton, null);
     }
 
     public void AddMemoryStore<TStore>(string id)
-        where TStore : class, IMemoryStore
+        where TStore : class, IMemoryEntryStore
     {
         Require(PluginContributionTypes.MemoryStore, id);
-        RequirePermissions(PluginContributionTypes.MemoryStore);
+        RequirePermissions(PluginContributionTypes.MemoryStore, id);
         _services.Collection.TryAddSingleton<TStore>();
-        Stage(PluginContributionTypes.MemoryStore, id, 0, typeof(IMemoryStore), typeof(TStore), ServiceLifetime.Singleton, null);
+        Stage(PluginContributionTypes.MemoryStore, id, 0, typeof(IMemoryEntryStore), typeof(TStore), ServiceLifetime.Singleton, null);
+    }
+
+    public void AddEmbeddingProvider<TProvider>(string id)
+        where TProvider : class, IEmbeddingProvider
+    {
+        Require(PluginContributionTypes.EmbeddingProvider, id);
+        RequirePermissions(PluginContributionTypes.EmbeddingProvider, id);
+        RequireSecretPermission(PluginContributionTypes.EmbeddingProvider, id);
+        _services.Collection.TryAddSingleton<TProvider>();
+        Stage(PluginContributionTypes.EmbeddingProvider, id, 0, typeof(IEmbeddingProvider), typeof(TProvider), ServiceLifetime.Singleton, null);
+    }
+
+    public void AddRerankProvider<TProvider>(string id)
+        where TProvider : class, IRerankProvider
+    {
+        Require(PluginContributionTypes.RerankProvider, id);
+        RequirePermissions(PluginContributionTypes.RerankProvider, id);
+        RequireSecretPermission(PluginContributionTypes.RerankProvider, id);
+        _services.Collection.TryAddSingleton<TProvider>();
+        Stage(PluginContributionTypes.RerankProvider, id, 0, typeof(IRerankProvider), typeof(TProvider), ServiceLifetime.Singleton, null);
     }
 
     public void AddPortAdapter<TService, TImplementation>(
@@ -194,16 +225,25 @@ internal sealed class NpsContributionRegistry : IContributionRegistry
         return declaration;
     }
 
-    private void RequirePermissions(string type)
+    private void RequirePermissions(string type, string id)
     {
         foreach (var permission in NpsPermissionPolicy.RequiredPermissions(type))
         {
             if (!_granted.Contains(permission))
             {
                 throw new PluginPermissionException(
-                    $"Plugin '{_pluginId}' lacks permission '{permission}' required by contribution '{type}'.");
+                    $"Plugin '{_pluginId}' lacks permission '{permission}' required by contribution '{type}/{id}'.");
             }
         }
+    }
+
+    private void RequireSecretPermission(string type, string id)
+    {
+        if (_granted.Any(permission => permission.StartsWith(PluginPermissions.SecretsPrefix, StringComparison.Ordinal)))
+            return;
+
+        throw new PluginPermissionException(
+            $"Plugin '{_pluginId}' lacks a '{PluginPermissions.SecretsPrefix}' permission required by contribution '{type}/{id}'.");
     }
 
     private void Stage(

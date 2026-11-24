@@ -22,7 +22,7 @@ internal static class PluginPackageTestBuilder
 
     public static TestPluginPackage Create(
         string root,
-        string pluginId = "natter.sample.greetings",
+        string pluginId = "natter.sample.port.greetings",
         string version = "0.1.0",
         string manifestJson = "",
         byte[]? entryBytes = null,
@@ -104,7 +104,7 @@ internal static class PluginPackageTestBuilder
     }
 
     public static string BuildManifest(
-        string pluginId = "natter.sample.greetings",
+        string pluginId = "natter.sample.port.greetings",
         string version = "0.1.0",
         string entryPath = DefaultEntryPath,
         string entryType = SampleEntryType,

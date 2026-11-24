@@ -16,6 +16,12 @@ public sealed class WebConsoleOptions
 
     public string Token { get; init; } = WebConsoleDefaults.TokenReference;
 
+    /// <summary>
+    /// Optional read-only credential. Empty/absent disables viewer logins; when set it must be the
+    /// <c>${secret:WEBCONSOLE_VIEWER_TOKEN}</c> reference and the secret provider must supply it.
+    /// </summary>
+    public string? ViewerToken { get; init; }
+
     public bool ReadOnly { get; init; } = true;
 
     public bool AllowConfigWrite { get; init; }
@@ -31,7 +37,20 @@ public sealed class WebConsoleOptions
 
     public int MaxLogLines { get; init; } = WebConsoleDefaults.MaxLogLines;
 
-    public IReadOnlyList<string> TrustedProxies { get; init; } = ["127.0.0.1"];
+    /// <summary>Whole-request budget (body read included), in seconds (S2-D3).</summary>
+    public int RequestTimeoutSeconds { get; init; } = WebConsoleDefaults.RequestTimeoutSeconds;
+
+    /// <summary>Concurrent request slots; a saturated console answers 503 (S2-D3).</summary>
+    public int MaxConcurrentRequests { get; init; } = WebConsoleDefaults.MaxConcurrentRequests;
+
+    /// <summary>How many rotated audit files are kept (<c>.1</c> newest); at least 3 (S2-D4).</summary>
+    public int AuditRetentionFiles { get; init; } = WebConsoleDefaults.AuditRetentionFiles;
+
+    /// <summary>
+    /// Trusted reverse-proxy hops. Empty by default: without an explicit proxy the console uses the
+    /// real <c>RemoteEndPoint</c> and ignores <c>X-Forwarded-For</c> entirely (S2-D2).
+    /// </summary>
+    public IReadOnlyList<string> TrustedProxies { get; init; } = [];
 }
 
 /// <summary>Constants shared by config, auth, server and tests.</summary>
@@ -40,10 +59,18 @@ public static class WebConsoleDefaults
     public const string Bind = "127.0.0.1";
     public const int Port = 5090;
     public const string TokenReference = "${secret:WEBCONSOLE_TOKEN}";
+    public const string ViewerTokenReference = "${secret:WEBCONSOLE_VIEWER_TOKEN}";
     public const string TokenSecretName = "WEBCONSOLE_TOKEN";
+    public const string ViewerTokenSecretName = "WEBCONSOLE_VIEWER_TOKEN";
     public const string HostHealthUrl = "http://127.0.0.1:5099/health";
     public const int SessionMinutes = 60;
     public const int MaxLogLines = 500;
+    public const int RequestTimeoutSeconds = 15;
+    public const int MaxRequestTimeoutSeconds = 120;
+    public const int MaxConcurrentRequests = 32;
+    public const int MaxConcurrentRequestsLimit = 256;
+    public const int AuditRetentionFiles = 3;
+    public const int MaxAuditRetentionFiles = 20;
     public const int MaxRequestBodyBytes = 64 * 1024;
     public const int MaxLoginBodyBytes = 4 * 1024;
     public const int MaxAdminBodyBytes = 256 * 1024 + 4 * 1024;
@@ -53,6 +80,8 @@ public static class WebConsoleDefaults
     public const string SessionCookieName = "natter_webconsole";
     public const string CsrfHeaderName = "X-WebConsole-CSRF";
     public const string AuditDirectoryName = "audit";
+    public const string AuditStateDirectoryName = "webconsole";
+    public const string StateDirectoryEnvironmentVariable = "NATTER_STATE_DIR";
     public const string AuditFileName = "webconsole-audit.jsonl";
     public const string DefaultDocumentationFile = "docs/WEBCONSOLE_HOST_API_GAP.md";
 }
@@ -91,6 +120,16 @@ public static class WebConsoleOptionsValidator
                 "webconsole.token-reference-required",
                 $"token must be '{WebConsoleDefaults.TokenReference}'; plaintext tokens are not accepted."));
         }
+
+        if (!string.IsNullOrEmpty(options.ViewerToken)
+            && !string.Equals(options.ViewerToken, WebConsoleDefaults.ViewerTokenReference, StringComparison.Ordinal))
+        {
+            issues.Add(new WebConsoleOptionIssue(
+                "/viewerToken",
+                "webconsole.viewer-token-reference-required",
+                $"viewerToken must be empty or '{WebConsoleDefaults.ViewerTokenReference}'; plaintext tokens are not accepted."));
+        }
+
 
         if (!TryParseLoopbackUrl(options.HostHealthUrl, out var healthUri))
         {
@@ -163,6 +202,30 @@ public static class WebConsoleOptionsValidator
                     "webconsole.trusted-proxy-invalid",
                     $"trustedProxies entry '{proxy}' is not an IP address or CIDR."));
             }
+        }
+
+        if (options.RequestTimeoutSeconds is < 1 or > WebConsoleDefaults.MaxRequestTimeoutSeconds)
+        {
+            issues.Add(new WebConsoleOptionIssue(
+                "/requestTimeoutSeconds",
+                "webconsole.request-timeout-invalid",
+                $"requestTimeoutSeconds must be between 1 and {WebConsoleDefaults.MaxRequestTimeoutSeconds}."));
+        }
+
+        if (options.MaxConcurrentRequests is < 1 or > WebConsoleDefaults.MaxConcurrentRequestsLimit)
+        {
+            issues.Add(new WebConsoleOptionIssue(
+                "/maxConcurrentRequests",
+                "webconsole.max-concurrent-invalid",
+                $"maxConcurrentRequests must be between 1 and {WebConsoleDefaults.MaxConcurrentRequestsLimit}."));
+        }
+
+        if (options.AuditRetentionFiles is < WebConsoleDefaults.AuditRetentionFiles or > WebConsoleDefaults.MaxAuditRetentionFiles)
+        {
+            issues.Add(new WebConsoleOptionIssue(
+                "/auditRetentionFiles",
+                "webconsole.audit-retention-invalid",
+                $"auditRetentionFiles must be between {WebConsoleDefaults.AuditRetentionFiles} and {WebConsoleDefaults.MaxAuditRetentionFiles}."));
         }
 
         if (options.CommandTimeoutSeconds is < 1 or > 10)

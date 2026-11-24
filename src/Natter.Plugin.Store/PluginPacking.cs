@@ -15,11 +15,15 @@ public sealed record PluginPackageInfo(
     IReadOnlyList<string> Files,
     string VersionDirectoryName);
 
-/// <summary>Package validation result.</summary>
+/// <summary>Package validation result. <see cref="Warnings"/> never fails an otherwise valid package.</summary>
 public sealed record PluginPackageValidationResult(
     bool IsValid,
     PluginPackageInfo? Package,
-    IReadOnlyList<PluginPackageIssue> Issues);
+    IReadOnlyList<PluginPackageIssue> Issues,
+    IReadOnlyList<PluginPackageIssue>? Warnings = null)
+{
+    public IReadOnlyList<PluginPackageIssue> WarningList => Warnings ?? [];
+}
 
 /// <summary>Limits and trust policy for package installation.</summary>
 public sealed class PluginStoreOptions
@@ -45,6 +49,13 @@ public sealed class PluginStoreOptions
 
     /// <summary>Base64 SubjectPublicKeyInfo (ECDSA P-256) trusted publisher keys.</summary>
     public IReadOnlyList<string> TrustedPublicKeys { get; init; } = [];
+
+    /// <summary>
+    /// Reject signatures produced over the legacy (ambiguous) canonical text (S2-C7). Default false:
+    /// such packages still validate but emit a <c>signature-legacy-format</c> warning so publishers
+    /// can re-sign; operators that require v2 can turn the warning into an error.
+    /// </summary>
+    public bool RejectLegacySignatureFormat { get; init; }
 
     public bool AllowUpdates { get; init; } = true;
 

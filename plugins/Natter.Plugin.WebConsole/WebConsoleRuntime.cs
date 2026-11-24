@@ -12,6 +12,7 @@ public sealed class WebConsoleRuntime : IAsyncDisposable
     private readonly WebConsoleConfigPreview _config;
     private readonly IPluginLog _log;
     private readonly TimeProvider _clock;
+    private readonly Func<string?> _stateDirectoryProvider;
     private readonly WebConsoleServerStatusHolder _status = new();
 
     private WebConsoleServer? _server;
@@ -25,13 +26,15 @@ public sealed class WebConsoleRuntime : IAsyncDisposable
         WebConsoleOptions options,
         WebConsoleConfigPreview config,
         IPluginLog log,
-        TimeProvider clock)
+        TimeProvider clock,
+        Func<string?>? stateDirectoryProvider = null)
     {
         _identity = identity ?? throw new ArgumentNullException(nameof(identity));
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _config = config ?? throw new ArgumentNullException(nameof(config));
         _log = log ?? throw new ArgumentNullException(nameof(log));
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
+        _stateDirectoryProvider = stateDirectoryProvider ?? WebConsoleAuditPaths.ReadStateDirectoryFromEnvironment;
     }
 
     public WebConsoleIdentity Identity => _identity;
@@ -42,10 +45,16 @@ public sealed class WebConsoleRuntime : IAsyncDisposable
 
     public bool TokenConfigured { get; private set; }
 
+    /// <summary>True when a usable viewer secret is present; viewer logins create read-only sessions.</summary>
+    public bool ViewerLoginEnabled { get; private set; }
+
     /// <summary>Host admin contracts resolved at activation; empty when no <c>admin.*</c> permission.</summary>
     public WebConsoleAdminSurface AdminSurface { get; private set; } = WebConsoleAdminSurface.Empty;
 
     public string? AuditPath => _audit?.FilePath;
+
+    /// <summary>Resolved audit location (state root or plugin fallback), exposed for `web status`/UI.</summary>
+    public WebConsoleAuditLocation? AuditLocation { get; private set; }
 
     public async Task StartAsync(IPluginSecrets secrets, IServiceProvider provider, CancellationToken cancellationToken = default)
     {
@@ -72,8 +81,27 @@ public sealed class WebConsoleRuntime : IAsyncDisposable
 
         TokenConfigured = true;
 
-        var auditDirectory = Path.Combine(_identity.PluginDirectory, WebConsoleDefaults.AuditDirectoryName);
-        _audit = new WebConsoleAuditStore(auditDirectory, _clock);
+        var viewerAuthenticator = ResolveViewerAuthenticator(secrets, authenticator);
+        ViewerLoginEnabled = viewerAuthenticator is { IsUsable: true };
+
+        // The plugin package may live on a read-only mount, so the writable state root wins.
+        var auditLocation = WebConsoleAuditPaths.Resolve(_identity.PluginDirectory, _stateDirectoryProvider());
+        AuditLocation = auditLocation;
+        if (auditLocation.Warning is not null)
+            _log.Warning(auditLocation.Warning);
+
+        try
+        {
+            _audit = new WebConsoleAuditStore(auditLocation.Directory, _clock, _options.AuditRetentionFiles);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            throw new WebConsoleStartupException(
+                "webconsole.audit-unwritable",
+                $"Audit directory '{auditLocation.Directory}' is not writable ({exception.GetType().Name}). "
+                + "Set NATTER_STATE_DIR to a writable state root (systemd: /var/lib/natter, container: /state) "
+                + "instead of widening the plugin mount.");
+        }
 
         var assets = WebConsoleStaticAssets.Load(ResolveStaticRoot(_identity.PluginDirectory));
 
@@ -96,11 +124,14 @@ public sealed class WebConsoleRuntime : IAsyncDisposable
             _audit,
             authenticator,
             assets,
-            _clock);
+            viewerAuthenticator is { IsUsable: true },
+            _clock,
+            auditLocation);
 
         var handler = new WebConsoleRequestHandler(
             _options,
             authenticator,
+            viewerAuthenticator,
             _sessions,
             new WebConsoleLoginThrottle(_clock),
             origins,
@@ -143,7 +174,25 @@ public sealed class WebConsoleRuntime : IAsyncDisposable
 
         _audit.Write("plugin.start", "system", null, url, "ok", TimeSpan.Zero);
         _log.Information(
-            $"webconsole ready: url={url} health={_options.HostHealthUrl} audit={_audit.FilePath}");
+            $"webconsole ready: url={url} health={_options.HostHealthUrl} audit={_audit.FilePath}"
+            + $" root={WebConsoleAuditPaths.RootName(auditLocation.Root)}");
+    }
+
+    /// <summary>
+    /// Resolves the optional viewer secret; a missing or colliding credential only disables viewer
+    /// logins (the admin console keeps working) and is reported through the <c>viewer-login</c> check.
+    /// </summary>
+    private WebConsoleTokenAuthenticator? ResolveViewerAuthenticator(
+        IPluginSecrets secrets,
+        WebConsoleTokenAuthenticator admin)
+    {
+        var viewer = WebConsoleCredentials.ResolveViewer(_options.ViewerToken, secrets, admin, out var problem);
+
+        if (problem is null)
+            return viewer;
+
+        _log.Warning($"webconsole viewer login disabled: {problem} ({WebConsoleDefaults.ViewerTokenSecretName})");
+        return null;
     }
 
     private void CleanUpAfterFailedStart()
@@ -210,7 +259,21 @@ public sealed class WebConsoleRuntime : IAsyncDisposable
                 runtime = "httplistener",
             },
             tokenConfigured = TokenConfigured,
+            roles = new
+            {
+                adminLoginEnabled = TokenConfigured,
+                viewerLoginEnabled = ViewerLoginEnabled,
+                readOnly = _options.ReadOnly,
+            },
             hostHealthUrl = _options.HostHealthUrl,
+            // "host" = the bridge handed the host IAdminRedactor to the plugin (default when
+            // admin.read is granted, S2-D5); "plugin" = the bridge is absent and the plugin-local
+            // rule set is in effect. The field reports which rules actually produced the output.
+            redaction = new
+            {
+                source = AdminSurface.Redactor is null ? "plugin" : "host",
+                pemBlocks = true,
+            },
             admin = new
             {
                 configStore = AdminSurface.DescribeConfig(),
@@ -228,6 +291,15 @@ public sealed class WebConsoleRuntime : IAsyncDisposable
                 maxLogLines = _options.MaxLogLines,
             },
             auditPath = AuditPath,
+            audit = AuditLocation is null
+                ? null
+                : new
+                {
+                    path = AuditPath,
+                    directory = AuditLocation.Directory,
+                    root = WebConsoleAuditPaths.RootName(AuditLocation.Root),
+                    warning = AuditLocation.Warning,
+                },
             gaps = ActiveGaps().Select(gap => new { code = gap.Code, area = gap.Area, doc = gap.Doc }),
         };
 
@@ -247,7 +319,11 @@ public sealed class WebConsoleRuntime : IAsyncDisposable
         lines.Add($"health: {_options.HostHealthUrl}");
         lines.Add($"admin: config={AdminSurface.DescribeConfig()} command={AdminSurface.DescribeCommand()}"
                   + $" logs={(AdminSurface.HasLogReader ? "available" : WebConsoleGaps.HostLogs.Code)}");
-        lines.Add($"audit: {AuditPath}");
+        lines.Add($"redaction: {(AdminSurface.Redactor is null ? "plugin" : "host")}");
+        lines.Add($"audit: {AuditPath}"
+                  + (AuditLocation is null
+                      ? string.Empty
+                      : $" (root={WebConsoleAuditPaths.RootName(AuditLocation.Root)})"));
         lines.Add($"gaps: {string.Join(", ", ActiveGaps().Select(gap => gap.Code))}");
 
         return string.Join(Environment.NewLine, lines);

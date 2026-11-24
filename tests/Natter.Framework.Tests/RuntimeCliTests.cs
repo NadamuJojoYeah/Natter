@@ -156,7 +156,7 @@ public sealed class RuntimeCliTests
             console,
             options);
         Assert.Equal(CliExitCodes.Success, remember);
-        Assert.Contains("mem_", console.Output);
+        Assert.Contains("me_", console.Output);
 
         var list = new StringConsole();
         var listed = await NatterCli.RunAsync(
@@ -221,7 +221,7 @@ public sealed class RuntimeCliTests
                   "supportTier": 2,
                   "match": { "protocols": ["discord"] },
                   "ai": { "provider": "missing#provider" },
-                  "memory": { "store": "natter.sample.memory#file" }
+                  "memory": { "store": "natter.sample.memory.demo#file" }
                 }
               ]
             }
