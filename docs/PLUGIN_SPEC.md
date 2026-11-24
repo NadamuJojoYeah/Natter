@@ -259,6 +259,25 @@ plugins/
 - 插件不得依赖宿主内部命名空间、内部类型或未声明的服务。
 - v1 不提供 DSH 式 version exemption；后续可加显式豁免。
 
+#### 4.5.1 程序集迁移：B-02a（2026-11-24）
+
+本批把两类**插件可见契约**从 `Natter.Application` 移到 `Natter.Abstractions`。契约的**命名空间与类型名不变**，但定义程序集变了：
+
+| 类型 | 旧程序集 | 新程序集 |
+| --- | --- | --- |
+| `Natter.Application.Redaction.SecretRedaction`、`SecretRedactionOptions`、`RedactedText` | `Natter.Application` | `Natter.Abstractions` |
+| `Natter.Application.Chat.EmbeddingRequest`、`EmbeddingResult`、`IEmbeddingProvider`、`RerankCandidate`、`RerankResult`、`IRerankProvider`、`EmbeddingProviderException`、`RerankProviderException`、`EmbeddingErrorKind`、`IEmbeddingProviderCatalog`、`IRerankProviderCatalog` | `Natter.Application` | `Natter.Abstractions` |
+
+对第三方插件的具体影响：
+
+- **必须针对新宿主重新编译。** 这是二进制 ABI 变更：旧插件里的成员引用指向 `Natter.Application` 的旧定义，新宿主不再在该程序集提供这些类型，未重编译的插件会在加载/激活时失败。
+- **源代码 `using` 不需要改**（命名空间未变）。若插件只用到上表类型，应把 `Natter.Application` 的 ProjectReference 换成 `Natter.Abstractions`；若还用到 Prompt/Memory 契约，则仍需 `Natter.Application`（B-02b 才会继续下沉）。
+- `hostApi` 版本**不收紧**：这些类型的公开形状没有变化，只是所在程序集变化；兼容性由“重新编译”保证，而不是新增 API 范围约束。
+- `Natter.Chat.Discord` 不再引用 `Natter.Application`；`Natter.Chat.DingTalk` 引用 `Natter.Abstractions`，并对 `UpstreamStatusPayload.Detail` 做共享脱敏（`[redacted]`）。
+- `Natter.Plugin.AiEmbedding.OpenAi` 不再直接引用 `Natter.Application`。
+
+B-02b（新建 `Natter.Contracts` / `Natter.Prompting`，搬 Prompt/Memory 契约）不在本批范围；完成时会在本节追加第二轮迁移清单。
+
 ### 4.6 权限
 
 权限是 manifest 的声明，不是“代码能力”的证明。

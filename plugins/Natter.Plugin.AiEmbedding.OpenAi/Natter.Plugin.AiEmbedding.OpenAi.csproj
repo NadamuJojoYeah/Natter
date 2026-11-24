@@ -16,7 +16,6 @@
 
   <ItemGroup>
     <ProjectReference Include="../../src/Natter.Plugin.Abstractions/Natter.Plugin.Abstractions.csproj" />
-    <ProjectReference Include="../../src/Natter.Application/Natter.Application.csproj" />
   </ItemGroup>
 
   <ItemGroup>

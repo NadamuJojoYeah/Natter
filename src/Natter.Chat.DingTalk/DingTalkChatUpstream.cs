@@ -313,7 +313,7 @@ public sealed class DingTalkChatUpstream : IChatUpstream, IChatUpstreamHealth, I
             Sequence = _sequence,
             OccurredAt = _clock.UtcNow,
             ReceivedAt = _clock.UtcNow,
-            Payload = new UpstreamStatusPayload(state, detail),
+            Payload = new UpstreamStatusPayload(state, DingTalkDiagnostics.Redact(detail)),
         });
 
     private sealed class Observer(DingTalkChatUpstream owner) : IObserver<DingTalkTransportEvent>

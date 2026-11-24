@@ -8,6 +8,7 @@ using Natter.Chat;
 using Natter.Cli.Abstractions;
 using Natter.Cli.Core;
 using Natter.Cli.Core.Commands;
+using Natter.Chat.DingTalk;
 using Natter.Cli.Core.Logging;
 using Natter.Infrastructure.Chat;
 using Natter.Infrastructure.Composition;
@@ -90,6 +91,14 @@ public sealed class DiagnosticsLeakTests
         Assert.DoesNotContain(Canary, json, StringComparison.Ordinal);
         Assert.DoesNotContain("token=super-secret-value-42", json, StringComparison.Ordinal);
         Assert.Equal(Canary, snapshot.Upstreams.Single().LastError!.Raw);
+    }
+
+    [Fact]
+    public void DingTalk_status_event_detail_is_redacted()
+    {
+        var redacted = DingTalkDiagnostics.Redact($"transport error {Canary}");
+        Assert.DoesNotContain(Canary, redacted!, StringComparison.Ordinal);
+        Assert.Contains("[redacted]", redacted!, StringComparison.Ordinal);
     }
 
     [Fact]
